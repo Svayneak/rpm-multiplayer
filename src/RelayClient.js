@@ -15,7 +15,7 @@
  * @module RelayClient
  */
 
-import { EventEmitter } from 'node:events';
+import { EventEmitter } from './EventEmitter.js';
 
 /**
  * Universal WebSocket Relay Client.
@@ -97,10 +97,13 @@ export class RelayClient extends EventEmitter {
         ws.onmessage = (event) => {
           let text = event.data;
           if (typeof text !== 'string') {
-            if (Buffer.isBuffer(text)) {
+            if (typeof Buffer !== 'undefined' && Buffer.isBuffer(text)) {
               text = text.toString('utf8');
             } else if (text instanceof ArrayBuffer) {
-              text = Buffer.from(text).toString('utf8');
+              text = new TextDecoder('utf-8').decode(text);
+            } else if (text instanceof Blob) {
+              text.text().then(str => this._handleMessage(str)).catch(() => {});
+              return;
             } else {
               text = String(text);
             }

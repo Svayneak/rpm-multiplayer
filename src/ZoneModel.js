@@ -7,7 +7,6 @@
  * @module ZoneModel
  */
 
-import { randomUUID } from 'node:crypto';
 
 /**
  * Custom Error hierarchy for State Transitions and Zone Invariants
@@ -72,8 +71,8 @@ let instanceIdCounter = 0;
 export function generateInstanceId() {
   const timestamp = Date.now();
   let uuidPart;
-  if (typeof randomUUID === 'function') {
-    uuidPart = randomUUID().replace(/-/g, '').substring(0, 8);
+  if (typeof globalThis !== 'undefined' && globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
+    uuidPart = globalThis.crypto.randomUUID().replace(/-/g, '').substring(0, 8);
   } else {
     uuidPart = Math.random().toString(36).substring(2, 10);
   }

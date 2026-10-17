@@ -217,6 +217,7 @@ import {
   timingSafeEqualString
 } from './relay.js';
 import { RelayClient } from './RelayClient.js';
+import { EventEmitter } from './EventEmitter.js';
 import PerkCatalog, {
   PERK_KEYS,
   RPBD_OPTIONS,
@@ -365,6 +366,7 @@ export default {
   CROCKFORD_ALPHABET,
   timingSafeEqualString,
   RelayClient,
+  EventEmitter,
   RPMAppController,
   AppController
 };

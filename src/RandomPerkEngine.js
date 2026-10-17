@@ -6,8 +6,7 @@
  * @module RandomPerkEngine
  */
 
-import { EventEmitter } from 'node:events';
-import crypto from 'node:crypto';
+import { EventEmitter } from './EventEmitter.js';
 import { generateStackItemId } from './PriorityStateMachine.js';
 import PerkCatalog, {
   getPerkDefinition,
@@ -29,9 +28,14 @@ export function executeAuthoritativeRoll(prng = null) {
   if (typeof prng === 'function') {
     tens = prng(0, 9);
     ones = prng(0, 9);
+  } else if (typeof globalThis !== 'undefined' && globalThis.crypto?.getRandomValues) {
+    const buf = new Uint32Array(2);
+    globalThis.crypto.getRandomValues(buf);
+    tens = buf[0] % 10;
+    ones = buf[1] % 10;
   } else {
-    tens = crypto.randomInt(0, 10);
-    ones = crypto.randomInt(0, 10);
+    tens = Math.floor(Math.random() * 10);
+    ones = Math.floor(Math.random() * 10);
   }
   const rollString = `${tens}${ones}`;
   return { tens, ones, rollString };
