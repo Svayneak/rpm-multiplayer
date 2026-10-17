@@ -137,7 +137,7 @@
     document.addEventListener('DOMContentLoaded', async () => {
       const app = new RPMAppController({
         container: '#app-root',
-        autoConnect: false
+        autoConnect: true
       });
       await app.mount();
       window.__RPM_APP__ = app;

@@ -130,8 +130,12 @@ export class RPMAppController {
     });
 
     // 4. WebSocket Relay Client
+    const defaultRelayUrl = (typeof window !== 'undefined' && window.location && window.location.host)
+      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+      : 'ws://localhost:3000';
+
     this.relayClient = options.relayClient || new RelayClient({
-      url: options.relayUrl || 'ws://localhost:8080'
+      url: options.relayUrl || defaultRelayUrl
     });
 
     // 5. Tabletop State Manager
@@ -847,6 +851,9 @@ export class RPMAppController {
   async createRoom(seatOptions = {}) {
     if (!this.relayClient) return null;
     try {
+      if (!this.relayClient.socket || this.relayClient.socket.readyState !== 1) {
+        await this.relayClient.connect();
+      }
       const res = await this.relayClient.createRoom({
         playerName: this.username,
         ...seatOptions
@@ -864,6 +871,9 @@ export class RPMAppController {
   async joinRoom(roomCode, seatOptions = {}) {
     if (!this.relayClient || !roomCode) return;
     try {
+      if (!this.relayClient.socket || this.relayClient.socket.readyState !== 1) {
+        await this.relayClient.connect();
+      }
       await this.relayClient.joinRoom(roomCode, this.username, seatOptions.seatPreference);
       const inp = this.container?.querySelector('#room-code-input');
       if (inp) inp.value = roomCode;
