@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="RPM Modern Tabletop Companion - Real-Time Multiplayer Tabletop Arena">
+  <title>RPM Modern Tabletop Companion</title>
+
+  <!-- High-Performance Typography & Mana Font Embeds -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <!-- Core Tabletop & View Styling -->
+  <link rel="stylesheet" href="src/view/tabletop.css">
+  <link rel="stylesheet" href="src/view/harness.css">
+</head>
+<body class="rpm-theme-dark">
+  <!-- Top-Level Application Container Mount -->
+  <div id="app-root" class="rpm-app-container">
+
+    <!-- 1. Header Bar (#header-bar) -->
+    <header id="header-bar" class="rpm-header-bar" role="banner">
+      <div class="header-brand">
+        <span class="brand-glyph">⚔️</span>
+        <h1 class="brand-title">RPM TABLETOP</h1>
+      </div>
+
+      <div class="header-room-controls">
+        <label for="room-code-input" class="sr-only">Room Code</label>
+        <input type="text" id="room-code-input" class="room-input" placeholder="ROOM CODE" maxlength="8" spellcheck="false" autocomplete="off">
+        <button id="btn-join-room" class="btn btn-secondary">Join</button>
+        <button id="btn-create-room" class="btn btn-primary">Create Room</button>
+      </div>
+
+      <div class="header-status-group">
+        <div id="connection-status-pill" class="status-pill status-offline" aria-live="polite">
+          <span class="status-dot"></span>
+          <span class="status-text">Offline</span>
+        </div>
+
+        <div id="active-player-badge" class="active-player-badge">
+          <span class="badge-label">Active:</span>
+          <span id="active-player-name" class="badge-value">P1</span>
+          <span id="current-phase-name" class="badge-phase">Untap</span>
+        </div>
+
+        <div class="header-actions">
+          <button id="btn-audio-mute" class="btn-icon" title="Toggle Victory Audio Mute" aria-label="Toggle Victory Audio Mute">
+            <span class="icon-speaker">🔊</span>
+          </button>
+          <button id="btn-open-deckbuilder" class="btn btn-outline" title="Open AI Deckbuilder & Guidelines">
+            <span class="icon-deck">📚</span> Decks
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Tabletop Arena Grid -->
+    <main id="tabletop-arena" class="rpm-tabletop-arena" role="main">
+
+      <!-- 2. Opponents Multi-Player Container (#opponents-container) -->
+      <section id="opponents-container" class="opponents-bar" aria-label="Opponent Player Zones">
+        <!-- Dynamically populated with 1 to 5 Opponent Boards via TabletopUI / AppController -->
+      </section>
+
+      <!-- 3. Center Battlefield & Stack Arena (#center-arena) -->
+      <section id="center-arena" class="center-battlefield-arena" aria-label="Battlefield and Priority Stack">
+
+        <!-- 15-Second Stack Alarm Visual Banner -->
+        <div id="stack-alarm-container" class="stack-alarm-wrapper" style="display: none;" aria-live="assertive">
+          <div class="alarm-header">
+            <span class="alarm-title">⚡ PRIORITY COUNTDOWN</span>
+            <span id="alarm-timer-label" class="alarm-countdown">15.0s</span>
+          </div>
+          <div class="alarm-progress-track">
+            <div id="stack-alarm-progress-bar" class="alarm-progress-fill alarm-state-green" style="width: 100%;"></div>
+          </div>
+        </div>
+
+        <!-- MTG LIFO Stack Visualizer -->
+        <div id="stack-visualizer-container" class="stack-container" aria-label="Active LIFO Priority Stack">
+          <div class="stack-header">
+            <h2 class="stack-title">THE STACK <span id="stack-count-badge" class="badge-counter">(0)</span></h2>
+            <div class="stack-controls">
+              <button id="btn-pass-priority" class="btn btn-pass" title="Pass Priority (Hotkey: Space or P)">Pass Priority [Space]</button>
+              <button id="btn-hold-respond" class="btn btn-hold" title="Hold Alarm & Respond (Hotkey: H)">Hold & Respond [H]</button>
+            </div>
+          </div>
+          <ul id="stack-item-list" class="stack-list" role="list">
+            <!-- Dynamically populated with Stack Items in LIFO Order -->
+          </ul>
+        </div>
+
+        <!-- Random Perk 2 d10 Dice & Upkeep Emblem Overlay -->
+        <div id="perk-dice-container" class="perk-display-wrapper" style="display: none;">
+          <div class="perk-dice-row">
+            <div id="dice-tens" class="dice-box dice-tens" title="Tens Die (Violet d10)">
+              <span class="dice-label">10s</span>
+              <span class="dice-value">0</span>
+            </div>
+            <div id="dice-ones" class="dice-box dice-ones" title="Ones Die (Aquamarine d10)">
+              <span class="dice-label">1s</span>
+              <span class="dice-value">0</span>
+            </div>
+            <div class="perk-roll-summary">
+              <span id="perk-roll-key" class="perk-key-badge">ROLL --</span>
+              <span id="perk-effect-description" class="perk-desc">Awaiting upkeep trigger...</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 4. Bottom Active Player Dashboard (#player-dashboard) -->
+      <section id="player-dashboard" class="player-dashboard-panel" aria-label="Active Player Dashboard">
+        <!-- Life, Counters, Mana Pool, Interactive Hand, and Command Zone Emblem -->
+      </section>
+    </main>
+
+    <!-- 5. Floating Dual-Channel Chat Bar (#chat-drawer) -->
+    <aside id="chat-drawer" class="rpm-chat-drawer" aria-label="Chat and Turn Commands">
+      <!-- Chit-Chat vs Turn Command Tabs, Input, and Staged Action Chips -->
+    </aside>
+
+    <!-- 6. Central Modal & Overlay Host Layer (#modal-root) -->
+    <div id="modal-root" class="rpm-modal-host" aria-hidden="true">
+      <!-- Mount container for CardOverlayModal, DeckbuilderAI, and VictoryFanfare -->
+    </div>
+
+  </div>
+
+  <!-- Main ES Module Application Bootstrapper -->
+  <script type="module" src="./src/app.js"></script>
+  <script type="module">
+    import { RPMAppController } from './src/app.js';
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      const app = new RPMAppController({
+        container: '#app-root',
+        autoConnect: false
+      });
+      await app.mount();
+      window.__RPM_APP__ = app;
+    });
+  </script>
+</body>
+</html>

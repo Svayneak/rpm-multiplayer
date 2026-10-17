@@ -1,0 +1,749 @@
+/**
+ * harness.css
+ * Capstone Integration Harness Stylesheet for RPM Modern Tabletop Companion
+ * 
+ * Spec: SPEC-RPM-HARNESS-012
+ */
+
+:root {
+  --rpm-bg-dark: #0f172a;
+  --rpm-bg-surface: #1e293b;
+  --rpm-bg-elevated: #334155;
+  --rpm-border: #475569;
+  --rpm-text-main: #f8fafc;
+  --rpm-text-muted: #94a3b8;
+
+  --rpm-aqua: #06b6d4;
+  --rpm-violet: #8b5cf6;
+  --rpm-emerald: #10b981;
+  --rpm-amber: #f59e0b;
+  --rpm-crimson: #ef4444;
+  --rpm-gold: #eab308;
+
+  --rpm-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --rpm-font-serif: 'Cinzel', serif;
+  --rpm-font-mono: 'JetBrains Mono', monospace;
+}
+
+/* Base App Container */
+.rpm-theme-dark {
+  background-color: var(--rpm-bg-dark);
+  color: var(--rpm-text-main);
+  font-family: var(--rpm-font-sans);
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+.rpm-app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: radial-gradient(circle at 50% 20%, #1e1e38 0%, #0a0f1d 100%);
+}
+
+/* 1. Header Bar */
+.rpm-header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(15, 23, 42, 0.95);
+  border-bottom: 1px solid var(--rpm-border);
+  height: 56px;
+  box-sizing: border-box;
+  gap: 12px;
+  z-index: 100;
+}
+
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-glyph {
+  font-size: 1.5rem;
+}
+
+.brand-title {
+  font-family: var(--rpm-font-serif);
+  font-size: 1.1rem;
+  letter-spacing: 1px;
+  font-weight: 700;
+  color: var(--rpm-aqua);
+  margin: 0;
+}
+
+.header-room-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.room-input {
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-border);
+  color: #ffffff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-family: var(--rpm-font-mono);
+  font-weight: 600;
+  font-size: 0.9rem;
+  width: 110px;
+  text-transform: uppercase;
+}
+
+.room-input:focus {
+  outline: none;
+  border-color: var(--rpm-aqua);
+  box-shadow: 0 0 5px rgba(6, 182, 212, 0.5);
+}
+
+.header-status-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Status Pill */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-border);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-connected {
+  border-color: var(--rpm-emerald);
+  color: var(--rpm-emerald);
+}
+.status-connected .status-dot {
+  background: var(--rpm-emerald);
+  box-shadow: 0 0 6px var(--rpm-emerald);
+}
+
+.status-reconnecting {
+  border-color: var(--rpm-amber);
+  color: var(--rpm-amber);
+}
+.status-reconnecting .status-dot {
+  background: var(--rpm-amber);
+  box-shadow: 0 0 6px var(--rpm-amber);
+}
+
+.status-offline {
+  border-color: var(--rpm-crimson);
+  color: var(--rpm-crimson);
+}
+.status-offline .status-dot {
+  background: var(--rpm-crimson);
+  box-shadow: 0 0 6px var(--rpm-crimson);
+}
+
+/* Active Player Badge */
+.active-player-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-violet);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+}
+
+.badge-label {
+  color: var(--rpm-text-muted);
+}
+
+.badge-value {
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.badge-phase {
+  background: rgba(139, 92, 246, 0.2);
+  color: var(--rpm-violet);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* Main Tabletop Arena */
+.rpm-tabletop-arena {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 12px;
+  gap: 12px;
+}
+
+/* 2. Opponents Bar & Auto-scaling Grid */
+.opponents-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+  width: 100%;
+}
+
+.opponent-board {
+  position: relative;
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-border);
+  border-radius: 8px;
+  padding: 10px;
+  min-width: 250px;
+  flex: 1 1 calc(33.333% - 10px);
+  max-width: 100%;
+  box-sizing: border-box;
+  transition: border-color 0.2s;
+}
+
+.opponent-board:hover {
+  border-color: var(--rpm-aqua);
+}
+
+/* Opponent Elimination Gray-Out Overlay (INV-RING-1, DEC-013) */
+.opponent-board.player-eliminated {
+  opacity: 0.65;
+  filter: grayscale(80%);
+}
+
+.player-eliminated-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(15, 23, 42, 0.88);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.eliminated-badge {
+  font-family: var(--rpm-font-serif);
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--rpm-crimson);
+  background: rgba(0, 0, 0, 0.7);
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 2px solid var(--rpm-crimson);
+  letter-spacing: 2px;
+  text-shadow: 0 0 10px rgba(239, 68, 68, 0.8);
+}
+
+/* 3. Center Battlefield & Stack Arena */
+.center-battlefield-arena {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(71, 85, 105, 0.4);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+/* 15-Second Stack Alarm Visual Banner (INV-HARNESS-4) */
+.stack-alarm-wrapper {
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid var(--rpm-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+.alarm-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.alarm-countdown {
+  font-family: var(--rpm-font-mono);
+  font-size: 0.9rem;
+}
+
+.alarm-progress-track {
+  height: 8px;
+  background: var(--rpm-bg-dark);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.alarm-progress-fill {
+  height: 100%;
+  width: 100%;
+  transition: width 0.1s linear, background-color 0.2s ease;
+}
+
+.alarm-state-green {
+  background-color: var(--rpm-emerald);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+}
+
+.alarm-state-amber {
+  background-color: var(--rpm-amber);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6);
+}
+
+.alarm-state-red {
+  background-color: var(--rpm-crimson);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.9);
+  animation: pulseAlarmFill 0.8s infinite alternate;
+}
+
+@keyframes pulseAlarmFill {
+  0% { opacity: 0.7; }
+  100% { opacity: 1.0; }
+}
+
+/* Random Perk 2 d10 Dice & Upkeep Display */
+.perk-display-wrapper {
+  background: rgba(30, 41, 59, 0.9);
+  border: 1px solid var(--rpm-violet);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+
+.perk-dice-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dice-box {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+}
+
+.dice-tens {
+  background: linear-gradient(135deg, #7c3aed 0%, #4c1d95 100%);
+  border: 2px solid var(--rpm-violet);
+  color: #f3e8ff;
+}
+
+.dice-ones {
+  background: linear-gradient(135deg, #0891b2 0%, #164e63 100%);
+  border: 2px solid var(--rpm-aqua);
+  color: #ecfeff;
+}
+
+.dice-label {
+  font-size: 0.6rem;
+  opacity: 0.75;
+  text-transform: uppercase;
+}
+
+.dice-value {
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.perk-roll-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.perk-key-badge {
+  font-family: var(--rpm-font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--rpm-gold);
+}
+
+.perk-desc {
+  font-size: 0.85rem;
+  color: var(--rpm-text-main);
+}
+
+/* 4. Bottom Player Dashboard */
+.player-dashboard-panel {
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.player-stats-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.life-adjust-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.life-value-display {
+  font-size: 1.6rem;
+  font-weight: 800;
+  min-width: 44px;
+  text-align: center;
+  color: #ffffff;
+}
+
+.mana-pool-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mana-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 6px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--rpm-bg-dark);
+  border: 1px solid var(--rpm-border);
+}
+
+.mana-chip.chip-w { border-color: #fef08a; color: #fef08a; }
+.mana-chip.chip-u { border-color: #67e8f9; color: #67e8f9; }
+.mana-chip.chip-b { border-color: #a8a29e; color: #d6d3d1; }
+.mana-chip.chip-r { border-color: #fca5a5; color: #fca5a5; }
+.mana-chip.chip-g { border-color: #86efac; color: #86efac; }
+.mana-chip.chip-c { border-color: #cbd5e1; color: #cbd5e1; }
+
+.command-emblem-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid var(--rpm-violet);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: #ddd6fe;
+}
+
+/* Interactive Hand */
+.player-hand-grid {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 2px;
+}
+
+.hand-card-chip {
+  background: var(--rpm-bg-elevated);
+  border: 1px solid var(--rpm-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+
+.hand-card-chip:hover {
+  transform: translateY(-2px);
+  border-color: var(--rpm-aqua);
+}
+
+/* 5. Dual-Channel Chat Bar */
+.rpm-chat-drawer {
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  height: 260px;
+  overflow: hidden;
+}
+
+.chat-tab-bar {
+  display: flex;
+  border-bottom: 1px solid var(--rpm-border);
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.chat-tab-btn {
+  flex: 1;
+  padding: 8px 12px;
+  background: none;
+  border: none;
+  color: var(--rpm-text-muted);
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.chat-tab-btn.active {
+  color: #ffffff;
+  border-bottom: 2px solid var(--rpm-aqua);
+  background: rgba(6, 182, 212, 0.1);
+}
+
+.priority-lock-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--rpm-crimson);
+  border: 1px solid var(--rpm-crimson);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.chat-feed {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.chat-msg {
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.chat-msg-author {
+  font-weight: 700;
+  color: var(--rpm-aqua);
+}
+
+.chat-input-row {
+  display: flex;
+  padding: 8px;
+  gap: 6px;
+  border-top: 1px solid var(--rpm-border);
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.chat-text-input {
+  flex: 1;
+  background: var(--rpm-bg-dark);
+  border: 1px solid var(--rpm-border);
+  color: #ffffff;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+.chat-text-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Staged Action Chips (DEC-011, DEC-012) */
+.staged-chips-container {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px;
+  overflow-x: auto;
+  background: rgba(15, 23, 42, 0.8);
+}
+
+.action-chip {
+  background: var(--rpm-bg-elevated);
+  border: 1px solid var(--rpm-aqua);
+  color: var(--rpm-aqua);
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.action-chip:hover {
+  background: rgba(6, 182, 212, 0.2);
+}
+
+/* 6. Central Modal Host */
+.rpm-modal-host {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.rpm-modal-host[aria-hidden="false"],
+.rpm-modal-host:not([aria-hidden="true"]):not(:empty) {
+  pointer-events: auto;
+}
+
+.modal-backdrop-harness {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(10, 15, 29, 0.85);
+  backdrop-filter: blur(4px);
+}
+
+.modal-dialog-box {
+  position: relative;
+  background: var(--rpm-bg-surface);
+  border: 1px solid var(--rpm-border);
+  border-radius: 12px;
+  max-width: 600px;
+  width: 90%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.7);
+  z-index: 10;
+}
+
+/* Victory Fanfare Celebration Overlay (INV-AUDIO-1, Audio Note 2) */
+.victory-modal-dialog {
+  border-color: var(--rpm-gold);
+  box-shadow: 0 0 35px rgba(234, 179, 8, 0.4);
+  text-align: center;
+  padding: 24px;
+}
+
+.victory-title {
+  font-family: var(--rpm-font-serif);
+  font-size: 1.8rem;
+  color: var(--rpm-gold);
+  text-shadow: 0 0 15px rgba(234, 179, 8, 0.6);
+  margin: 0 0 12px 0;
+}
+
+.fallback-banner {
+  margin-top: 16px;
+  background: linear-gradient(135deg, #b45309 0%, #78350f 100%);
+  border: 2px solid var(--rpm-gold);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.btn-fallback-fanfare {
+  background: var(--rpm-gold);
+  color: #000000;
+  border: none;
+  font-weight: 800;
+  font-size: 0.95rem;
+  padding: 10px 20px;
+  border-radius: 6px;
+  cursor: pointer;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+}
+
+.btn-fallback-fanfare:hover {
+  background: #fde047;
+}
+
+/* General Buttons */
+.btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.btn-primary {
+  background: var(--rpm-aqua);
+  color: #042f2e;
+}
+.btn-primary:hover {
+  background: #22d3ee;
+}
+
+.btn-secondary {
+  background: var(--rpm-bg-elevated);
+  border-color: var(--rpm-border);
+  color: var(--rpm-text-main);
+}
+.btn-secondary:hover {
+  border-color: var(--rpm-aqua);
+}
+
+.btn-pass {
+  background: #166534;
+  color: #dcfce7;
+  border-color: #22c55e;
+}
+.btn-pass:hover {
+  background: #15803d;
+}
+
+.btn-hold {
+  background: #854d0e;
+  color: #fef9c3;
+  border-color: #eab308;
+}
+.btn-hold:hover {
+  background: #a16207;
+}
+
+.btn-icon {
+  background: none;
+  border: none;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

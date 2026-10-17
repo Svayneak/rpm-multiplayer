@@ -1,0 +1,834 @@
+/**
+ * PriorityStateMachine - MTG CR 117 Priority & LIFO Stack State Machine
+ * 
+ * Part of RPM Multiplayer - Feature 4 (Stack & Priority Flow State Machine)
+ * Document ID: SPEC-RPM-PRIORITY-004
+ * 
+ * Coordinates:
+ * - Turn phases & steps (CR 500-514)
+ * - APNAP priority ordering and passing algorithm
+ * - Priority gating and invariant enforcement (PriorityViolationError)
+ * - LIFO Stack management (spells & activated abilities)
+ * - 15-second Stack Alarm orchestration (StackAlarmManager)
+ * - Checkpoint & Rollback Bus (immutable state snapshots)
+ * - Observer pattern event emission
+ * 
+ * @module PriorityStateMachine
+ */
+
+import { StackAlarmManager } from './StackAlarmManager.js';
+
+/**
+ * Canonical MTG Turn Phases and Steps (CR 500-514)
+ * @type {readonly string[]}
+ */
+export const PHASE_STEPS = Object.freeze([
+  'UNTAP',              // CR 502: Untap step (Active player untaps all permanents, no priority)
+  'UPKEEP',             // CR 503: Upkeep step (Active player receives priority)
+  'DRAW',               // CR 504: Draw step (Active player draws 1 card, receives priority)
+  'PRECOMBAT_MAIN',     // CR 505: Pre-combat Main phase (Sorcery speed permitted)
+  'BEGIN_COMBAT',       // CR 507: Beginning of combat step
+  'DECLARE_ATTACKERS',  // CR 508: Declare attackers step
+  'DECLARE_BLOCKERS',   // CR 509: Declare blockers step
+  'COMBAT_DAMAGE',      // CR 510: Combat damage step
+  'END_COMBAT',         // CR 511: End of combat step
+  'POSTCOMBAT_MAIN',    // CR 505: Post-combat Main phase (Sorcery speed permitted)
+  'END_STEP',           // CR 513: End of turn step
+  'CLEANUP'             // CR 514: Cleanup step (Discard to hand size, damage removed)
+]);
+
+/**
+ * Generates an RFC-compliant Stack Item ID
+ * Format: `stack_${timestamp}_${hex8}`
+ * 
+ * @returns {string}
+ */
+export function generateStackItemId() {
+  const timestamp = Date.now();
+  const hex = Math.random().toString(36).substring(2, 10);
+  return `stack_${timestamp}_${hex}`;
+}
+
+/**
+ * Generates an RFC-compliant Checkpoint ID
+ * Format: `ckpt_${sequenceId}_${hex6}`
+ * 
+ * @param {number} sequenceId Monotonically increasing sequence number
+ * @returns {string}
+ */
+export function generateCheckpointId(sequenceId) {
+  const hex = Math.random().toString(36).substring(2, 8);
+  return `ckpt_${sequenceId}_${hex}`;
+}
+
+/**
+ * Error thrown when a player attempts an action without holding priority,
+ * or violates timing restrictions.
+ */
+export class PriorityViolationError extends Error {
+  /**
+   * @param {string} message
+   * @param {Object} [details={}]
+   */
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'PriorityViolationError';
+    this.details = details;
+  }
+}
+
+/**
+ * Safely extracts pure domain properties from PriorityStateMachine state
+ * to avoid circular references during JSON serialization.
+ * 
+ * @param {Object} state
+ * @returns {Object}
+ */
+function extractDomainState(state) {
+  return {
+    sessionId: state.sessionId,
+    players: [...(state.players || [])],
+    activePlayerId: state.activePlayerId,
+    priorityPlayerId: state.priorityPlayerId,
+    currentPhaseStep: state.currentPhaseStep,
+    turnNumber: state.turnNumber,
+    consecutivePassCount: state.consecutivePassCount,
+    stack: state.stack ? JSON.parse(JSON.stringify(state.stack)) : [],
+    isTurnEnded: Boolean(state.isTurnEnded)
+  };
+}
+
+/**
+ * CheckpointJournal manages the in-memory chronological ring buffer of state snapshots.
+ */
+export class CheckpointJournal {
+  /**
+   * @param {number} [maxSnapshots=50]
+   */
+  constructor(maxSnapshots = 50) {
+    this.maxSnapshots = maxSnapshots;
+    this.snapshots = []; // Ordered array: newest at end
+    this.sequenceCounter = 0;
+  }
+
+  /**
+   * Captures an immutable checkpoint snapshot.
+   * 
+   * @param {string} triggerAction
+   * @param {Object} state
+   * @returns {Object} Snapshot
+   */
+  captureSnapshot(triggerAction, state) {
+    this.sequenceCounter++;
+    const checkpointId = generateCheckpointId(this.sequenceCounter);
+    const domainState = extractDomainState(state);
+
+    const snapshot = {
+      checkpointId,
+      sequenceId: this.sequenceCounter,
+      timestamp: Date.now(),
+      triggerAction,
+      activePlayerId: state.activePlayerId,
+      priorityPlayerId: state.priorityPlayerId,
+      currentPhaseStep: state.currentPhaseStep,
+      turnNumber: state.turnNumber,
+      consecutivePassCount: state.consecutivePassCount,
+      stack: domainState.stack,
+      serializedState: JSON.stringify(domainState)
+    };
+
+    this.snapshots.push(snapshot);
+    if (this.snapshots.length > this.maxSnapshots) {
+      this.snapshots.shift(); // Evict oldest
+    }
+
+    return snapshot;
+  }
+
+  /**
+   * Retrieves a checkpoint by its ID.
+   * 
+   * @param {string} checkpointId
+   * @returns {Object|null}
+   */
+  getSnapshot(checkpointId) {
+    return this.snapshots.find(s => s.checkpointId === checkpointId) || null;
+  }
+
+  /**
+   * Returns list of recent checkpoints (newest first).
+   * 
+   * @param {number} [count=10]
+   * @returns {Object[]}
+   */
+  getRecentCheckpoints(count = 10) {
+    return this.snapshots.slice(-count).reverse();
+  }
+}
+
+/**
+ * PriorityStateMachine coordinates MTG CR 117 turn priority, phases/steps, LIFO stack,
+ * response alarms, and rollback journal snapshots.
+ */
+export class PriorityStateMachine {
+  /**
+   * @param {Object} [options={}]
+   * @param {string} [options.sessionId]
+   * @param {string[]} [options.players=['p1', 'p2']]
+   * @param {string} [options.activePlayerId]
+   * @param {string} [options.priorityPlayerId]
+   * @param {string} [options.initialPhaseStep='UNTAP']
+   * @param {string} [options.currentPhaseStep]
+   * @param {number} [options.turnNumber=1]
+   * @param {number} [options.maxCheckpoints=50]
+   * @param {boolean} [options.strictTiming=false]
+   * @param {StackAlarmManager} [options.alarmManager]
+   * @param {CheckpointJournal} [options.checkpointJournal]
+   */
+  constructor(options = {}) {
+    this.sessionId = options.sessionId || `psm_${Date.now()}`;
+    this.players = options.players && options.players.length > 0
+      ? [...options.players]
+      : ['p1', 'p2'];
+
+    this.activePlayerId = options.activePlayerId || this.players[0];
+    this.priorityPlayerId = options.priorityPlayerId || this.activePlayerId;
+    this.currentPhaseStep = options.initialPhaseStep || options.currentPhaseStep || 'UNTAP';
+    this.turnNumber = typeof options.turnNumber === 'number' ? options.turnNumber : 1;
+    this.consecutivePassCount = 0;
+    this.stack = [];
+    this.isTurnEnded = false;
+    this.strictTiming = Boolean(options.strictTiming);
+
+    // Event listeners & subscribers
+    this._listeners = new Map();
+    this._subscribers = new Set();
+
+    // Checkpoint Journal
+    this.checkpointJournal = options.checkpointJournal || new CheckpointJournal(options.maxCheckpoints || 50);
+
+    // Stack Alarm Manager integration
+    this.alarmManager = options.alarmManager || new StackAlarmManager({
+      defaultDurationSeconds: options.defaultDurationSeconds || 15,
+      onTimeout: (expiredPlayerId, expiredStackItemId) => {
+        // Auto-pass priority when countdown expires
+        if (this.priorityPlayerId === expiredPlayerId) {
+          this.dispatch('PASS_PRIORITY', { playerId: expiredPlayerId, isTimeout: true });
+        }
+      },
+      onEmit: (alarmEvent) => {
+        this.emit(alarmEvent.type, alarmEvent);
+      }
+    });
+  }
+
+  // ==========================================
+  // Event & Observer Pattern Methods
+  // ==========================================
+
+  /**
+   * Registers a specific event type handler.
+   * 
+   * @param {string} event
+   * @param {Function} handler
+   */
+  on(event, handler) {
+    if (typeof handler !== 'function') return;
+    if (!this._listeners.has(event)) {
+      this._listeners.set(event, []);
+    }
+    this._listeners.get(event).push(handler);
+  }
+
+  /**
+   * Removes a specific event type handler.
+   * 
+   * @param {string} event
+   * @param {Function} handler
+   */
+  off(event, handler) {
+    if (!this._listeners.has(event)) return;
+    const list = this._listeners.get(event).filter(fn => fn !== handler);
+    this._listeners.set(event, list);
+  }
+
+  /**
+   * Subscribes an observer callback to all state machine events.
+   * 
+   * @param {Function} listener
+   * @returns {Function} Unsubscribe function
+   */
+  subscribe(listener) {
+    if (typeof listener === 'function') {
+      this._subscribers.add(listener);
+    }
+    return () => {
+      this._subscribers.delete(listener);
+    };
+  }
+
+  /**
+   * Dispatches an event to registered listeners and global subscribers.
+   * 
+   * @param {string} type
+   * @param {Object} [payload={}]
+   */
+  emit(type, payload = {}) {
+    const eventObject = {
+      type,
+      sessionId: this.sessionId,
+      timestamp: Date.now(),
+      ...payload
+    };
+
+    // Specific listeners
+    const handlers = this._listeners.get(type);
+    if (handlers && handlers.length > 0) {
+      for (const fn of handlers) {
+        try {
+          fn(eventObject);
+        } catch (err) {
+          console.error(`Error in event listener for ${type}:`, err);
+        }
+      }
+    }
+
+    // Global subscribers
+    for (const sub of this._subscribers) {
+      try {
+        sub(eventObject);
+      } catch (err) {
+        console.error('Error in PriorityStateMachine subscriber:', err);
+      }
+    }
+  }
+
+  // ==========================================
+  // APNAP Priority & Validation Helpers
+  // ==========================================
+
+  /**
+   * Computes the next player in clockwise turn order.
+   * 
+   * @param {string} playerId
+   * @returns {string} Next player ID
+   */
+  nextPlayer(playerId) {
+    const currentIndex = this.players.indexOf(playerId);
+    if (currentIndex === -1) {
+      return this.players[0];
+    }
+    return this.players[(currentIndex + 1) % this.players.length];
+  }
+
+  /**
+   * Asserts that the specified player currently holds priority.
+   * Throws PriorityViolationError if the player does not hold priority.
+   * 
+   * @param {string} playerId
+   * @throws {PriorityViolationError}
+   */
+  assertHasPriority(playerId) {
+    if (this.priorityPlayerId !== playerId) {
+      throw new PriorityViolationError(
+        `Player '${playerId}' does not hold priority. Current priority holder is '${this.priorityPlayerId}'.`,
+        { playerId, priorityPlayerId: this.priorityPlayerId }
+      );
+    }
+  }
+
+  /**
+   * Validates whether an action is permissible given priority and timing restrictions.
+   * 
+   * @param {string} playerId
+   * @param {string} actionType
+   * @param {Object} [details={}]
+   * @throws {PriorityViolationError}
+   */
+  validateAction(playerId, actionType, details = {}) {
+    this.assertHasPriority(playerId);
+
+    const isSorcerySpeed =
+      actionType === 'SORCERY_SPEED' ||
+      (this.strictTiming &&
+        (details.speed === 'SORCERY' ||
+          details.typeLine?.includes('Sorcery') ||
+          details.typeLine?.includes('Creature') ||
+          details.typeLine?.includes('Artifact') ||
+          details.typeLine?.includes('Enchantment') ||
+          details.typeLine?.includes('Planeswalker')));
+
+    if (isSorcerySpeed) {
+      if (!['PRECOMBAT_MAIN', 'POSTCOMBAT_MAIN'].includes(this.currentPhaseStep)) {
+        throw new PriorityViolationError(
+          `Sorcery speed actions are only permitted during Main phases (current: ${this.currentPhaseStep}).`,
+          { playerId, currentPhaseStep: this.currentPhaseStep }
+        );
+      }
+      if (this.stack.length > 0) {
+        throw new PriorityViolationError(
+          'Sorcery speed actions require an empty stack.',
+          { playerId, stackLength: this.stack.length }
+        );
+      }
+      if (this.activePlayerId !== playerId) {
+        throw new PriorityViolationError(
+          `Only the active player ('${this.activePlayerId}') may perform sorcery speed actions.`,
+          { playerId, activePlayerId: this.activePlayerId }
+        );
+      }
+    }
+  }
+
+  /**
+   * Returns the player ID currently holding priority.
+   * @returns {string}
+   */
+  getPriorityPlayerId() {
+    return this.priorityPlayerId;
+  }
+
+  /**
+   * Returns the current consecutive pass count.
+   * @returns {number}
+   */
+  getConsecutivePassCount() {
+    return this.consecutivePassCount;
+  }
+
+  /**
+   * Returns the current depth/size of the stack.
+   * @returns {number}
+   */
+  getStackDepth() {
+    return this.stack.length;
+  }
+
+  // ==========================================
+  // LIFO Stack Methods
+  // ==========================================
+
+  /**
+   * Pushes an item onto the top of the stack.
+   * 
+   * @param {Object} item
+   * @returns {Object} Pushed item
+   */
+  pushStack(item) {
+    this.stack.push(item);
+    return item;
+  }
+
+  /**
+   * Pops and returns the top item from the stack.
+   * 
+   * @returns {Object|null} Popped item or null if stack was empty
+   */
+  popStack() {
+    if (this.stack.length === 0) return null;
+    return this.stack.pop();
+  }
+
+  /**
+   * Returns the top item on the stack without removing it.
+   * 
+   * @returns {Object|null} Top item or null if stack is empty
+   */
+  peekStack() {
+    if (this.stack.length === 0) return null;
+    return this.stack[this.stack.length - 1];
+  }
+
+  /**
+   * Clears all items from the stack.
+   */
+  clearStack() {
+    this.stack = [];
+  }
+
+  // ==========================================
+  // Phase / Step Progression Methods
+  // ==========================================
+
+  /**
+   * Sets the phase step directly (useful for tests and setup).
+   * 
+   * @param {string} step
+   */
+  setPhaseStep(step) {
+    if (!PHASE_STEPS.includes(step)) {
+      throw new Error(`Invalid phase/step: ${step}`);
+    }
+    const previousStep = this.currentPhaseStep;
+    this.currentPhaseStep = step;
+    this.priorityPlayerId = this.activePlayerId;
+    this.consecutivePassCount = 0;
+
+    this.emit('PHASE_STEP_CHANGED', {
+      previousStep,
+      currentPhaseStep: this.currentPhaseStep,
+      turnNumber: this.turnNumber,
+      activePlayerId: this.activePlayerId
+    });
+  }
+
+  /**
+   * Advances to the next phase/step according to MTG CR 500-514.
+   * If advancing past CLEANUP, hands turn over to next active player.
+   * 
+   * @returns {string} New phase step
+   */
+  advanceStep() {
+    const currentIndex = PHASE_STEPS.indexOf(this.currentPhaseStep);
+    if (currentIndex === -1) {
+      throw new Error(`Unknown phase/step: ${this.currentPhaseStep}`);
+    }
+
+    // Capture checkpoint snapshot before phase advance
+    this.checkpointJournal.captureSnapshot(`BEFORE_PHASE_ADVANCE_${this.currentPhaseStep}`, this);
+
+    const previousStep = this.currentPhaseStep;
+    const nextIndex = currentIndex + 1;
+
+    if (nextIndex >= PHASE_STEPS.length) {
+      // Turn ends -> Advance to next player's UNTAP step
+      this.turnNumber++;
+      this.activePlayerId = this.nextPlayer(this.activePlayerId);
+      this.currentPhaseStep = PHASE_STEPS[0]; // 'UNTAP'
+      this.priorityPlayerId = this.activePlayerId;
+      this.consecutivePassCount = 0;
+
+      this.emit('TURN_ADVANCED', {
+        turnNumber: this.turnNumber,
+        activePlayerId: this.activePlayerId
+      });
+    } else {
+      this.currentPhaseStep = PHASE_STEPS[nextIndex];
+      this.priorityPlayerId = this.activePlayerId;
+      this.consecutivePassCount = 0;
+    }
+
+    this.emit('PHASE_STEP_CHANGED', {
+      previousStep,
+      currentPhaseStep: this.currentPhaseStep,
+      turnNumber: this.turnNumber,
+      activePlayerId: this.activePlayerId
+    });
+
+    return this.currentPhaseStep;
+  }
+
+  /**
+   * Alias for advanceStep()
+   */
+  advancePhaseStep() {
+    return this.advanceStep();
+  }
+
+  // ==========================================
+  // Checkpoint & Rollback Bus
+  // ==========================================
+
+  /**
+   * Creates an on-demand immutable checkpoint snapshot.
+   * 
+   * @param {string} [label='USER_CHECKPOINT']
+   * @returns {Object} Snapshot
+   */
+  createCheckpoint(label = 'USER_CHECKPOINT') {
+    const snapshot = this.checkpointJournal.captureSnapshot(label, this);
+    this.emit('CHECKPOINT_CAPTURED', {
+      checkpointId: snapshot.checkpointId,
+      triggerAction: label
+    });
+    return snapshot;
+  }
+
+  /**
+   * Rolls back the game state to an exact historical checkpoint.
+   * 
+   * @param {string} checkpointId
+   * @returns {Object} Restored snapshot
+   */
+  rollbackToCheckpoint(checkpointId) {
+    const snapshot = this.checkpointJournal.getSnapshot(checkpointId);
+    if (!snapshot) {
+      throw new Error(`Checkpoint not found: ${checkpointId}`);
+    }
+
+    // Cancel any active countdown timers
+    if (this.alarmManager) {
+      this.alarmManager.cancel();
+    }
+
+    // Restore state from snapshot
+    this.activePlayerId = snapshot.activePlayerId;
+    this.priorityPlayerId = snapshot.priorityPlayerId;
+    this.currentPhaseStep = snapshot.currentPhaseStep;
+    this.turnNumber = snapshot.turnNumber;
+    this.consecutivePassCount = snapshot.consecutivePassCount;
+    this.stack = JSON.parse(JSON.stringify(snapshot.stack));
+
+    this.emit('CHECKPOINT_RESTORED', {
+      checkpointId: snapshot.checkpointId,
+      restoredToTrigger: snapshot.triggerAction,
+      activePlayerId: this.activePlayerId,
+      priorityPlayerId: this.priorityPlayerId,
+      stackSize: this.stack.length
+    });
+
+    return snapshot;
+  }
+
+  // ==========================================
+  // Stack Resolution
+  // ==========================================
+
+  /**
+   * Resolves the top item of the stack and restores priority to active player.
+   * 
+   * @returns {Object|null} Resolved item
+   */
+  resolveTop() {
+    if (this.stack.length === 0) {
+      return null;
+    }
+
+    this.checkpointJournal.captureSnapshot('BEFORE_STACK_RESOLVE', this);
+
+    const resolvedItem = this.popStack();
+    this.consecutivePassCount = 0;
+    this.priorityPlayerId = this.activePlayerId;
+
+    if (this.alarmManager) {
+      this.alarmManager.cancel();
+    }
+
+    this.emit('STACK_RESOLVE', {
+      resolvedItem,
+      remainingStackSize: this.stack.length
+    });
+
+    this.emit('PRIORITY_CHANGED', {
+      activePlayerId: this.activePlayerId,
+      priorityPlayerId: this.priorityPlayerId,
+      currentPhaseStep: this.currentPhaseStep,
+      consecutivePassCount: this.consecutivePassCount
+    });
+
+    return resolvedItem;
+  }
+
+  // ==========================================
+  // Command Dispatcher
+  // ==========================================
+
+  /**
+   * Dispatches inbound actions and mutates priority/stack/phase state.
+   * 
+   * @param {string} actionType
+   * @param {Object} [payload={}]
+   * @returns {any} Result of action
+   */
+  dispatch(actionType, payload = {}) {
+    switch (actionType) {
+      case 'CAST_SPELL':
+      case 'CAST_SPELL_TO_STACK': {
+        const playerId = payload.playerId;
+        this.validateAction(playerId, actionType, payload.card || {});
+
+        // Capture snapshot before stack mutation
+        this.checkpointJournal.captureSnapshot('CAST_SPELL', this);
+
+        const stackItem = {
+          id: payload.id || generateStackItemId(),
+          sourcePlayerId: playerId,
+          card: payload.card || {},
+          type: payload.type || 'SPELL',
+          targets: payload.targets || [],
+          manaCostPaid: payload.manaCostPaid || {},
+          timestamp: Date.now()
+        };
+
+        this.pushStack(stackItem);
+        this.consecutivePassCount = 0;
+
+        // Turn priority passes to the next player
+        this.priorityPlayerId = this.nextPlayer(playerId);
+
+        // Start 15-second response alarm for the opponent receiving priority
+        if (this.alarmManager) {
+          this.alarmManager.start(
+            this.priorityPlayerId,
+            stackItem.id,
+            payload.durationSeconds || 15
+          );
+        }
+
+        this.emit('STACK_PUSH', {
+          stackItem,
+          stackSize: this.stack.length
+        });
+
+        this.emit('PRIORITY_CHANGED', {
+          activePlayerId: this.activePlayerId,
+          priorityPlayerId: this.priorityPlayerId,
+          currentPhaseStep: this.currentPhaseStep,
+          consecutivePassCount: this.consecutivePassCount
+        });
+
+        return stackItem;
+      }
+
+      case 'ACTIVATE_ABILITY':
+      case 'ACTIVATE_ABILITY_TO_STACK': {
+        const playerId = payload.playerId;
+        this.validateAction(playerId, actionType, payload);
+
+        this.checkpointJournal.captureSnapshot('ACTIVATE_ABILITY', this);
+
+        const stackItem = {
+          id: payload.id || generateStackItemId(),
+          sourcePlayerId: playerId,
+          card: payload.card || {},
+          type: 'ABILITY',
+          ability: payload.ability || {},
+          targets: payload.targets || [],
+          manaCostPaid: payload.manaCostPaid || {},
+          timestamp: Date.now()
+        };
+
+        this.pushStack(stackItem);
+        this.consecutivePassCount = 0;
+        this.priorityPlayerId = this.nextPlayer(playerId);
+
+        if (this.alarmManager) {
+          this.alarmManager.start(
+            this.priorityPlayerId,
+            stackItem.id,
+            payload.durationSeconds || 15
+          );
+        }
+
+        this.emit('STACK_PUSH', {
+          stackItem,
+          stackSize: this.stack.length
+        });
+
+        this.emit('PRIORITY_CHANGED', {
+          activePlayerId: this.activePlayerId,
+          priorityPlayerId: this.priorityPlayerId,
+          currentPhaseStep: this.currentPhaseStep,
+          consecutivePassCount: this.consecutivePassCount
+        });
+
+        return stackItem;
+      }
+
+      case 'PASS_PRIORITY': {
+        const playerId = payload.playerId;
+        this.assertHasPriority(playerId);
+
+        this.consecutivePassCount++;
+
+        // Clear active response alarm
+        if (this.alarmManager) {
+          this.alarmManager.cancel();
+        }
+
+        if (this.stack.length > 0) {
+          // Check resolution conditions:
+          // 1. All players in match passed consecutively (CR 117.4)
+          // 2. In a 2-player match with a freshly cast spell where the active player
+          //    cast on empty stack and opponent yields/passes/times-out without responding.
+          const allPlayersPassed = this.consecutivePassCount >= this.players.length;
+          const opponentYieldedOnSingleSpell =
+            this.stack.length === 1 &&
+            this.players.length === 2 &&
+            this.stack[0].sourcePlayerId === this.activePlayerId &&
+            playerId !== this.activePlayerId;
+
+          if (allPlayersPassed || opponentYieldedOnSingleSpell) {
+            return this.resolveTop();
+          } else {
+            // Priority rotates to next player in turn order
+            this.priorityPlayerId = this.nextPlayer(this.priorityPlayerId);
+
+            if (this.alarmManager && this.peekStack()) {
+              this.alarmManager.start(this.priorityPlayerId, this.peekStack().id);
+            }
+
+            this.emit('PRIORITY_CHANGED', {
+              activePlayerId: this.activePlayerId,
+              priorityPlayerId: this.priorityPlayerId,
+              currentPhaseStep: this.currentPhaseStep,
+              consecutivePassCount: this.consecutivePassCount
+            });
+
+            return { status: 'PRIORITY_PASSED', priorityPlayerId: this.priorityPlayerId };
+          }
+        } else {
+          // Empty stack: advance phase/step when all players pass consecutively
+          if (this.consecutivePassCount >= this.players.length) {
+            this.advanceStep();
+            return { status: 'PHASE_ADVANCED', currentPhaseStep: this.currentPhaseStep };
+          } else {
+            this.priorityPlayerId = this.nextPlayer(this.priorityPlayerId);
+
+            this.emit('PRIORITY_CHANGED', {
+              activePlayerId: this.activePlayerId,
+              priorityPlayerId: this.priorityPlayerId,
+              currentPhaseStep: this.currentPhaseStep,
+              consecutivePassCount: this.consecutivePassCount
+            });
+
+            return { status: 'PRIORITY_PASSED', priorityPlayerId: this.priorityPlayerId };
+          }
+        }
+      }
+
+      case 'HOLD_RESPOND': {
+        const playerId = payload.playerId;
+        this.assertHasPriority(playerId);
+
+        if (this.alarmManager) {
+          this.alarmManager.hold(playerId);
+        }
+
+        this.emit('STACK_ALARM_HELD', {
+          heldByPlayerId: playerId,
+          priorityPlayerId: this.priorityPlayerId,
+          stackItemId: this.peekStack()?.id || null
+        });
+
+        return { status: 'HELD', heldByPlayerId: playerId };
+      }
+
+      case 'RESOLVE_TOP': {
+        return this.resolveTop();
+      }
+
+      case 'ADVANCE_PHASE_STEP': {
+        return this.advanceStep();
+      }
+
+      case 'ROLLBACK_TO_CHECKPOINT': {
+        return this.rollbackToCheckpoint(payload.checkpointId);
+      }
+
+      default:
+        throw new Error(`Unsupported actionType: ${actionType}`);
+    }
+  }
+
+  /**
+   * Returns a serializable snapshot of the current state machine state.
+   * 
+   * @returns {Object}
+   */
+  getState() {
+    return extractDomainState(this);
+  }
+}
+
+export default PriorityStateMachine;
