@@ -23,6 +23,7 @@
 | **DEC-013** | `2026-10-17 13:40` | Micro-Spec Agreement: Upkeep Emblem Stack Trigger, Scaling, Gray-Out Elimination, & Audio | **A)** Arena-style automated upkeep & server-cut FFmpeg<br>**(Recommended) Two-Step Upkeep Emblem, Turn Scaling (T2 3-6p / T4 1v1), 60+30s Disconnect, YouTube A-to-B Clip Player, 3-6p Gray-out** | **(Recommended) Micro-Spec Architecture** | Formalized Upkeep Emblem (2 d10 dice), 2-step stack resolution, 90s Render buffer, Instagram-style A-to-B audio, and multi-death conditions (life 0, 10 poison, deckout). |
 | **DEC-014** | `2026-10-17 13:51` | Agreement Closure: 12th Perk (RPBD), CR 603.3d Target Declaration Timing, & Client Victory Audio | **A)** Birthday perk + CR 603.3d stack targeting + YouTube/HTML5 audio<br>**B)** Fixed '69' key + resolution targeting + MP3 only | **Option A (Recommended)** | 12th Perk is Birthday Match (non-matches miss); targets declared on stack entry prior to 15s alarm; zero backend FFmpeg dependencies. |
 | **DEC-015** | `2026-10-17 14:14` | Argon Systems Audit: 12 Logic Failures & 5 Loop/Deadlock Vectors Neutralized | **A)** Proceed with unhardened micro-spec<br>**B)** Enforce formal invariants INV-RELAY-1 to INV-HARNESS-2 (CSPRNG rolls, ActiveRing filter, CR 603.3d guards, unref test timers) | **Option B (Hardened Invariants)** | Eliminated empty-stack deadlocks, target starvation freezes, PRNG tampering, disconnect race conditions, and test runner process hangs. |
+| **DEC-016** | `2026-10-17 17:33` | Production Packaging, Hosting Readiness & GitHub Publication | **A)** Multi-repo or separate container build<br>**(Recommended) Standalone single-port server (`server.js`) + Public GitHub repository (`Svayneak/rpm-multiplayer`)** | **(Recommended) Standalone Server & Public GitHub Repo** | Engineered `server.js` serving both SPA assets and WebSocket relay on standard `$PORT`, added `/health` probe, passed 119/119 tests (0 failures), and pushed to GitHub `Svayneak/rpm-multiplayer`. |
 
 
 ---
@@ -201,4 +202,20 @@
     9. **Harness Unidirectional Flow & Test Cleanup (`INV-HARNESS-1` & `INV-HARNESS-2`)**: Explicit `'LOCAL'` vs `'REMOTE'` action origin tagging eliminating circular broadcast loops; `.unref()` on all background heartbeat timers to prevent Node.js test process hangs.
 - **User Decision**: **Option B (Recommended)**.
 - **Impact & Implementation**: All 17 identified vulnerability vectors sealed before writing code. Specifications and test suites will directly enforce these invariants.
+
+---
+
+### DEC-016 — Production Packaging, Hosting Architecture & GitHub Publication
+- **Context & Problem**: To host the RPM Multiplayer Arena online for live player testing (on platforms like Render, Fly.io, Railway, or Heroku), the application needed a production-grade server setup that can host both static assets and handle WebSocket connections on a single public port without external build orchestrators or third-party daemon dependencies. Additionally, source code needed to be isolated, clean of personal media assets, and published to GitHub.
+- **Options Evaluated**:
+  - *Option A*: Split architecture (e.g., Vercel for frontend + separate WebSocket server on Railway/Fly.io).
+  - *Option B (Recommended)*: Unified zero-dependency Node.js production server (`server.js`) serving both the static SPA client (`index.html`, JS, CSS) and the RFC 6455 WebSocket relay on a single port (`process.env.PORT || 3000`), with an automated health check probe (`/health`), clean `.gitignore` exclusion of local `.ogg` voice notes, and a direct push to a public GitHub repository.
+- **User Decision**: **Option B (Recommended)**.
+- **Impact & Implementation**:
+  1. Created `server.js` with zero external dependencies, MIME type routing, path traversal protection, SPA fallback, and WebSocket upgrade delegation.
+  2. Verified `/health` endpoint returning `{ status: 'healthy', uptime: ... }` with HTTP 200.
+  3. Added `npm start` running `node server.js`.
+  4. Added `*.ogg` to `.gitignore` to preserve privacy of local voice notes.
+  5. Initialized Git repository with clean main branch under `Augusto Mateu <augustomateu@gmail.com>`.
+  6. Successfully published public GitHub repository: [Svayneak/rpm-multiplayer](https://github.com/Svayneak/rpm-multiplayer).
 
