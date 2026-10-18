@@ -130,18 +130,27 @@
   </div>
 
   <!-- Main ES Module Application Bootstrapper -->
-  <script type="module" src="./src/app.js"></script>
   <script type="module">
     import { RPMAppController } from './src/app.js';
 
-    document.addEventListener('DOMContentLoaded', async () => {
-      const app = new RPMAppController({
-        container: '#app-root',
-        autoConnect: true
-      });
-      await app.mount();
-      window.__RPM_APP__ = app;
-    });
+    async function bootstrap() {
+      try {
+        const app = new RPMAppController({
+          container: '#app-root',
+          autoConnect: true
+        });
+        await app.mount();
+        window.__RPM_APP__ = app;
+      } catch (err) {
+        console.error('Fatal error mounting RPM App:', err);
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', bootstrap);
+    } else {
+      bootstrap();
+    }
   </script>
 </body>
 </html>
