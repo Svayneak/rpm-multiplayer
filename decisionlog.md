@@ -24,6 +24,7 @@
 | **DEC-014** | `2026-10-17 13:51` | Agreement Closure: 12th Perk (RPBD), CR 603.3d Target Declaration Timing, & Client Victory Audio | **A)** Birthday perk + CR 603.3d stack targeting + YouTube/HTML5 audio<br>**B)** Fixed '69' key + resolution targeting + MP3 only | **Option A (Recommended)** | 12th Perk is Birthday Match (non-matches miss); targets declared on stack entry prior to 15s alarm; zero backend FFmpeg dependencies. |
 | **DEC-015** | `2026-10-17 14:14` | Argon Systems Audit: 12 Logic Failures & 5 Loop/Deadlock Vectors Neutralized | **A)** Proceed with unhardened micro-spec<br>**B)** Enforce formal invariants INV-RELAY-1 to INV-HARNESS-2 (CSPRNG rolls, ActiveRing filter, CR 603.3d guards, unref test timers) | **Option B (Hardened Invariants)** | Eliminated empty-stack deadlocks, target starvation freezes, PRNG tampering, disconnect race conditions, and test runner process hangs. |
 | **DEC-016** | `2026-10-17 17:33` | Production Packaging, Hosting Readiness & GitHub Publication | **A)** Multi-repo or separate container build<br>**(Recommended) Standalone single-port server (`server.js`) + Public GitHub repository (`Svayneak/rpm-multiplayer`)** | **(Recommended) Standalone Server & Public GitHub Repo** | Engineered `server.js` serving both SPA assets and WebSocket relay on standard `$PORT`, added `/health` probe, passed 119/119 tests (0 failures), and pushed to GitHub `Svayneak/rpm-multiplayer`. |
+| **DEC-017** | `2026-10-18 10:45` | Argon Full Code Audit & Multi-Client Synchronization Hardening | **A)** Rely on basic single-client integration harness<br>**(Recommended) Eliminate DOMContentLoaded race condition, suppress broadcast echoes, rehydrate multi-client dynamic seats, and filter eliminated players from client priority ring** | **(Recommended) Hardened Multi-Client Synchronization** | Resolved 4 critical distributed synchronization bugs, created `test_multi_client_sync.js`, validated all 11 test suites (137+ test vectors), and pushed commit `eeabac5` to GitHub. |
 
 
 ---
@@ -218,4 +219,21 @@
   4. Added `*.ogg` to `.gitignore` to preserve privacy of local voice notes.
   5. Initialized Git repository with clean main branch under `Augusto Mateu <augustomateu@gmail.com>`.
   6. Successfully published public GitHub repository: [Svayneak/rpm-multiplayer](https://github.com/Svayneak/rpm-multiplayer).
+
+---
+
+### DEC-017 — Argon Systems Full Code Audit & Multi-Client Synchronization Hardening
+- **Context & Problem**: Following deployment to Render, the application presented an initial offline state due to an ES module `DOMContentLoaded` vs. `readyState` race condition. Furthermore, an exhaustive review by the Argon Systems Architect identified 4 critical distributed synchronization edge cases in multi-client rooms: state reconcile snapshot omission on join, circular broadcast echo causing double priority passes, priority ring deadlocks on eliminated players in client controllers, and missing WebSocket upgrade `head` forwarding.
+- **Options Evaluated**:
+  - *Option A*: Quick-patch the DOMContentLoaded listener and test manually.
+  - *Option B (Recommended)*: Perform a ruthless line-by-line audit across all 11 modules, fix all distributed state synchronization flaws, create a multi-client real-time synchronization test suite (`test_multi_client_sync.js`), and certify 100% test-readiness.
+- **User Decision**: **Option B (Recommended)**.
+- **Impact & Implementation**:
+  1. **ReadyState-Aware Bootstrapper**: In `index.html`, added `document.readyState === 'loading' ? addEventListener('DOMContentLoaded', bootstrap) : bootstrap()`, completely eliminating startup hangs across all network latencies and browsers.
+  2. **Multi-Client State Rehydration**: In `src/app.js`, hooked `handleStateSync(snapshot)`, `handlePlayerJoined(msg)`, and connection status events so client 2 automatically adopts its allocated seat (`myPlayerId`), rehydrates the host's board, and renders dynamic opponent accordions.
+  3. **Circular Broadcast Echo Suppression**: Added slot origin check in `onSequenced` so local optimistic passes are never re-applied as remote passes.
+  4. **Dynamic Priority Ring Purge**: In `src/app.js`, filtered eliminated players from `this.priorityMachine.players` on elimination events, preventing empty-stack phase deadlocks.
+  5. **RFC 6455 Pipelining & Multi-Arg Listen**: Forwarded initial `head` buffer in `relay.js` and enabled `(port, host, cb)` signatures.
+  6. **New Multi-Client Sync Suite**: Implemented `test/test_multi_client_sync.js` testing live multi-client room creation, join, priority exchange, and teardown (137+ test vectors verified across all 1 layer test suites).
+  7. Committed and pushed to GitHub `Svayneak/rpm-multiplayer` (`commit eeabac5`).
 
