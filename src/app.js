@@ -537,7 +537,23 @@ export class RPMAppController {
       const onConn = () => this._setConnectionStatus('CONNECTED');
       const onDisconn = () => this._setConnectionStatus('OFFLINE');
       const onReconn = () => this._setConnectionStatus('RECONNECTING');
+      const onStateSync = (snapshot) => {
+        this.handleStateSync(snapshot);
+      };
+      const onPlayerJoined = (msg) => {
+        this.handlePlayerJoined(msg);
+      };
+      const onPlayerDisconnected = (msg) => {
+        this.handlePlayerConnectionChanged(msg.playerId, 'DISCONNECTED');
+      };
+      const onPlayerReconnected = (msg) => {
+        this.handlePlayerConnectionChanged(msg.playerId, 'CONNECTED');
+      };
       const onSequenced = (msg) => {
+        // Echo suppression: If this client originated the action, it was already applied locally
+        if (msg.slotId && this.relayClient && msg.slotId === this.relayClient.slotId) {
+          return;
+        }
         this.dispatchAction(msg.action || msg, { origin: 'REMOTE' });
       };
       const onPlayerEliminated = (msg) => {
@@ -550,6 +566,10 @@ export class RPMAppController {
       this.relayClient.on('connected', onConn);
       this.relayClient.on('disconnected', onDisconn);
       this.relayClient.on('reconnecting', onReconn);
+      this.relayClient.on('state_sync', onStateSync);
+      this.relayClient.on('player_joined', onPlayerJoined);
+      this.relayClient.on('player_disconnected', onPlayerDisconnected);
+      this.relayClient.on('player_reconnected', onPlayerReconnected);
       this.relayClient.on('action_sequenced', onSequenced);
       this.relayClient.on('player_eliminated', onPlayerEliminated);
       this.relayClient.on('match_victory', onVictory);
@@ -558,6 +578,10 @@ export class RPMAppController {
         this.relayClient.off('connected', onConn);
         this.relayClient.off('disconnected', onDisconn);
         this.relayClient.off('reconnecting', onReconn);
+        this.relayClient.off('state_sync', onStateSync);
+        this.relayClient.off('player_joined', onPlayerJoined);
+        this.relayClient.off('player_disconnected', onPlayerDisconnected);
+        this.relayClient.off('player_reconnected', onPlayerReconnected);
         this.relayClient.off('action_sequenced', onSequenced);
         this.relayClient.off('player_eliminated', onPlayerEliminated);
         this.relayClient.off('match_victory', onVictory);
@@ -650,7 +674,7 @@ export class RPMAppController {
     if (!action) return;
 
     const origin = context?.origin || action.origin || 'LOCAL';
-    const actionType = action.type || action.actionType;
+    const actionType = action.type === 'ACTION_SEQUENCED' ? action.actionType : (action.actionType || action.type);
     const payload = action.payload || {};
 
     // Invariant INV-HARNESS-2: Circular loop suppression
@@ -664,7 +688,7 @@ export class RPMAppController {
     switch (actionType) {
       case 'PASS_PRIORITY':
         if (this.priorityMachine) {
-          const targetPlayerId = payload.playerId || this.priorityMachine.priorityPlayerId;
+          const targetPlayerId = payload.playerId || (action.slotId ? `player_${action.slotId}` : this.priorityMachine.priorityPlayerId);
           this.priorityMachine.passPriority(targetPlayerId);
         }
         break;
@@ -705,6 +729,14 @@ export class RPMAppController {
         }
         break;
 
+      case 'TURN_COMMAND':
+        if (this.dualChat && payload.command) {
+          try {
+            this.dualChat.submitTurnCommand(payload.command, { senderId: payload.senderId || this.myPlayerId });
+          } catch (_) {}
+        }
+        break;
+
       case 'PLAYER_ELIMINATED':
         this.handlePlayerElimination(payload.playerId || payload.player || action.playerId);
         break;
@@ -731,7 +763,8 @@ export class RPMAppController {
 
   /**
    * Eliminates a player from the active ring, renders gray-out overlay,
-   * purges their owned spells from the stack (CR 800.4a), and checks for match victory.
+   * purges their owned spells from the stack (CR 800.4a), updates priority ring,
+   * and checks for match victory.
    * 
    * @param {string} playerId
    * @param {string} [reason='LIFE_ZERO']
@@ -751,9 +784,21 @@ export class RPMAppController {
       );
     }
 
-    // 3. Skip priority if currently holding
-    if (this.priorityMachine && this.priorityMachine.priorityPlayerId === playerId) {
-      this.priorityMachine.passPriority(playerId);
+    // 3. Dynamic Priority Ring Hand-off & Elimination (INV-RING-1)
+    if (this.priorityMachine) {
+      const remainingPlayers = (this.priorityMachine.players || []).filter(p => p !== playerId);
+      const wasPriority = (this.priorityMachine.priorityPlayerId === playerId);
+      const wasActive = (this.priorityMachine.activePlayerId === playerId);
+
+      this.priorityMachine.players = remainingPlayers;
+
+      if (wasPriority && remainingPlayers.length > 0) {
+        this.priorityMachine.priorityPlayerId = remainingPlayers[0];
+        this.priorityMachine.consecutivePassCount = 0;
+      }
+      if (wasActive && remainingPlayers.length > 0) {
+        this.priorityMachine.activePlayerId = remainingPlayers[0];
+      }
     }
 
     // 4. Check if only 1 survivor remains (Last Player Standing -> MATCH_VICTORY)
@@ -771,6 +816,127 @@ export class RPMAppController {
       });
     }
 
+    this.reconcileDOM();
+  }
+
+  /**
+   * Reconciles state from authoritative STATE_RECONCILE_SNAPSHOT.
+   * 
+   * @param {Object} snapshot
+   */
+  handleStateSync(snapshot) {
+    if (!snapshot) return;
+
+    if (snapshot.roomCode) {
+      const inp = this.container?.querySelector('#room-code-input');
+      if (inp) inp.value = snapshot.roomCode;
+    }
+
+    // Adopt assigned seat identity
+    if (snapshot.slotId && Array.isArray(snapshot.activeSlots)) {
+      const mySlot = snapshot.activeSlots.find(s => s.slotId === snapshot.slotId);
+      if (mySlot && mySlot.playerId) {
+        this.myPlayerId = mySlot.playerId;
+        this.username = mySlot.playerName || this.username;
+      }
+    }
+
+    // Reconcile players into TabletopStateManager
+    if (snapshot.projectedState && snapshot.projectedState.players) {
+      for (const [pId, pData] of Object.entries(snapshot.projectedState.players)) {
+        if (!this.tabletopState.players[pId]) {
+          this.tabletopState.registerPlayer(pId, pData.playerName || pId);
+        }
+        const target = this.tabletopState.players[pId];
+        if (pData.resources) {
+          target.resources = { ...target.resources, ...pData.resources };
+        }
+        if (pData.zones) {
+          target.zones = { ...target.zones, ...pData.zones };
+        }
+        target.isEliminated = Boolean(pData.isEliminated);
+      }
+    } else if (Array.isArray(snapshot.activeSlots)) {
+      for (const slot of snapshot.activeSlots) {
+        if (!this.tabletopState.players[slot.playerId]) {
+          this.tabletopState.registerPlayer(slot.playerId, slot.playerName || `Player ${slot.slotId}`);
+        }
+        this.tabletopState.players[slot.playerId].isEliminated = Boolean(slot.isEliminated);
+      }
+    }
+
+    // Reconcile PriorityStateMachine
+    if (this.priorityMachine) {
+      if (Array.isArray(snapshot.activeSlots)) {
+        const activeIds = snapshot.activeSlots.filter(s => !s.isEliminated).map(s => s.playerId);
+        if (activeIds.length > 0) {
+          this.priorityMachine.players = activeIds;
+          this.playerIds = snapshot.activeSlots.map(s => s.playerId);
+        }
+      }
+      if (snapshot.activePlayerId) {
+        this.priorityMachine.activePlayerId = snapshot.activePlayerId;
+      }
+      if (snapshot.priorityPlayerId) {
+        this.priorityMachine.priorityPlayerId = snapshot.priorityPlayerId;
+      }
+      if (snapshot.currentPhaseStep) {
+        this.priorityMachine.currentPhaseStep = snapshot.currentPhaseStep;
+      }
+      if (snapshot.turnNumber !== undefined) {
+        this.priorityMachine.turnNumber = snapshot.turnNumber;
+      }
+      if (Array.isArray(snapshot.stack)) {
+        this.priorityMachine.stack = [...snapshot.stack];
+      }
+    }
+
+    // Reconcile 15s stack alarm if active
+    if (snapshot.remainingAlarmMs > 0 && this.alarmManager) {
+      if (typeof this.alarmManager.start === 'function') {
+        const targetPlayer = snapshot.priorityPlayerId || this.myPlayerId;
+        const topItem = snapshot.stack?.[snapshot.stack.length - 1]?.id || 'remote_alarm';
+        this.alarmManager.start(targetPlayer, topItem, snapshot.remainingAlarmMs / 1000);
+      }
+    }
+
+    this.reconcileDOM();
+  }
+
+  /**
+   * Handles dynamic seat entry of a new player into the room.
+   * 
+   * @param {Object} msg
+   */
+  handlePlayerJoined(msg) {
+    if (!msg || !msg.playerId) return;
+
+    if (!this.tabletopState.players[msg.playerId]) {
+      this.tabletopState.registerPlayer(msg.playerId, msg.playerName || `Player ${msg.slotId || ''}`);
+    }
+
+    if (this.priorityMachine && !this.priorityMachine.players.includes(msg.playerId)) {
+      this.priorityMachine.players.push(msg.playerId);
+    }
+    if (!this.playerIds.includes(msg.playerId)) {
+      this.playerIds.push(msg.playerId);
+    }
+
+    this.reconcileDOM();
+  }
+
+  /**
+   * Updates player connection status.
+   * 
+   * @param {string} playerId
+   * @param {string} status
+   */
+  handlePlayerConnectionChanged(playerId, status) {
+    if (!playerId) return;
+    const p = this.tabletopState?.players?.[playerId];
+    if (p) {
+      p.connectionStatus = status;
+    }
     this.reconcileDOM();
   }
 
@@ -1289,6 +1455,26 @@ export class RPMAppController {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doSend();
       });
+    }
+
+    // Populate chat feed messages
+    const chatFeed = chatDrawer.querySelector('#chat-messages');
+    if (chatFeed) {
+      const messages = isTurnTab
+        ? (this.dualChat?.turnCommandMessages || [])
+        : (this.dualChat?.chitChatMessages || []);
+
+      if (messages.length === 0) {
+        chatFeed.innerHTML = '<div style="color: #64748b; font-size: 0.8rem; font-style: italic;">No messages yet.</div>';
+      } else {
+        chatFeed.innerHTML = messages.map(m => `
+          <div class="chat-msg">
+            <span class="chat-msg-author">${m.senderName || m.senderId || 'Player'}:</span>
+            <span class="chat-msg-text">${m.text || m.rawInput || ''}</span>
+          </div>
+        `).join('');
+        chatFeed.scrollTop = chatFeed.scrollHeight;
+      }
     }
   }
 

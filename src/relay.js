@@ -947,6 +947,9 @@ export function createRelayServer(options = {}) {
     );
 
     const ws = new WebSocketConnection(socket);
+    if (head && head.length > 0) {
+      ws._onData(head);
+    }
     _setupWebSocketRouting(ws, rooms, options);
   });
 
@@ -1113,8 +1116,8 @@ export function createRelayServer(options = {}) {
     });
   }
 
-  function listen(port, cb) {
-    return server.listen(port, cb);
+  function listen(...args) {
+    return server.listen(...args);
   }
 
   function close(cb) {

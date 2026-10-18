@@ -559,10 +559,12 @@ runTest('VEC-13: APNAP Trigger Ordering (CR 101.4 / INV-PERK-2)', () => {
   const ttsm = new TabletopStateManager({ players: ['p1', 'p2'] });
   const psm = new PriorityStateMachine({ players: ['p1', 'p2'], activePlayerId: 'p1' });
 
+  let rollToggle = 0;
   const engine = new RandomPerkEngine({
     tabletopState: ttsm,
     priorityStateMachine: psm,
-    initialPlayerCount: 2
+    initialPlayerCount: 2,
+    prng: () => (rollToggle++ % 2 === 0 ? 2 : 3) // Deterministic '23' roll (miss) so Step 2 is not pushed
   });
 
   // Suppose active player 'p1' already had an upkeep trigger on the stack (e.g. Phyrexian Arena)
