@@ -108,7 +108,7 @@ export class LobbyManager extends EventEmitter {
   invalidateReadiness(reason, metadata = {}) {
     let anyReset = false;
     for (const slot of this.slots.values()) {
-      if (slot.isReady) {
+      if (!slot.isBot && slot.isReady) {
         slot.isReady = false;
         anyReset = true;
       }
@@ -131,14 +131,13 @@ export class LobbyManager extends EventEmitter {
 
   /**
    * Claims an open seat slot (1..maxPlayers).
-   * Enforces INV-LOBBY-1: Revokes all readiness states when a new player sits.
+   * Enforces INV-LOBBY-4: Automatically vacates any seat previously held by player.playerId.
+   * Enforces INV-LOBBY-1: Revokes human readiness states when seating changes.
    * Enforces INV-LOBBY-2: Auto-starts when 6th player sits (full capacity).
    * 
-   * @param {number} slotId 
-   * @param {Object} player 
-   * @param {string} player.playerId 
-   * @param {string} [player.playerName] 
-   * @param {string} [player.seatToken]
+   * @param {number|string|Object} arg1 
+   * @param {Object|string|number} [arg2] 
+   * @param {string|number} [arg3] 
    * @returns {Object} Claimed slot
    */
   claimSeat(arg1, arg2, arg3) {
@@ -165,21 +164,51 @@ export class LobbyManager extends EventEmitter {
       throw new Error(`Invalid slotId: ${slotId}. Must be between 1 and ${this.maxPlayers}.`);
     }
 
-    if (this.slots.has(slotId)) {
-      throw new Error(`Seat slot ${slotId} is already occupied.`);
-    }
-
     if (!player || !player.playerId) {
       throw new Error('Player must provide a valid playerId.');
     }
 
+    if (this.slots.has(slotId)) {
+      const existing = this.slots.get(slotId);
+      if (existing.playerId === player.playerId) {
+        existing.playerName = player.playerName || existing.playerName;
+        return { ...existing };
+      }
+      throw new Error(`Seat slot ${slotId} is already occupied.`);
+    }
+
+    // INV-LOBBY-4: 1-Player = 1-Seat Invariant & Moving Seats
+    let priorSlotId = null;
+    for (const [existingSlotId, existingSlot] of this.slots.entries()) {
+      if (existingSlot.playerId === player.playerId) {
+        priorSlotId = existingSlotId;
+        break;
+      }
+    }
+
+    if (priorSlotId !== null) {
+      if (priorSlotId === slotId) {
+        return this.slots.get(slotId);
+      }
+      // Vacate prior seat cleanly without ghost duplication
+      this.slots.delete(priorSlotId);
+      this.invalidateReadiness('PLAYER_MOVED_SEAT', {
+        playerId: player.playerId,
+        fromSlotId: priorSlotId,
+        toSlotId: slotId
+      });
+    }
+
     const seatToken = player.seatToken || generateSeatToken();
+    const isBot = Boolean(player.isBot);
     const slot = {
       slotId,
       playerId: player.playerId,
-      playerName: player.playerName || `Player ${slotId}`,
+      playerName: player.playerName || (isBot ? `Perkins AI #${slotId}` : `Player ${slotId}`),
       isHost: slotId === 1 || Boolean(player.isHost),
-      isReady: false,
+      isReady: isBot ? true : Boolean(player.isReady),
+      isBot,
+      starterDeckId: player.starterDeckId || (isBot ? 'R' : null),
       connectionStatus: 'CONNECTED',
       joinedAt: Date.now(),
       seatToken,
@@ -188,12 +217,14 @@ export class LobbyManager extends EventEmitter {
 
     this.slots.set(slotId, slot);
 
-    // Dynamic Arrival Invalidation (INV-LOBBY-1)
-    this.invalidateReadiness('NEW_PLAYER_ARRIVED', {
-      slotId,
-      playerId: slot.playerId,
-      playerName: slot.playerName
-    });
+    if (priorSlotId === null) {
+      this.invalidateReadiness(isBot ? 'BOT_SEATED' : 'NEW_PLAYER_ARRIVED', {
+        slotId,
+        playerId: slot.playerId,
+        playerName: slot.playerName,
+        isBot
+      });
+    }
 
     // Update state to READY_CHECK if min players reached
     if (this.canStart() && this.status === LOBBY_STATUS.LOBBY_WAITING) {
@@ -212,6 +243,68 @@ export class LobbyManager extends EventEmitter {
     }
 
     return slot;
+  }
+
+  /**
+   * Seats a Perkins AI agent into an open slot (INV-LOBBY-5).
+   * 
+   * @param {number} slotId - Must be between 2 and maxPlayers
+   * @param {Object} [options={}]
+   * @returns {Object} Seated bot slot
+   */
+  seatBot(slotId, options = {}) {
+    if (slotId < 2 || slotId > this.maxPlayers) {
+      throw new Error(`Bots can only be seated in slots 2 to ${this.maxPlayers}.`);
+    }
+
+    const botPlayerId = options.playerId || `bot_perkins_${slotId}`;
+    const botPlayerName = options.playerName || `Perkins AI #${slotId}`;
+
+    const botSlot = this.claimSeat(slotId, {
+      playerId: botPlayerId,
+      playerName: botPlayerName,
+      isBot: true,
+      isReady: true,
+      starterDeckId: options.starterDeckId || 'R',
+      ...options
+    });
+
+    this.emit('bot_seated', { slotId, botSlot });
+    return botSlot;
+  }
+
+  /**
+   * Removes a bot from a seated slot (INV-LOBBY-5).
+   * 
+   * @param {number} slotId 
+   * @returns {boolean} True if removed
+   */
+  removeBot(slotId) {
+    const slot = this.slots.get(slotId);
+    if (!slot || !slot.isBot) {
+      return false;
+    }
+    const result = this.vacateSeat(slotId);
+    this.emit('bot_removed', { slotId });
+    return result;
+  }
+
+  /**
+   * Vacates seat for a human player (voluntary leave).
+   * 
+   * @param {number} slotId 
+   * @returns {boolean}
+   */
+  leaveSeat(slotId) {
+    return this.vacateSeat(slotId);
+  }
+
+  /**
+   * Returns array of all currently seated slots (humans and bots).
+   * @returns {Array<Object>}
+   */
+  getSeatedSlots() {
+    return Array.from(this.slots.values());
   }
 
   /**

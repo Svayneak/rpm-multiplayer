@@ -27,6 +27,7 @@
 | **DEC-017** | `2026-10-18 10:45` | Argon Full Code Audit & Multi-Client Synchronization Hardening | **A)** Rely on basic single-client integration harness<br>**(Recommended) Eliminate DOMContentLoaded race condition, suppress broadcast echoes, rehydrate multi-client dynamic seats, and filter eliminated players from client priority ring** | **(Recommended) Hardened Multi-Client Synchronization** | Resolved 4 critical distributed synchronization bugs, created `test_multi_client_sync.js`, validated all 11 test suites (137+ test vectors), and pushed commit `eeabac5` to GitHub. |
 | **DEC-018** | `2026-10-18 15:30` | Perkins AI Opponent & Companion Coach Architecture | **A)** Cloud LLM API inference<br>**B)** Heavyweight Minimax/MCTS<br>**(Recommended) Forge-Style MTG Heuristic Decision Tree (<1ms SLA) + Dual-Mode Transport + Bilingual Tutorial Coach** | **(Recommended) Forge Heuristics & Dual Transport** | Implemented `PerkinsAgent.js` running full turn cycles in 0.021ms, zero LLM tokens, 12 test vectors (100% pass), and pushed commit `dcd1176` to GitHub. |
 | **DEC-019** | `2026-10-19 04:30` | Unified Decoupled Platform, Lobby & Matchmaking, Oracle Deckbuilder & Bilingual Interaction | **A)** Monolithic harness with modal overlays<br>**(Recommended) Decoupled View Router with Tab Lockout Invariant (`INV-LOCKOUT-1`), 1-6 Player Lobby with Dynamic Arrival Invalidation (`INV-LOBBY-1`), Scryfall Oracle 4-Of Override (`INV-DECK-1`), Pre-Game d20 Roll-Off Turn Sorting (`INV-TURNSORT-1`), 1-Tap Hand Popovers, and Sub-2ms Spanish Lexing** | **(Recommended) Unified Decoupled Platform** | Authored `SPEC-RPM-PLATFORM-014`, engineered `TabRouter.js`, `LobbyManager.js`, `MatchmakingQueue.js`, `DeckValidator.js`, and `TurnRollOffManager.js`. Verified all 17 acceptance vectors and 13 full suites (100% pass). |
+| **DEC-020** | `2026-10-19 11:30` | Player Registration, Onboarding Lifecycle, Perkins Pod Seating & Telemetry Engine | **A)** Arena as default landing + manual bot injection<br>**(Recommended) Supabase Magic Link Auth Gate (`INV-AUTH-1`), Mandatory Starter Deck Onboarding Gate (`INV-ONBOARD-1`), 1-Player = 1-Seat Invariant (`INV-LOBBY-4`), Perkins Bot Pod Seating (`INV-LOBBY-5`), Multi-Bot Arena Execution (`INV-LOBBY-6`), Lobby Hub Default Routing (`INV-ROUTER-2`), and Non-Blocking Telemetry (`INV-TELEMETRY-1`)** | **(Recommended) Hardened Onboarding & Pod Seating** | Authored `SPEC-RPM-ONBOARD-015`, applied PostgreSQL migration to Supabase, engineered `AuthManager.js`, resolved Screenshot 0 and 1 bugs, verified 14/14 acceptance vectors and 14 full suites (100% pass). |
 
 
 ---
@@ -290,5 +291,32 @@
   4. Authored 17-vector acceptance test suite `test/test_unified_platform.js` (17/17 passed).
   5. Resolved browser Node.js built-in import issues and verified live in Google Chrome via Chrome DevTools MCP with 0 console errors.
   6. Independent Verificator Pro Audit completed: CERTIFIED 100% COMPLIANT.
+
+---
+
+### DEC-020 — Player Registration, Onboarding Lifecycle, Perkins Pod Seating & Telemetry Engine
+- **Context & Problem**: User testing with screen captures highlighted three major usability and functional issues:
+  1. *Screenshot 0 Defect*: In the multiplayer lobby, player "Alice" occupied both Seat 1 and Seat 2 concurrently (`uploaded_media_0_1792414300388.png`), and there was no mechanism to seat Perkins AI bots into empty slots.
+  2. *Screenshot 1 Defect*: Entering a match rendered both a phantom empty `Opponent (P2)` and an active `Opponent (P2_PERKINS)` (`uploaded_media_1_1792414300388.png`) because default duel IDs were never reconciled when injecting a bot.
+  3. *Onboarding Flow Flaw*: Booting the app dropped unauthenticated users directly into `Arena` without an account, profile, or deck.
+- **Options Evaluated**:
+  - *Option A*: Maintain Arena boot and add ad-hoc bot buttons without auth gates.
+  - *Option B (Recommended)*: **Hardened Onboarding Gate + Supabase Magic Link Auth + 1-Player 1-Seat Invariant + Perkins Bot Seating + Telemetry**:
+    1. **Authentication Gate & Session Persistence (`INV-AUTH-1`)**: Unauthenticated users land strictly on `AUTH_GATE`. Hybrid Supabase Auth Magic Link OTP (`/auth/v1/otp`) with Instant Dev Bypass token. Enforces valid email, display name, and DOB $\ge 13$ years. Session persists in `localStorage` and hydrates to Supabase `public.player_profiles`.
+    2. **Mandatory Deck Creator Gate (`INV-ONBOARD-1`)**: Traps authenticated users without an active deck at `DECKBUILDER`. User must select 1 of 5 pre-compiled Modern starter archetypes (Mono-Red Burn, Izzet Murktide, Golgari Yawgmoth, Mono-Green Tron, Temur Rhinos) or validate/save a custom construct before `LOBBY` is unlocked.
+    3. **1-Player = 1-Seat Invariant (`INV-LOBBY-4`)**: Enforced in `LobbyManager.claimSeat()`. When a player seat-hops, their prior seat is atomically vacated, triggering dynamic readiness reset (`INV-LOBBY-1`). Zero multi-seat duplication.
+    4. **Perkins Bot Pod Seating (`INV-LOBBY-5`)**: Added `seatBot(slotId)` and `removeBot(slotId)` in open pod slots 2..6 (`[ 🤖 Seat Perkins AI ]` and `[ ✖ Remove Bot ]`). Bots default to `isReady: true`.
+    5. **Multi-Bot Arena Execution (`INV-LOBBY-6`)**: Purges unseated players from state upon match start, eliminating the phantom legacy `P2` opponent bug.
+    6. **Hub Routing Default (`INV-ROUTER-2`)**: Onboarded users land on `LOBBY` by default. `ARENA` is locked unless a match is actively in progress.
+    7. **Non-Blocking Telemetry & Audit Trail (`INV-TELEMETRY-1`)**: Non-blocking dispatch to Supabase `public.player_events` for ruling inspections (`RULING_INSPECT`), perk dice rolls (`PERK_ACTIVATION`), spell/land plays, and match outcomes, with an offline 100-event FIFO local storage buffer.
+- **User Decision**: **Option B (Recommended)**.
+- **Impact & Implementation**:
+  1. Authored `specs/FEATURE_15_ONBOARDING_AND_TELEMETRY_SPEC.md` (`SPEC-RPM-ONBOARD-015`, 870 lines).
+  2. Applied PostgreSQL DDL migration creating `public.player_profiles` and `public.player_events` with RLS on Supabase (`naacgdwtglvcumaccime`).
+  3. Engineered `src/AuthManager.js` and updated `src/LobbyManager.js`, `src/view/TabRouter.js`, `src/app.js`, `index.html`, and `src/view/tabletop.css`.
+  4. Authored 14-vector acceptance test suite `test/test_onboarding_lobby.js` (14/14 passed, 100% pass).
+  5. Verified live in Google Chrome via Chrome DevTools MCP with complete onboarding and seat hopping validation.
+  6. Independent Verificator Pro Audit completed: CERTIFIED 100% COMPLIANT.
+
 
 

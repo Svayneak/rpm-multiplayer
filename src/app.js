@@ -54,6 +54,12 @@ import { LobbyManager, LOBBY_STATUS } from './LobbyManager.js';
 import { MatchmakingQueue } from './MatchmakingQueue.js';
 import { TurnRollOffManager, generateAuthoritativeD20 } from './TurnRollOffManager.js';
 import { SPANISH_COLOR_LAND_MAP } from './ActionLexer.js';
+import {
+  AuthManager,
+  STARTER_ARCHETYPES,
+  getStarterDeck,
+  calculateAge
+} from './AuthManager.js';
 
 /**
  * Standard MTG Zone Drawers
@@ -83,9 +89,14 @@ export class RPMAppController {
     this.container = null;
     this.isDestroyed = false;
 
+    // Feature 15 AuthManager & Profile Initialization
+    this.authManager = options.authManager || new AuthManager(options);
+    this.botAgents = new Map();
+    this.requireAuth = Boolean(options.requireAuth);
+
     // Local player identity
-    this.myPlayerId = options.userId || options.preferredSeat || 'p1';
-    this.username = options.username || 'Alice';
+    this.myPlayerId = options.userId || options.preferredSeat || (this.authManager?.getCurrentUser()?.id || 'p1');
+    this.username = options.username || (this.authManager?.getCurrentUser()?.username || 'Alice');
     this.audioEnabled = options.audioEnabled !== false;
 
     // Seating and initial players (default: 2 players)
@@ -229,9 +240,20 @@ export class RPMAppController {
         : options.container;
     }
 
-    // Feature 14 Tab Router & State
+    // Feature 14 & 15 Tab Router & State
+    let defaultTab = options.initialTab || 'ARENA';
+    if (this.requireAuth) {
+      if (!this.authManager.isAuthenticated()) {
+        defaultTab = 'AUTH';
+      } else if (!this.authManager.isOnboarded()) {
+        defaultTab = 'DECKBUILDER';
+      } else {
+        defaultTab = 'LOBBY';
+      }
+    }
+
     this.tabRouter = options.tabRouter || new TabRouter({
-      initialTab: options.initialTab || 'ARENA',
+      initialTab: defaultTab,
       onTabChange: (newTab, prevTab) => {
         this.reconcileDOM();
       },
@@ -242,6 +264,21 @@ export class RPMAppController {
         });
       }
     });
+
+    if (this.authManager && typeof this.authManager.on === 'function') {
+      this.authManager.on('auth_state_changed', () => {
+        this._syncAuthUser();
+        this.reconcileDOM();
+      });
+      this.authManager.on('profile_updated', () => {
+        this._syncAuthUser();
+        this.reconcileDOM();
+      });
+      this.authManager.on('onboarding_completed', () => {
+        this._syncAuthUser();
+        this.reconcileDOM();
+      });
+    }
 
     this.isMatchActiveFlag = Boolean(options.isMatchActive);
     this._hasMatchStarted = Boolean(options.hasMatchStarted);
@@ -274,26 +311,150 @@ export class RPMAppController {
   }
 
   getMatchState() {
-    return {
-      status: this.isMatchActive() ? 'ACTIVE' : 'IDLE',
-      isMatchActive: this.isMatchActive()
+    const state = {
+      status: this.isMatchActive() ? 'ACTIVE' : (this.isRollOffActive ? 'ROLL_OFF_PHASE' : 'IDLE'),
+      isMatchActive: this.isMatchActive(),
+      isSpectator: this.isSpectator()
     };
+    if (this.requireAuth) {
+      state.isAuthenticated = this.authManager ? this.authManager.isAuthenticated() : false;
+      state.isOnboarded = this.authManager ? this.authManager.isOnboarded() : false;
+    }
+    return state;
   }
 
   isSpectator() {
     return Boolean(this.options.isSpectator || this.relayClient?.isSpectator);
   }
 
-  startMatch() {
+  startMatch(matchOptions = {}) {
     this._hasMatchStarted = true;
     this.isMatchActiveFlag = true;
+
+    // Purge and sanitize TabletopStateManager (INV-LOBBY-6, Screenshot 1 Bug Fix)
+    const seatedSlots = this.lobbyManager ? this.lobbyManager.getSeatedSlots() : [];
+    if (Array.isArray(matchOptions?.playerIds) && matchOptions.playerIds.length > 0) {
+      this.playerIds = [...matchOptions.playerIds];
+    } else if (seatedSlots.length > 1) {
+      this.playerIds = seatedSlots.map(s => s.playerId);
+    } else if (!this.playerIds || this.playerIds.length === 0) {
+      this.playerIds = seatedSlots.length > 0 ? seatedSlots.map(s => s.playerId) : [this.myPlayerId];
+    }
+
+    if (this.tabletopState) {
+      const prevPlayers = this.tabletopState.players || {};
+      this.tabletopState.players = {};
+      for (const pid of this.playerIds) {
+        const slot = seatedSlots.find(s => s.playerId === pid);
+        const name = slot ? slot.playerName : (pid === this.myPlayerId ? this.username : `Player ${pid.toUpperCase()}`);
+        if (typeof this.tabletopState.registerPlayer === 'function') {
+          try {
+            this.tabletopState.registerPlayer(pid, name);
+          } catch (_) {}
+        }
+        if (prevPlayers[pid]) {
+          this.tabletopState.players[pid] = prevPlayers[pid];
+        } else if (!this.tabletopState.players[pid]) {
+          this.tabletopState.players[pid] = {
+            id: pid,
+            playerId: pid,
+            name,
+            resources: { life: 20, poison: 0, energy: 0, manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 } },
+            zones: { hand: [], library: [], graveyard: [], exile: [], battlefield: [] },
+            battlefield: { lands: [], creatures: [], noncreatures: [], planeswalkers: [] },
+            hand: [],
+            library: [],
+            graveyard: [],
+            exile: [],
+            isEliminated: false
+          };
+        }
+      }
+    }
+
+    if (this.priorityMachine) {
+      this.priorityMachine.players = [...this.playerIds];
+      if (!this.priorityMachine.players.includes(this.priorityMachine.activePlayerId)) {
+        this.priorityMachine.activePlayerId = this.playerIds[0];
+      }
+      if (!this.priorityMachine.players.includes(this.priorityMachine.priorityPlayerId)) {
+        this.priorityMachine.priorityPlayerId = this.playerIds[0];
+      }
+    }
+
+    if (!this.botAgents) {
+      this.botAgents = new Map();
+    }
+    for (const [bId, bot] of this.botAgents.entries()) {
+      if (bot !== this.perkinsAgent) {
+        try { bot.destroy(); } catch (_) {}
+        this.botAgents.delete(bId);
+      }
+    }
+    if (this.perkinsAgent && this.playerIds.includes(this.perkinsAgent.slotId)) {
+      this.botAgents.set(this.perkinsAgent.slotId, this.perkinsAgent);
+    }
+
+    for (const slot of seatedSlots) {
+      if (slot.isBot) {
+        const starter = getStarterDeck(slot.starterDeckId || 'R') || BEGINNER_DECKS.R;
+        const botPlayer = this.tabletopState?.players?.[slot.playerId];
+        if (botPlayer && starter) {
+          const mainboard = starter.mainboard || [];
+          const libCards = mainboard.flatMap(c => {
+            const count = c.count || 1;
+            return Array.from({ length: count }, () => ({
+              instanceId: generateInstanceId(),
+              ownerId: slot.playerId,
+              controllerId: slot.playerId,
+              name: c.name,
+              typeLine: c.type || 'Creature',
+              manaCost: c.manaCost || '{R}',
+              cmc: c.cmc ?? 1,
+              power: c.power ?? 2,
+              toughness: c.toughness ?? 2,
+              isTapped: false,
+              isSummoningSick: false
+            }));
+          });
+          botPlayer.library = libCards;
+          botPlayer.zones = botPlayer.zones || {};
+          botPlayer.zones.library = [...libCards];
+        }
+
+        const agent = new PerkinsAgent({
+          slotId: slot.playerId,
+          name: slot.playerName,
+          mode: 'LOCAL',
+          thinkingDelayMs: 600,
+          coachEnabled: false,
+          starterDeck: starter
+        });
+        agent.attach(this);
+        this.botAgents.set(slot.playerId, agent);
+        this.perkinsAgent = agent;
+      }
+    }
+
+    this.tabRouter.navigate('ARENA', this.getMatchState(), this.isSpectator());
     this.dealStartingHands();
     this.reconcileDOM();
+
+    this.authManager?.dispatchTelemetry('MATCH_START', null, {
+      playerIds: this.playerIds,
+      botCount: this.botAgents.size
+    });
   }
 
   concedeMatch() {
     this.isMatchActiveFlag = false;
     this._hasMatchStarted = false;
+    if (this.botAgents) {
+      for (const bot of this.botAgents.values()) {
+        try { bot.destroy(); } catch (_) {}
+      }
+      this.botAgents.clear();
+    }
     if (this.tabletopState && typeof this.tabletopState.eliminatePlayer === 'function') {
       try {
         this.tabletopState.eliminatePlayer(this.myPlayerId, 'CONCEDED');
@@ -307,7 +468,12 @@ export class RPMAppController {
     const modalRoot = this.container?.querySelector('#modal-root');
     if (modalRoot) {
       const cm = modalRoot.querySelector('#concede-modal');
-      if (cm) cm.remove();
+      if (cm) {
+        try {
+          if (typeof cm.remove === 'function') cm.remove();
+          else if (cm.parentNode) cm.parentNode.removeChild(cm);
+        } catch (_) {}
+      }
       if (!modalRoot.querySelector('.modal-dialog-box')) {
         modalRoot.setAttribute('aria-hidden', 'true');
       }
@@ -315,6 +481,7 @@ export class RPMAppController {
     this.tabRouter.unlockAll?.();
     this.tabRouter.reset('LOBBY');
     this.reconcileDOM();
+    this.authManager?.dispatchTelemetry('MATCH_CONCEDE', null, { playerId: this.myPlayerId });
   }
 
   showConcedeModal(onConfirm, onCancel) {
@@ -442,6 +609,7 @@ export class RPMAppController {
     }
     if (!p.zones.battlefield) p.zones.battlefield = [];
     p.zones.battlefield.push({ ...card, subzone: 'lands', isTapped: false, zone: 'BATTLEFIELD' });
+    this.authManager?.dispatchTelemetry('LAND_PLAY', landName, { playerId: this.myPlayerId });
     this.reconcileDOM();
   }
 
@@ -462,6 +630,7 @@ export class RPMAppController {
         });
       } catch (_) {}
     }
+    this.authManager?.dispatchTelemetry('SPELL_CAST', spellName, { playerId: this.myPlayerId, targets });
     this.reconcileDOM();
   }
 
@@ -477,10 +646,20 @@ export class RPMAppController {
     }
   }
 
-  startRollOff(playerIds = this.playerIds) {
+  startRollOff(playerIds = null) {
+    let activePlayerIds = playerIds;
+    if (!activePlayerIds || activePlayerIds.length === 0) {
+      if (this.lobbyManager && this.lobbyManager.getSeatedCount() > 0) {
+        const seated = this.lobbyManager.getSeatedSlots();
+        activePlayerIds = seated.map(s => s.playerId);
+      } else {
+        activePlayerIds = this.playerIds && this.playerIds.length > 0 ? this.playerIds : [this.myPlayerId];
+      }
+    }
+    this.playerIds = [...activePlayerIds];
     this.isRollOffActive = true;
     this.rollOffResult = null;
-    this.turnRollOffManager = new TurnRollOffManager(playerIds && playerIds.length > 0 ? playerIds : ['p1', 'p2']);
+    this.turnRollOffManager = new TurnRollOffManager(this.playerIds && this.playerIds.length > 0 ? this.playerIds : ['p1', 'p2']);
     this.reconcileDOM();
   }
 
@@ -494,14 +673,18 @@ export class RPMAppController {
     }
     const roll = this.turnRollOffManager.submitRoll(playerId, forcedValue);
 
-    // Auto-roll for bot opponents if in solo mode
+    // Auto-roll for bot opponents if in solo mode or pod with bots
     if (playerId === this.myPlayerId) {
-      if (this.perkinsAgent || this.playerIds.includes('perkins') || this.playerIds.includes('p2_perkins')) {
-        const otherPlayers = this.playerIds.filter(pid => pid !== this.myPlayerId);
-        for (const opId of otherPlayers) {
-          if (this.turnRollOffManager.pendingPlayerIds.has(opId)) {
-            this.turnRollOffManager.submitRoll(opId);
-          }
+      const seatedBots = this.lobbyManager
+        ? this.lobbyManager.getSeatedSlots().filter(s => s.isBot).map(s => s.playerId)
+        : [];
+      const botIds = new Set([
+        ...seatedBots,
+        ...this.playerIds.filter(pid => pid.startsWith('bot_') || pid.includes('perkins'))
+      ]);
+      for (const opId of botIds) {
+        if (this.turnRollOffManager.pendingPlayerIds.has(opId)) {
+          this.turnRollOffManager.submitRoll(opId);
         }
       }
     }
@@ -721,6 +904,7 @@ export class RPMAppController {
           <h1 class="brand-title">RPM TABLETOP</h1>
         </div>
         <nav class="header-nav-tabs" role="tablist" aria-label="Main Navigation">
+          <button id="tab-btn-auth" class="nav-tab" data-tab="AUTH" role="tab" aria-selected="false" style="display: none;">🔐 Auth</button>
           <button id="tab-btn-arena" class="nav-tab active" data-tab="ARENA" role="tab" aria-selected="true">🏟️ Arena</button>
           <button id="tab-btn-deckbuilder" class="nav-tab" data-tab="DECKBUILDER" role="tab" aria-selected="false">📚 Deckbuilder</button>
           <button id="tab-btn-lobby" class="nav-tab" data-tab="LOBBY" role="tab" aria-selected="false">🔍 Lobby</button>
@@ -762,6 +946,7 @@ export class RPMAppController {
         navTabs.setAttribute('role', 'tablist');
         navTabs.setAttribute('aria-label', 'Main Navigation');
         navTabs.innerHTML = `
+          <button id="tab-btn-auth" class="nav-tab" data-tab="AUTH" role="tab" aria-selected="false" style="display: none;">🔐 Auth</button>
           <button id="tab-btn-arena" class="nav-tab active" data-tab="ARENA" role="tab" aria-selected="true">🏟️ Arena</button>
           <button id="tab-btn-deckbuilder" class="nav-tab" data-tab="DECKBUILDER" role="tab" aria-selected="false">📚 Deckbuilder</button>
           <button id="tab-btn-lobby" class="nav-tab" data-tab="LOBBY" role="tab" aria-selected="false">🔍 Lobby</button>
@@ -783,6 +968,15 @@ export class RPMAppController {
       viewHost.id = 'view-host';
       viewHost.className = 'rpm-view-host';
       this.container.appendChild(viewHost);
+    }
+
+    let viewAuth = viewHost.querySelector('#view-auth');
+    if (!viewAuth) {
+      viewAuth = document.createElement('div');
+      viewAuth.id = 'view-auth';
+      viewAuth.className = 'view-pane';
+      viewAuth.style.display = 'none';
+      viewHost.appendChild(viewAuth);
     }
 
     let viewArena = viewHost.querySelector('#view-arena');
@@ -1199,10 +1393,28 @@ export class RPMAppController {
 
     // Ensure bot registered in TabletopStateManager
     if (this.tabletopState) {
+      // Purge any phantom players (like legacy p2) to eliminate opponent duplicate bug
+      this.tabletopState.players = {};
       if (typeof this.tabletopState.registerPlayer === 'function') {
         try {
+          this.tabletopState.registerPlayer(this.myPlayerId, this.username);
           this.tabletopState.registerPlayer(botSeatId, options.name || 'Perkins AI (Bot)');
         } catch (_) {}
+      }
+      if (!this.tabletopState.players[this.myPlayerId]) {
+        this.tabletopState.players[this.myPlayerId] = {
+          id: this.myPlayerId,
+          playerId: this.myPlayerId,
+          name: this.username,
+          resources: { life: 20, poison: 0, energy: 0, manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 } },
+          zones: { hand: [], library: [], graveyard: [], exile: [], battlefield: [] },
+          battlefield: { lands: [], creatures: [], noncreatures: [], planeswalkers: [] },
+          hand: [],
+          library: [],
+          graveyard: [],
+          exile: [],
+          isEliminated: false
+        };
       }
       if (!this.tabletopState.players[botSeatId]) {
         this.tabletopState.players[botSeatId] = {
@@ -1722,6 +1934,12 @@ export class RPMAppController {
     const winnerId = victoryPayload.winner || victoryPayload.winnerId || this.myPlayerId;
     const winnerName = victoryPayload.winnerName || (winnerId === this.myPlayerId ? this.username : `Player ${winnerId.toUpperCase()}`);
 
+    this.authManager?.dispatchTelemetry('MATCH_VICTORY', null, {
+      winnerId,
+      winnerName,
+      ...victoryPayload
+    });
+
     // Open celebratory modal
     this.openModal('VICTORY_FANFARE', {
       winnerId,
@@ -1781,6 +1999,18 @@ export class RPMAppController {
     if (diceContainer) {
       diceContainer.style.display = 'block';
     }
+
+    const perkKey = roll.matchedKey || roll.perkKey || `${roll.tens ?? 0}${roll.ones ?? 0}`;
+    const def = typeof getPerkDefinition === 'function' ? getPerkDefinition(perkKey) : null;
+    const effectName = roll.effect_name || roll.effectName || def?.name || (roll.isMiss ? 'Roll Miss' : 'Perk Triggered');
+
+    this.authManager?.dispatchTelemetry('PERK_ACTIVATION', null, {
+      tens: roll.tens ?? 0,
+      ones: roll.ones ?? 0,
+      perk_key: roll.perk_key !== undefined ? roll.perk_key : (Number(perkKey) || perkKey),
+      effect_name: effectName,
+      is_match: roll.is_match !== undefined ? roll.is_match : !roll.isMiss
+    });
   }
 
   // ==========================================================================
@@ -1825,6 +2055,56 @@ export class RPMAppController {
     }
   }
 
+  /**
+   * Synchronizes active authenticated user identity across all internal subsystems.
+   * Ensures pre-auth temporary seat holders and state references are cleanly migrated.
+   * @private
+   */
+  _syncAuthUser() {
+    if (!this.authManager) return;
+    const user = this.authManager.getCurrentUser();
+    if (!user) return;
+
+    const oldId = this.myPlayerId;
+    this.myPlayerId = user.id || this.myPlayerId;
+    this.username = user.username || this.username;
+
+    if (this.lobbyManager) {
+      for (const slot of this.lobbyManager.slots.values()) {
+        if (slot.playerId === oldId || (!slot.isBot && slot.slotId === 1 && oldId === 'p1')) {
+          slot.playerId = this.myPlayerId;
+          slot.playerName = this.username;
+        }
+      }
+    }
+
+    if (this.tabletopState?.players && oldId !== this.myPlayerId) {
+      if (this.tabletopState.players[oldId]) {
+        this.tabletopState.players[this.myPlayerId] = this.tabletopState.players[oldId];
+        this.tabletopState.players[this.myPlayerId].id = this.myPlayerId;
+        this.tabletopState.players[this.myPlayerId].playerId = this.myPlayerId;
+        this.tabletopState.players[this.myPlayerId].name = this.username;
+        delete this.tabletopState.players[oldId];
+      }
+    }
+
+    if (Array.isArray(this.playerIds) && oldId !== this.myPlayerId) {
+      const idx = this.playerIds.indexOf(oldId);
+      if (idx !== -1) {
+        this.playerIds[idx] = this.myPlayerId;
+      }
+    }
+
+    if (this.drawerState && oldId !== this.myPlayerId && this.drawerState[oldId]) {
+      this.drawerState[this.myPlayerId] = this.drawerState[oldId];
+      delete this.drawerState[oldId];
+    }
+
+    if (this.dualChat && oldId !== this.myPlayerId) {
+      this.dualChat.myPlayerId = this.myPlayerId;
+    }
+  }
+
   // ==========================================================================
   // View Reconciliation (Sub-16ms Frame Budget Gate)
   // ==========================================================================
@@ -1835,6 +2115,7 @@ export class RPMAppController {
    */
   reconcileDOM() {
     if (!this.container || this.isDestroyed) return;
+    this._syncAuthUser();
 
     // 1. Header Bar & Nav Tabs
     this._reconcileHeader();
@@ -1858,6 +2139,7 @@ export class RPMAppController {
     this._reconcileRollOff();
 
     // 8. Views
+    this._reconcileAuthView();
     this._reconcileDeckbuilderView();
     this._reconcileLobbyView();
     this._reconcileProfileView();
@@ -1871,6 +2153,7 @@ export class RPMAppController {
   _reconcileTabPanes() {
     const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
     const panes = {
+      AUTH: this.container.querySelector('#view-auth'),
       ARENA: this.container.querySelector('#view-arena'),
       DECKBUILDER: this.container.querySelector('#view-deckbuilder'),
       LOBBY: this.container.querySelector('#view-lobby'),
@@ -1898,9 +2181,13 @@ export class RPMAppController {
     const activePlayerName = this.container.querySelector('#active-player-name');
     const currentPhaseName = this.container.querySelector('#current-phase-name');
 
-    if (activePlayerName && this.priorityMachine) {
-      const activeId = this.priorityMachine.activePlayerId || 'p1';
-      activePlayerName.textContent = activeId === this.myPlayerId ? `${this.username} (You)` : `Player ${activeId.toUpperCase()}`;
+    if (activePlayerName) {
+      if (this.priorityMachine) {
+        const activeId = this.priorityMachine.activePlayerId || 'p1';
+        activePlayerName.textContent = activeId === this.myPlayerId ? `${this.username} (You)` : `Player ${activeId.toUpperCase()}`;
+      } else {
+        activePlayerName.textContent = `${this.username} (You)`;
+      }
     }
 
     if (currentPhaseName && this.priorityMachine) {
@@ -1910,6 +2197,8 @@ export class RPMAppController {
     // Reconcile Nav Tabs
     const currentTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
     const isLocked = this.isMatchActive() && !this.isSpectator();
+    const isAuth = this.authManager ? this.authManager.isAuthenticated() : true;
+    const isOnboard = this.authManager ? this.authManager.isOnboarded() : true;
 
     const navTabs = this.container.querySelectorAll('.nav-tab');
     navTabs.forEach(btn => {
@@ -1918,9 +2207,24 @@ export class RPMAppController {
       btn.classList.toggle('active', isActive);
       btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
 
+      if (tabName === 'AUTH') {
+        btn.style.display = !isAuth ? 'inline-block' : 'none';
+      }
+
+      let locked = false;
       if (isLocked && LOCKED_TABS_DURING_MATCH.has(tabName)) {
+        locked = true;
+      }
+      if (this.requireAuth && !isAuth && tabName !== 'AUTH') {
+        locked = true;
+      }
+      if (this.requireAuth && isAuth && !isOnboard && (tabName === 'LOBBY' || tabName === 'ARENA')) {
+        locked = true;
+      }
+
+      if (locked) {
         btn.classList.add('tab-locked');
-        btn.setAttribute('title', 'Locked during active match. Concede to navigate away.');
+        btn.setAttribute('title', 'Locked');
       } else {
         btn.classList.remove('tab-locked');
         btn.removeAttribute('title');
@@ -1989,7 +2293,13 @@ export class RPMAppController {
       } else {
         oppCard.classList.remove('player-eliminated');
         const overlay = oppCard.querySelector('.player-eliminated-overlay');
-        if (overlay) overlay.remove();
+        if (overlay) {
+          if (typeof overlay.remove === 'function') {
+            overlay.remove();
+          } else if (overlay.parentNode && typeof overlay.parentNode.removeChild === 'function') {
+            overlay.parentNode.removeChild(overlay);
+          }
+        }
       }
 
       const life = oppData?.resources?.life ?? 20;
@@ -2029,7 +2339,13 @@ export class RPMAppController {
     for (const card of currentCards) {
       const match = card.id.match(/^opponent-board-(.+)$/);
       if (match && !opponentIds.includes(match[1])) {
-        card.remove();
+        if (typeof card.remove === 'function') {
+          card.remove();
+        } else if (card.parentNode && typeof card.parentNode.removeChild === 'function') {
+          card.parentNode.removeChild(card);
+        } else if (card.parentElement && typeof card.parentElement.removeChild === 'function') {
+          card.parentElement.removeChild(card);
+        }
       }
     }
   }
@@ -2457,6 +2773,145 @@ export class RPMAppController {
   }
 
   /**
+   * Reconciles Authentication & Registration View panel (INV-AUTH-1).
+   * @private
+   */
+  _reconcileAuthView() {
+    const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const view = this.container?.querySelector('#view-auth');
+    if (!view) return;
+    if (curTab !== 'AUTH') return;
+
+    if (!view.querySelector('.auth-view-container')) {
+      view.innerHTML = `
+        <div class="auth-view-container">
+          <div class="auth-card">
+            <div class="auth-header">
+              <span class="auth-shield">🔐</span>
+              <h2>Planeswalker Registration Gate</h2>
+              <p class="auth-subtitle">Supabase Magic Link OTP & Profile Setup (INV-AUTH-1)</p>
+            </div>
+
+            <div id="auth-error-message" class="auth-error-banner" style="display: none;"></div>
+            <div id="auth-success-message" class="auth-success-banner" style="display: none;"></div>
+
+            <div class="auth-form">
+              <div class="form-group">
+                <label for="auth-email-input">Email Address <span class="required">*</span></label>
+                <input type="email" id="auth-email-input" class="auth-input" placeholder="planeswalker@tabletop.com" required autocomplete="email" />
+              </div>
+
+              <div class="form-group">
+                <label for="auth-username-input">Player Display Name <span class="required">*</span></label>
+                <input type="text" id="auth-username-input" class="auth-input" placeholder="e.g. Alice" value="${this.username || ''}" maxlength="32" />
+              </div>
+
+              <div class="form-group">
+                <label for="auth-dob-input">Date of Birth (Age &ge; 13) <span class="required">*</span></label>
+                <input type="date" id="auth-dob-input" class="auth-input" value="1998-05-14" required />
+              </div>
+
+              <div class="auth-actions">
+                <button id="btn-send-magic-link" class="btn btn-primary btn-magic-link">✉️ Send Magic Link OTP</button>
+                <button id="btn-instant-dev-login" class="btn btn-secondary btn-dev-bypass">⚡ Instant Dev Login</button>
+              </div>
+
+              <div id="auth-otp-section" class="otp-section" style="display: none;">
+                <hr class="auth-divider" />
+                <label for="auth-otp-input">Enter 6-Digit OTP Code</label>
+                <div class="otp-input-group">
+                  <input type="text" id="auth-otp-input" class="auth-input otp-code-input" placeholder="123456" maxlength="8" />
+                  <button id="btn-verify-otp" class="btn btn-primary">Verify OTP & Login</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      const btnSendOtp = view.querySelector('#btn-send-magic-link');
+      const btnDevLogin = view.querySelector('#btn-instant-dev-login');
+      const btnVerifyOtp = view.querySelector('#btn-verify-otp');
+      const errBanner = view.querySelector('#auth-error-message');
+      const succBanner = view.querySelector('#auth-success-message');
+      const otpSection = view.querySelector('#auth-otp-section');
+
+      const showError = (msg) => {
+        if (errBanner) {
+          errBanner.textContent = msg;
+          errBanner.style.display = 'block';
+        }
+        if (succBanner) succBanner.style.display = 'none';
+      };
+
+      const showSuccess = (msg) => {
+        if (succBanner) {
+          succBanner.textContent = msg;
+          succBanner.style.display = 'block';
+        }
+        if (errBanner) errBanner.style.display = 'none';
+      };
+
+      if (btnDevLogin) {
+        btnDevLogin.addEventListener('click', async () => {
+          const email = view.querySelector('#auth-email-input')?.value?.trim();
+          const username = view.querySelector('#auth-username-input')?.value?.trim();
+          const dob = view.querySelector('#auth-dob-input')?.value?.trim();
+
+          try {
+            await this.authManager.instantDevLogin(email, username, dob);
+            this._syncAuthUser();
+            showSuccess('Logged in successfully via Instant Dev Bypass!');
+
+            if (!this.authManager.isOnboarded()) {
+              this.tabRouter.navigate('DECKBUILDER', this.getMatchState(), this.isSpectator());
+            } else {
+              this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+            }
+            this.reconcileDOM();
+          } catch (err) {
+            showError(err.message || 'Login failed');
+          }
+        });
+      }
+
+      if (btnSendOtp) {
+        btnSendOtp.addEventListener('click', async () => {
+          const email = view.querySelector('#auth-email-input')?.value?.trim();
+          try {
+            await this.authManager.sendMagicLink(email);
+            showSuccess(`Magic link OTP dispatched to ${email}! Check inbox or test token.`);
+            if (otpSection) otpSection.style.display = 'block';
+          } catch (err) {
+            showError(err.message || 'Failed to send Magic Link');
+          }
+        });
+      }
+
+      if (btnVerifyOtp) {
+        btnVerifyOtp.addEventListener('click', async () => {
+          const email = view.querySelector('#auth-email-input')?.value?.trim();
+          const otp = view.querySelector('#auth-otp-input')?.value?.trim();
+          try {
+            await this.authManager.verifyOtp(email, otp);
+            this._syncAuthUser();
+            showSuccess('OTP Verified successfully!');
+
+            if (!this.authManager.isOnboarded()) {
+              this.tabRouter.navigate('DECKBUILDER', this.getMatchState(), this.isSpectator());
+            } else {
+              this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+            }
+            this.reconcileDOM();
+          } catch (err) {
+            showError(err.message || 'OTP verification failed');
+          }
+        });
+      }
+    }
+  }
+
+  /**
    * Reconciles Deckbuilder View panel.
    * @private
    */
@@ -2466,10 +2921,38 @@ export class RPMAppController {
     if (!view) return;
     if (curTab !== 'DECKBUILDER') return;
 
+    const isOnboarded = this.authManager ? this.authManager.isOnboarded() : true;
+
     if (!view.querySelector('.deckbuilder-view-container')) {
       view.innerHTML = `
         <div class="deckbuilder-view-container">
-          <div class="format-toggle-bar">
+          <div id="deckbuilder-onboard-banner" class="onboarding-gate-banner" style="${isOnboarded ? 'display: none;' : ''}">
+            <h3>⚠️ MANDATORY DECK CREATOR GATE (INV-ONBOARD-1)</h3>
+            <p>Welcome, <strong>${this.username}</strong>! Select a starter archetype below or validate a custom construct to unlock Multiplayer Lobby Matchmaking.</p>
+          </div>
+
+          <div class="starter-archetypes-container">
+            <h3>🔥 Modern Starter Archetypes (1-Click Select)</h3>
+            <div class="starter-cards-grid" id="starter-cards-grid">
+              ${Object.values(STARTER_ARCHETYPES).map(starter => `
+                <div class="starter-card" data-deck-id="${starter.id}">
+                  <div class="starter-header">
+                    <h4>${starter.name}</h4>
+                    <span class="starter-colors">${starter.colorIdentity.join('/')}</span>
+                  </div>
+                  <p class="starter-archetype-desc">${starter.archetype}</p>
+                  <div class="starter-preview-chips">
+                    ${starter.previewCards.map(c => `<span class="chip-card">${c}</span>`).join('')}
+                  </div>
+                  <button class="btn btn-primary btn-select-starter" data-starter-id="${starter.id}">
+                    Select ${starter.name}
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div class="format-toggle-bar" style="margin-top: 24px;">
             <button id="btn-mode-free" class="btn btn-mode-toggle ${this.deckbuilderMode === 'FREE_CONSTRUCT' ? 'active' : ''}" data-mode="FREE_CONSTRUCT">⚡ Free Construct</button>
             <button id="btn-mode-ranked" class="btn btn-mode-toggle ${this.deckbuilderMode === 'RANKED_CONSTRUCT' ? 'active' : ''}" data-mode="RANKED_CONSTRUCT">🏆 Ranked Construct (Modern)</button>
           </div>
@@ -2482,12 +2965,44 @@ export class RPMAppController {
             <textarea id="deckbuilder-text-input" class="deck-input-area" placeholder="Paste decklist here...&#10;4 Lightning Bolt&#10;20 Relentless Rats&#10;20 Mountain"></textarea>
             <div class="deck-validator-controls">
               <button id="btn-validate-deck" class="btn btn-primary">Validate Decklist</button>
+              <button id="btn-save-active-deck" class="btn btn-special" style="margin-left: 10px;">💾 Save Active Deck</button>
               <div id="deck-validation-badge" class="deck-validation-badge"></div>
             </div>
             <ul id="deck-validation-errors" class="deck-validation-errors"></ul>
           </div>
         </div>
       `;
+
+      // Bind starter deck buttons
+      const starterBtns = view.querySelectorAll('.btn-select-starter');
+      starterBtns.forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const sId = btn.getAttribute('data-starter-id');
+          const starter = getStarterDeck(sId);
+          if (starter && this.authManager) {
+            await this.authManager.saveActiveDeck(starter.id, starter);
+            this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+            this.reconcileDOM();
+          }
+        });
+      });
+
+      // Bind save active deck button
+      const btnSaveActive = view.querySelector('#btn-save-active-deck');
+      if (btnSaveActive) {
+        btnSaveActive.addEventListener('click', async () => {
+          const textarea = view.querySelector('#deckbuilder-text-input');
+          const rawText = textarea ? textarea.value : '';
+          const report = DeckValidator.validateDeck(rawText, { format: this.deckbuilderMode });
+          this._renderDeckValidationReport(view, report);
+          if (report.isValid && this.authManager) {
+            const deckId = `custom_${Date.now()}`;
+            await this.authManager.saveActiveDeck(deckId, report);
+            this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+            this.reconcileDOM();
+          }
+        });
+      }
 
       // Bind format toggle
       const btnFree = view.querySelector('#btn-mode-free');
@@ -2515,6 +3030,11 @@ export class RPMAppController {
           this._renderDeckValidationReport(view, report);
         });
       }
+    }
+
+    const onboardBanner = view.querySelector('#deckbuilder-onboard-banner');
+    if (onboardBanner) {
+      onboardBanner.style.display = isOnboarded ? 'none' : 'block';
     }
 
     const btnFree = view.querySelector('#btn-mode-free');
@@ -2692,22 +3212,66 @@ export class RPMAppController {
       const slot = this.lobbyManager.slots.get(s);
       const pod = document.createElement('div');
       pod.id = `lobby-seat-${s}`;
-      pod.className = `lobby-seat-pod ${slot ? 'occupied' : 'empty'} ${slot?.isReady ? 'ready' : ''}`;
+      pod.className = `lobby-seat-pod ${slot ? 'occupied' : 'empty'} ${slot?.isReady ? 'ready' : ''} ${slot?.isBot ? 'bot-seat' : ''}`;
       if (slot) {
-        pod.innerHTML = `
-          <div class="seat-num">Seat ${s}</div>
-          <div class="seat-player">${slot.playerName}${slot.playerId === this.myPlayerId ? ' (You)' : ''}</div>
-          <div class="seat-status">${slot.isReady ? '✅ Ready' : '⏳ Waiting'}</div>
-        `;
+        if (slot.isBot) {
+          pod.innerHTML = `
+            <div class="seat-num">Seat ${s}</div>
+            <div class="seat-player">🤖 ${slot.playerName}</div>
+            <div class="seat-status">✅ Ready (AI)</div>
+            <div class="seat-actions">
+              <button class="btn btn-remove-bot" data-seat="${s}">✖ Remove Bot</button>
+            </div>
+          `;
+          const btnRemove = pod.querySelector('.btn-remove-bot');
+          if (btnRemove) {
+            btnRemove.addEventListener('click', () => {
+              this.lobbyManager.removeBot(s);
+              this.reconcileDOM();
+            });
+          }
+        } else if (slot.playerId === this.myPlayerId) {
+          pod.innerHTML = `
+            <div class="seat-num">Seat ${s}</div>
+            <div class="seat-player">👤 ${slot.playerName} (You)</div>
+            <div class="seat-status">${slot.isReady ? '✅ Ready' : '⏳ Waiting'}</div>
+            <div class="seat-actions">
+              <button class="btn btn-leave-seat" data-seat="${s}">🚪 Leave Seat</button>
+            </div>
+          `;
+          const btnLeave = pod.querySelector('.btn-leave-seat');
+          if (btnLeave) {
+            btnLeave.addEventListener('click', () => {
+              this.lobbyManager.leaveSeat(s);
+              this.reconcileDOM();
+            });
+          }
+        } else {
+          pod.innerHTML = `
+            <div class="seat-num">Seat ${s}</div>
+            <div class="seat-player">👤 ${slot.playerName}</div>
+            <div class="seat-status">${slot.isReady ? '✅ Ready' : '⏳ Waiting'}</div>
+          `;
+        }
       } else {
         pod.innerHTML = `
           <div class="seat-num">Seat ${s}</div>
-          <button class="btn btn-claim-seat" data-seat="${s}">Claim Seat</button>
+          <div class="seat-empty-actions">
+            <button class="btn btn-claim-seat" data-seat="${s}">Claim Seat</button>
+            ${s >= 2 ? `<button class="btn btn-seat-bot" data-seat="${s}">🤖 Seat Perkins AI</button>` : ''}
+          </div>
         `;
         const claimBtn = pod.querySelector('.btn-claim-seat');
         if (claimBtn) {
           claimBtn.addEventListener('click', () => {
-            this.lobbyManager.claimSeat(this.myPlayerId, this.username, s);
+            this.lobbyManager.claimSeat(s, { playerId: this.myPlayerId, playerName: this.username });
+            this.reconcileDOM();
+          });
+        }
+        const seatBotBtn = pod.querySelector('.btn-seat-bot');
+        if (seatBotBtn) {
+          seatBotBtn.addEventListener('click', () => {
+            this.lobbyManager.seatBot(s);
             this.reconcileDOM();
           });
         }
@@ -2849,8 +3413,17 @@ export class RPMAppController {
     modalRoot.setAttribute('aria-hidden', 'false');
 
     if (type === 'CARD_OVERLAY') {
+      const cardPayload = data || { name: 'Card Preview', type_line: 'Instant', mana_cost: '{1}{R}' };
+      const cardName = typeof cardPayload === 'string' ? cardPayload : (cardPayload.name || 'Unknown Card');
+      this.authManager?.dispatchTelemetry('RULING_INSPECT', cardName, {
+        source: cardPayload.source || 'CARD_OVERLAY',
+        scryfall_id: cardPayload.id || cardPayload.scryfall_id || null,
+        type_line: cardPayload.type_line || null,
+        mana_cost: cardPayload.mana_cost || null,
+        rulings_count: Array.isArray(cardPayload.rulings) ? cardPayload.rulings.length : (cardPayload.rulings_count || 0)
+      });
       if (this.cardModal) {
-        this.cardModal.open(data || { name: 'Card Preview', type_line: 'Instant', mana_cost: '{1}{R}' });
+        this.cardModal.open(typeof cardPayload === 'string' ? { name: cardPayload } : cardPayload);
       }
       return;
     }

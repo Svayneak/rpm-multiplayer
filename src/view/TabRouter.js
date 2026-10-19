@@ -13,6 +13,7 @@
 import { EventEmitter } from '../EventEmitter.js';
 
 export const TABS = Object.freeze({
+  AUTH: 'AUTH',
   ARENA: 'ARENA',
   DECKBUILDER: 'DECKBUILDER',
   LOBBY: 'LOBBY',
@@ -21,6 +22,7 @@ export const TABS = Object.freeze({
 });
 
 export const LOCKED_TABS_DURING_MATCH = new Set([
+  TABS.AUTH,
   TABS.DECKBUILDER,
   TABS.PROFILE,
   TABS.LEADERBOARD,
@@ -54,67 +56,136 @@ export class TabRouter extends EventEmitter {
   }
 
   /**
-   * Evaluates if navigation to targetTab is permitted under INV-LOCKOUT-1.
+   * Evaluates if navigation to targetTab is permitted under INV-AUTH-1, INV-ONBOARD-1, INV-ROUTER-2, and INV-LOCKOUT-1.
    * 
    * @param {string} targetTab 
-   * @param {Object} [matchState={}] 
+   * @param {Object} [context={}] 
    * @param {boolean} [isSpectator=false] 
    * @returns {boolean}
    */
-  canNavigate(targetTab, matchState = {}, isSpectator = false) {
+  canNavigate(targetTab, context = {}, isSpectator = false) {
     if (!targetTab) return false;
     const tab = targetTab.toUpperCase();
 
-    // Arena is always accessible
-    if (tab === TABS.ARENA) {
-      return true;
-    }
-
     // Spectators are strictly exempt from lockout
-    if (isSpectator === true) {
+    if (isSpectator === true || context.isSpectator === true) {
       return true;
     }
 
-    // When an active match is in progress, non-battle tabs are locked
-    const isMatchActive = matchState && (matchState.status === 'ACTIVE' || matchState.isMatchActive === true);
+    // 1. Authentication Check (INV-AUTH-1)
+    if (context.isAuthenticated === false) {
+      return tab === TABS.AUTH;
+    }
+
+    // 2. Onboarding Deck Check (INV-ONBOARD-1)
+    if (context.isOnboarded === false) {
+      return tab === TABS.DECKBUILDER || tab === TABS.AUTH;
+    }
+
+    // 3. Match Lockout (INV-LOCKOUT-1)
+    const isMatchActive = Boolean(
+      context.isMatchActive ||
+      context.status === 'ACTIVE' ||
+      context.status === 'ROLL_OFF_PHASE'
+    );
+
     if (isMatchActive) {
       if (LOCKED_TABS_DURING_MATCH.has(tab)) {
         return false;
       }
+      return true;
+    }
+
+    // 4. Arena Access Rule (INV-ROUTER-2)
+    // When match is not active, Arena is blocked unless context is a legacy call without auth context
+    if (tab === TABS.ARENA) {
+      if (context.isAuthenticated !== undefined || context.isOnboarded !== undefined) {
+        return false;
+      }
+      // Backwards compatibility with Feature 14 tests
+      return true;
     }
 
     return true;
   }
 
   /**
-   * Attempts navigation to targetTab.
+   * Attempts navigation to targetTab with full guard validation.
    * 
    * @param {string} targetTab 
-   * @param {Object} [matchState={}] 
+   * @param {Object} [context={}] 
    * @param {boolean} [isSpectator=false] 
-   * @returns {{ success: boolean, activeTab: string, reason?: string }}
+   * @returns {{ success: boolean, activeTab: string, reason?: string, targetTab?: string }}
    */
-  navigate(targetTab, matchState = {}, isSpectator = false) {
+  navigate(targetTab, context = {}, isSpectator = false) {
     if (!targetTab) {
       return { success: false, activeTab: this.currentTab, reason: 'INVALID_TAB' };
     }
 
     const tab = targetTab.toUpperCase();
-    const allowed = this.canNavigate(tab, matchState, isSpectator);
 
-    if (!allowed) {
+    // 1. Auth required
+    if (context.isAuthenticated === false && tab !== TABS.AUTH) {
+      return {
+        success: false,
+        activeTab: this.currentTab,
+        reason: 'AUTH_REQUIRED',
+        targetTab: tab
+      };
+    }
+
+    // 2. Deck onboarding required
+    if (context.isOnboarded === false && (tab === TABS.LOBBY || tab === TABS.ARENA || tab === TABS.PROFILE || tab === TABS.LEADERBOARD)) {
+      return {
+        success: false,
+        activeTab: this.currentTab,
+        reason: 'DECK_ONBOARDING_REQUIRED',
+        targetTab: tab
+      };
+    }
+
+    // 3. Active match lockout
+    const isMatchActive = Boolean(
+      context.isMatchActive ||
+      context.status === 'ACTIVE' ||
+      context.status === 'ROLL_OFF_PHASE'
+    );
+
+    if (isMatchActive && LOCKED_TABS_DURING_MATCH.has(tab) && !isSpectator && !context.isSpectator) {
       if (typeof this.onLockoutBlocked === 'function') {
         this.onLockoutBlocked(tab);
       }
       this.emit('lockout_blocked', {
         targetTab: tab,
         currentTab: this.currentTab,
-        matchState
+        matchState: context
       });
       return {
         success: false,
         activeTab: this.currentTab,
         reason: 'TAB_LOCKED_ACTIVE_MATCH',
+        targetTab: tab
+      };
+    }
+
+    // 4. Arena match required when idle
+    if (tab === TABS.ARENA && !isMatchActive && !isSpectator && !context.isSpectator) {
+      if (context.isAuthenticated !== undefined || context.isOnboarded !== undefined) {
+        return {
+          success: false,
+          activeTab: this.currentTab,
+          reason: 'ARENA_MATCH_REQUIRED',
+          targetTab: tab
+        };
+      }
+    }
+
+    const allowed = this.canNavigate(tab, context, isSpectator);
+    if (!allowed) {
+      return {
+        success: false,
+        activeTab: this.currentTab,
+        reason: 'NAVIGATION_BLOCKED',
         targetTab: tab
       };
     }

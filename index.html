@@ -27,6 +27,7 @@
       </div>
 
       <nav class="header-nav-tabs" role="tablist" aria-label="Main Navigation">
+        <button id="tab-btn-auth" class="nav-tab" data-tab="AUTH" role="tab" aria-selected="false" style="display: none;">🔐 Auth</button>
         <button id="tab-btn-arena" class="nav-tab active" data-tab="ARENA" role="tab" aria-selected="true">🏟️ Arena</button>
         <button id="tab-btn-deckbuilder" class="nav-tab" data-tab="DECKBUILDER" role="tab" aria-selected="false">📚 Deckbuilder</button>
         <button id="tab-btn-lobby" class="nav-tab" data-tab="LOBBY" role="tab" aria-selected="false">🔍 Lobby</button>
@@ -67,6 +68,9 @@
 
     <!-- Top-Level Decoupled View Host Container -->
     <div id="view-host" class="rpm-view-host">
+
+      <!-- View 0: Authentication & Profile Registration (INV-AUTH-1) -->
+      <div id="view-auth" class="view-pane" style="display: none;"></div>
 
       <!-- View 1: Tabletop Arena -->
       <div id="view-arena" class="view-pane active">
@@ -178,7 +182,8 @@
       try {
         const app = new RPMAppController({
           container: '#app-root',
-          autoConnect: true
+          autoConnect: true,
+          requireAuth: true
         });
         await app.mount();
         window.__RPM_APP__ = app;
