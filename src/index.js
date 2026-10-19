@@ -44,7 +44,9 @@ export {
 
 export {
   TabletopStateManager,
-  projectState
+  projectState,
+  LandLimitExceededError,
+  PhaseTimingError
 } from './TabletopStateManager.js';
 
 export {
@@ -52,6 +54,8 @@ export {
   PriorityViolationError,
   CheckpointJournal,
   PHASE_STEPS,
+  SEVEN_PHASE_STEPS,
+  TWELVE_PHASE_STEPS,
   generateStackItemId,
   generateCheckpointId
 } from './PriorityStateMachine.js';
@@ -63,7 +67,8 @@ export {
 export {
   DualChannelChat,
   PriorityGatedChatError,
-  ProposalExpiredError
+  ProposalExpiredError,
+  SpectatorPermissionError
 } from './DualChannelChat.js';
 
 export {

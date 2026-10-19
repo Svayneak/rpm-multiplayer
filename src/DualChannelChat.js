@@ -50,6 +50,13 @@ export class ProposalExpiredError extends Error {
   }
 }
 
+export class SpectatorPermissionError extends Error {
+  constructor(message = 'Spectators are not permitted to submit turn commands.') {
+    super(message);
+    this.name = 'SpectatorPermissionError';
+  }
+}
+
 export { ActionLexerError };
 
 /**
@@ -72,6 +79,8 @@ export class DualChannelChat {
     this.tabletopStateManager = options.tabletopStateManager || null;
     this.speechService = options.speechService || null;
     this.proposalTtlMs = options.proposalTtlMs || 30000;
+    this.isSpectator = Boolean(options.isSpectator);
+    this.username = options.username || options.senderName || this.myPlayerId;
 
     this._priorityPlayerId = options.priorityPlayerId || null;
     this.chitChatMessages = [];
@@ -155,8 +164,16 @@ export class DualChannelChat {
    * @returns {Object} Sent ChatMessage or DraftActionProposal
    */
   sendChatMessage(channel, text, metadata = {}) {
-    if (channel === 'TURN_COMMAND') {
+    const ch = (channel || '').toUpperCase();
+    if (ch === 'TURN_COMMAND' || ch === 'GAMEPLAY') {
       return this.submitTurnCommand(text, metadata);
+    }
+
+    let senderName = metadata.senderName || metadata.senderId || this.myPlayerId;
+    if (metadata.isSpectator || this.isSpectator) {
+      if (!senderName.startsWith('[Spectator]')) {
+        senderName = `[Spectator] ${senderName}`;
+      }
     }
 
     const message = {
@@ -164,7 +181,7 @@ export class DualChannelChat {
       sessionId: this.sessionId,
       channel: 'CHIT_CHAT',
       senderId: metadata.senderId || this.myPlayerId,
-      senderName: metadata.senderName || metadata.senderId || this.myPlayerId,
+      senderName,
       text,
       timestamp: Date.now(),
       status: 'DELIVERED',
@@ -184,8 +201,8 @@ export class DualChannelChat {
    * @param {string} [senderName]
    * @returns {Object}
    */
-  sendChitChat(text, senderId = this.myPlayerId, senderName = senderId) {
-    return this.sendChatMessage('CHIT_CHAT', text, { senderId, senderName });
+  sendChitChat(text, senderId = this.myPlayerId, senderName = (this.username || senderId)) {
+    return this.sendChatMessage('CHIT_CHAT', text, { senderId, senderName, isSpectator: this.isSpectator });
   }
 
   /**
@@ -234,6 +251,10 @@ export class DualChannelChat {
       text = maybeText;
     } else if (typeof maybeText === 'object' && maybeText !== null) {
       meta = maybeText;
+    }
+
+    if (meta.isSpectator || this.isSpectator) {
+      throw new SpectatorPermissionError('Spectators are not permitted to submit turn commands.');
     }
 
     const currentPriority = this.getPriorityPlayerId();

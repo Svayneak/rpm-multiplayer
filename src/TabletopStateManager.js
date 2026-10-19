@@ -18,6 +18,28 @@ import {
   PermanentAlreadyTappedError,
   PlayerNotFoundError
 } from './ZoneModel.js';
+import { EventEmitter } from './EventEmitter.js';
+
+export class LandLimitExceededError extends StateTransitionError {
+  constructor(message = 'Land drop limit reached for this turn') {
+    super(message);
+    this.name = 'LandLimitExceededError';
+  }
+}
+
+export class PriorityViolationError extends StateTransitionError {
+  constructor(message = 'Priority violation') {
+    super(message);
+    this.name = 'PriorityViolationError';
+  }
+}
+
+export class PhaseTimingError extends StateTransitionError {
+  constructor(message = 'Phase timing restriction violated') {
+    super(message);
+    this.name = 'PhaseTimingError';
+  }
+}
 
 /**
  * Deep clones a card instance entity to guarantee state immutability.
@@ -135,13 +157,17 @@ export function projectState(fullStateOrManager, viewerPlayerId) {
 /**
  * High-level Tabletop Match Manager and Event Coordinator.
  */
-export class TabletopStateManager {
+export class TabletopStateManager extends EventEmitter {
   constructor(options = {}) {
+    super();
     this.sessionId = options.sessionId || `session_${Date.now()}`;
     this.players = {}; // Map: playerId -> PlayerZoneState
     this.stack = [];   // Array: CardInstance
     this.activePlayerId = options.activePlayerId || null;
     this.turnNumber = options.turnNumber || 1;
+    this.roundNumber = options.roundNumber || 1;
+    this.playerTurnNumbers = new Map();
+    this.priorityMachine = options.priorityMachine || null;
     this.actionLog = [];
     this.subscribers = new Set();
     this.sequenceCounter = 0;
@@ -172,11 +198,35 @@ export class TabletopStateManager {
       return this.players[playerId];
     }
     const player = ZoneModel.createInitialPlayerState(playerId, playerName);
+    player.landsPlayedThisTurn = 0;
+    player.maxLandsPerTurn = 1;
+    player.landsPerTurnLimit = 1;
+    if (player.resources) {
+      player.resources.landsPlayedThisTurn = 0;
+      player.resources.maxLandsPerTurn = 1;
+      player.resources.landsPerTurnLimit = 1;
+    }
     this.players[playerId] = player;
+    if (!this.playerTurnNumbers.has(playerId)) {
+      this.playerTurnNumbers.set(playerId, 1);
+    }
     if (!this.activePlayerId) {
       this.activePlayerId = playerId;
     }
     return player;
+  }
+
+  /**
+   * Returns two-layer turn summary for specified or active player.
+   *
+   * @param {string} [playerId]
+   * @returns {{ roundNumber: number, playerTurnNumber: number }}
+   */
+  getTurnSummary(playerId = this.activePlayerId) {
+    return {
+      roundNumber: this.roundNumber,
+      playerTurnNumber: (playerId && this.playerTurnNumbers.get(playerId)) || 1
+    };
   }
 
   /**
@@ -345,11 +395,17 @@ export class TabletopStateManager {
       player.graveyard = [];
       player.exile = [];
       player.isHandRevealed = false;
+      player.landsPlayedThisTurn = 0;
+      player.maxLandsPerTurn = 1;
+      player.landsPerTurnLimit = 1;
       player.resources = {
         life: 20,
         poison: 0,
         energy: 0,
-        manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }
+        manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+        landsPlayedThisTurn: 0,
+        maxLandsPerTurn: 1,
+        landsPerTurnLimit: 1
       };
     }
 
@@ -358,6 +414,12 @@ export class TabletopStateManager {
     player.resources.poison = 0;
     player.resources.energy = 0;
     player.resources.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    player.resources.landsPlayedThisTurn = 0;
+    player.resources.maxLandsPerTurn = 1;
+    player.resources.landsPerTurnLimit = 1;
+    player.landsPlayedThisTurn = 0;
+    player.maxLandsPerTurn = 1;
+    player.landsPerTurnLimit = 1;
     player.isHandRevealed = false;
 
     // Expand cards based on count
@@ -415,16 +477,51 @@ export class TabletopStateManager {
   }
 
   _handlePlayLand(payload) {
-    const { playerId, instanceId } = payload;
+    const playerId = payload.playerId || this.activePlayerId;
     const player = this.getPlayer(playerId);
-    const cardIdx = player.hand.findIndex(c => c && c.instanceId === instanceId);
+
+    const activePid = this.priorityMachine?.activePlayerId || this.activePlayerId;
+    if (activePid && activePid !== playerId) {
+      throw new PriorityViolationError(`Only the active player ('${activePid}') may play a land.`);
+    }
+
+    const currentPhase = this.priorityMachine?.currentPhaseStep;
+    if (currentPhase) {
+      const normalizedPhase = currentPhase.toUpperCase();
+      const isMain = normalizedPhase.includes('MAIN') || normalizedPhase === 'PRECOMBAT_MAIN' || normalizedPhase === 'POSTCOMBAT_MAIN';
+      if (!isMain) {
+        throw new PhaseTimingError(`Lands may only be played during Main phases (current: ${currentPhase}).`);
+      }
+    }
+
+    const stackDepth = this.priorityMachine?.getStackDepth?.() ?? this.stack.length;
+    if (stackDepth > 0) {
+      throw new PriorityViolationError('Lands may only be played when the stack is empty.');
+    }
+
+    const priorityPid = this.priorityMachine?.priorityPlayerId;
+    if (priorityPid && priorityPid !== playerId) {
+      throw new PriorityViolationError(`Player '${playerId}' does not hold priority.`);
+    }
+
+    const instanceId = payload.instanceId || (payload.card && payload.card.instanceId);
+    const cardIdx = player.hand.findIndex(c => c && (
+      (instanceId && c.instanceId === instanceId) ||
+      (payload.card && (c.instanceId === payload.card.instanceId || c.name === payload.card.name))
+    ));
     if (cardIdx === -1) {
-      throw new CardNotFoundError(`Card with instanceId ${instanceId} not found in player's hand`);
+      throw new CardNotFoundError(`Card with instanceId ${instanceId || payload.card?.name} not found in player's hand`);
     }
 
     const card = player.hand[cardIdx];
-    if (!/land/i.test(card.typeLine)) {
+    if (!/land/i.test(card.typeLine || card.type || '')) {
       throw new InvalidCardTypeError(`Card is not a land: "${card.name}" (${card.typeLine})`);
+    }
+
+    const played = player.landsPlayedThisTurn ?? player.resources?.landsPlayedThisTurn ?? 0;
+    const limit = player.maxLandsPerTurn ?? player.landsPerTurnLimit ?? player.resources?.maxLandsPerTurn ?? 1;
+    if (played >= limit) {
+      throw new LandLimitExceededError(`Land drop limit reached for this turn (${played}/${limit}).`);
     }
 
     player.hand.splice(cardIdx, 1);
@@ -433,7 +530,18 @@ export class TabletopStateManager {
     card.isTapped = false;
     player.battlefield.lands.push(card);
 
-    return { card };
+    player.landsPlayedThisTurn = played + 1;
+    if (player.resources) {
+      player.resources.landsPlayedThisTurn = player.landsPlayedThisTurn;
+    }
+
+    this.emit('LAND_PLAYED', {
+      playerId,
+      card,
+      landsPlayedThisTurn: player.landsPlayedThisTurn
+    });
+
+    return { card, landsPlayedThisTurn: player.landsPlayedThisTurn };
   }
 
   _handleCastSpell(payload) {
@@ -675,8 +783,156 @@ export class TabletopStateManager {
     return this.dispatch('DRAW_CARD', { playerId, count });
   }
 
-  playLand(playerId, instanceId) {
-    return this.dispatch('PLAY_LAND', { playerId, instanceId });
+  canPlayLand(playerId = this.activePlayerId) {
+    const player = this.getPlayer(playerId);
+    if (!player) return false;
+
+    // Must be active player
+    const activePid = this.priorityMachine?.activePlayerId || this.activePlayerId;
+    if (activePid && activePid !== playerId) {
+      return false;
+    }
+
+    // Must be main phase (PRECOMBAT_MAIN or POSTCOMBAT_MAIN or MAIN 1 or MAIN 2)
+    const currentPhase = this.priorityMachine?.currentPhaseStep;
+    if (currentPhase) {
+      const normalizedPhase = currentPhase.toUpperCase();
+      const isMain = normalizedPhase.includes('MAIN') || normalizedPhase === 'PRECOMBAT_MAIN' || normalizedPhase === 'POSTCOMBAT_MAIN';
+      if (!isMain) return false;
+    }
+
+    // Stack must be empty
+    const stackDepth = this.priorityMachine?.getStackDepth?.() ?? this.stack.length;
+    if (stackDepth > 0) {
+      return false;
+    }
+
+    // Must hold priority
+    const priorityPid = this.priorityMachine?.priorityPlayerId;
+    if (priorityPid && priorityPid !== playerId) {
+      return false;
+    }
+
+    // Limit check
+    const played = player.landsPlayedThisTurn ?? player.resources?.landsPlayedThisTurn ?? 0;
+    const limit = player.maxLandsPerTurn ?? player.landsPerTurnLimit ?? player.resources?.maxLandsPerTurn ?? 1;
+    if (played >= limit) {
+      return false;
+    }
+
+    return true;
+  }
+
+  resetTurnQuotas(playerId) {
+    const targetPlayers = playerId ? [this.getPlayer(playerId)] : Object.values(this.players);
+    for (const player of targetPlayers) {
+      player.landsPlayedThisTurn = 0;
+      if (player.resources) {
+        player.resources.landsPlayedThisTurn = 0;
+      }
+    }
+    return { playerId: playerId || this.activePlayerId, landsPlayedThisTurn: 0 };
+  }
+
+  playLand(playerIdOrPayload, instanceIdOrCard) {
+    if (typeof playerIdOrPayload === 'object' && playerIdOrPayload !== null) {
+      return this.dispatch('PLAY_LAND', playerIdOrPayload);
+    }
+    const instanceId = typeof instanceIdOrCard === 'object' ? instanceIdOrCard.instanceId : instanceIdOrCard;
+    const card = typeof instanceIdOrCard === 'object' ? instanceIdOrCard : undefined;
+    return this.dispatch('PLAY_LAND', { playerId: playerIdOrPayload, instanceId, card });
+  }
+
+  handleStackResolution(resolvedItem) {
+    if (!resolvedItem) return null;
+    const card = resolvedItem.card || resolvedItem;
+    const controllerId = resolvedItem.controllerId || resolvedItem.sourcePlayerId || card.controllerId || card.ownerId || this.activePlayerId;
+    const player = this.getPlayer(controllerId);
+
+    // If card is still in this.stack, remove it
+    const stackIdx = this.stack.findIndex(c => c && (c.instanceId === card.instanceId || c === card));
+    if (stackIdx !== -1) {
+      this.stack.splice(stackIdx, 1);
+    }
+
+    const typeLine = String(card.typeLine || card.type || '').toLowerCase();
+    let destinationZone = 'battlefield';
+    let destinationSubzone = null;
+
+    if (typeLine.includes('creature')) {
+      destinationSubzone = 'creatures';
+      card.zone = 'battlefield';
+      card.subzone = 'creatures';
+      card.isSummoningSick = true;
+      card.summoningSickness = true;
+      card.isTapped = false;
+      player.battlefield.creatures.push(card);
+    } else if (typeLine.includes('land')) {
+      destinationSubzone = 'lands';
+      card.zone = 'battlefield';
+      card.subzone = 'lands';
+      card.isTapped = false;
+      player.battlefield.lands.push(card);
+    } else if (typeLine.includes('planeswalker')) {
+      destinationSubzone = 'planeswalkers';
+      card.zone = 'battlefield';
+      card.subzone = 'planeswalkers';
+      card.isTapped = false;
+      player.battlefield.planeswalkers.push(card);
+    } else if (typeLine.includes('artifact') || typeLine.includes('enchantment') || typeLine.includes('battle')) {
+      destinationSubzone = 'noncreatures';
+      card.zone = 'battlefield';
+      card.subzone = 'noncreatures';
+      card.isTapped = false;
+      player.battlefield.noncreatures.push(card);
+    } else if (typeLine.includes('instant') || typeLine.includes('sorcery')) {
+      destinationZone = 'graveyard';
+      card.zone = 'graveyard';
+      card.subzone = null;
+      player.graveyard.push(card);
+    } else {
+      if (card.isPermanent) {
+        destinationSubzone = 'noncreatures';
+        card.zone = 'battlefield';
+        card.subzone = 'noncreatures';
+        card.isTapped = false;
+        player.battlefield.noncreatures.push(card);
+      } else {
+        destinationZone = 'graveyard';
+        card.zone = 'graveyard';
+        card.subzone = null;
+        player.graveyard.push(card);
+      }
+    }
+
+    // Sync with player.zones if present
+    if (player.zones) {
+      if (destinationZone === 'battlefield') {
+        if (!player.zones.battlefield) player.zones.battlefield = [];
+        player.zones.battlefield.push(card);
+      } else if (destinationZone === 'graveyard') {
+        if (!player.zones.graveyard) player.zones.graveyard = [];
+        player.zones.graveyard.push(card);
+      }
+    }
+
+    this._notifySubscribers({
+      sequenceId: ++this.sequenceCounter,
+      actionType: destinationZone === 'battlefield' ? 'CARD_ENTERED_BATTLEFIELD' : 'SPELL_RESOLVED_TO_GRAVEYARD',
+      playerId: controllerId,
+      payload: { card, destinationZone, destinationSubzone },
+      timestamp: Date.now()
+    }, { card, destinationZone, destinationSubzone });
+
+    this.emit('STACK_RESOLVE', { card, destinationZone, destinationSubzone, controllerId });
+    this.emit('STACK_RESOLVED', { card, destinationZone, destinationSubzone, controllerId });
+    if (destinationZone === 'battlefield') {
+      this.emit('CARD_ENTERED_BATTLEFIELD', { card, subzone: destinationSubzone, controllerId });
+    } else {
+      this.emit('SPELL_RESOLVED_TO_GRAVEYARD', { card, controllerId });
+    }
+
+    return { card, destinationZone, destinationSubzone };
   }
 
   castSpell(playerId, instanceId, options = {}) {

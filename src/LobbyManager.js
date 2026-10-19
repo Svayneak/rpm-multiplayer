@@ -26,6 +26,7 @@ function generateSeatToken() {
 export const LOBBY_STATUS = Object.freeze({
   LOBBY_WAITING: 'LOBBY_WAITING',
   READY_CHECK: 'READY_CHECK',
+  LOBBY_COUNTDOWN: 'LOBBY_COUNTDOWN',
   ROLL_OFF_PHASE: 'ROLL_OFF_PHASE',
   MATCH_ACTIVE: 'MATCH_ACTIVE',
   MATCH_COMPLETED: 'MATCH_COMPLETED'
@@ -58,6 +59,13 @@ export class LobbyManager extends EventEmitter {
 
     /** @type {Map<number, Object>} slotId -> PlayerSlot */
     this.slots = new Map();
+
+    /** @type {number|null} 3-second animated start countdown remaining */
+    this.countdownSecondsRemaining = null;
+    this._countdownTimer = null;
+
+    /** @type {Map<string, Object>} spectatorId -> SpectatorDetails */
+    this.spectators = new Map();
   }
 
   /**
@@ -106,6 +114,8 @@ export class LobbyManager extends EventEmitter {
    * @param {Object} [metadata={}]
    */
   invalidateReadiness(reason, metadata = {}) {
+    this.abortCountdown(reason, metadata);
+
     let anyReset = false;
     for (const slot of this.slots.values()) {
       if (!slot.isBot && slot.isReady) {
@@ -383,21 +393,19 @@ export class LobbyManager extends EventEmitter {
 
     slot.isReady = (isReady !== undefined) ? Boolean(isReady) : !slot.isReady;
 
+    if (!slot.isReady) {
+      this.abortCountdown('PLAYER_UNREADY', { slotId: slot.slotId, playerId: slot.playerId });
+    }
+
     const canStart = this.canStart();
     const allReady = this.isAllReady();
 
-    if (canStart) {
+    if (canStart && !allReady) {
       this.status = LOBBY_STATUS.READY_CHECK;
     }
 
     if (canStart && allReady) {
-      this.status = LOBBY_STATUS.ROLL_OFF_PHASE;
-      const readyPayload = {
-        seatedCount: this.getSeatedCount(),
-        readyCount: this.getReadyCount()
-      };
-      this.emit('match_ready', readyPayload);
-      this.emit('MATCH_START_TRIGGERED', readyPayload);
+      this.startCountdown();
     }
 
     return {
@@ -405,6 +413,115 @@ export class LobbyManager extends EventEmitter {
       allReady,
       canStart
     };
+  }
+
+  /**
+   * Initiates synchronized 3-second animated countdown (INV-COUNTDOWN-1).
+   * 
+   * @param {number} [durationSeconds=3]
+   */
+  startCountdown(durationSeconds = 3) {
+    if (this._countdownTimer) {
+      clearInterval(this._countdownTimer);
+      this._countdownTimer = null;
+    }
+
+    this.status = LOBBY_STATUS.LOBBY_COUNTDOWN;
+    this.countdownSecondsRemaining = durationSeconds;
+
+    this.emit('COUNTDOWN_STARTED', { secondsRemaining: this.countdownSecondsRemaining });
+    this.emit('COUNTDOWN_TICK', { secondsRemaining: this.countdownSecondsRemaining });
+
+    this._countdownTimer = setInterval(() => {
+      if (this.countdownSecondsRemaining === null) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
+        return;
+      }
+
+      this.countdownSecondsRemaining--;
+      this.emit('COUNTDOWN_TICK', { secondsRemaining: this.countdownSecondsRemaining });
+
+      if (this.countdownSecondsRemaining <= 0) {
+        clearInterval(this._countdownTimer);
+        this._countdownTimer = null;
+        this.status = LOBBY_STATUS.ROLL_OFF_PHASE;
+        const readyPayload = {
+          seatedCount: this.getSeatedCount(),
+          readyCount: this.getReadyCount()
+        };
+        this.emit('match_ready', readyPayload);
+        this.emit('MATCH_START_TRIGGERED', readyPayload);
+      }
+    }, 1000);
+  }
+
+  /**
+   * Aborts countdown immediately if any player un-confirms, leaves, or seat changes (INV-COUNTDOWN-1).
+   * 
+   * @param {string} reason
+   * @param {Object} [metadata={}]
+   * @returns {boolean} True if countdown was active and aborted
+   */
+  abortCountdown(reason = 'ABORTED', metadata = {}) {
+    const wasCountdown = (this.status === LOBBY_STATUS.LOBBY_COUNTDOWN || this.countdownSecondsRemaining !== null);
+    if (this._countdownTimer) {
+      clearInterval(this._countdownTimer);
+      this._countdownTimer = null;
+    }
+    this.countdownSecondsRemaining = null;
+    this.status = this.canStart() ? LOBBY_STATUS.READY_CHECK : LOBBY_STATUS.LOBBY_WAITING;
+
+    if (wasCountdown) {
+      this.emit('COUNTDOWN_ABORTED', {
+        reason,
+        ...metadata,
+        timestamp: Date.now()
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Registers a zero-auth spectator in the lobby (INV-SPEC-1).
+   * 
+   * @param {string} spectatorId
+   * @param {string} [name='Spectator']
+   */
+  registerSpectator(spectatorId, name = 'Spectator') {
+    this.spectators.set(spectatorId, { spectatorId, name, joinedAt: Date.now() });
+    this.emit('spectator_joined', { spectatorId, count: this.getSpectatorCount() });
+  }
+
+  addSpectator(spectatorId, name) {
+    return this.registerSpectator(spectatorId, name);
+  }
+
+  /**
+   * Unregisters a spectator (INV-SPEC-1).
+   * 
+   * @param {string} spectatorId
+   * @returns {boolean}
+   */
+  unregisterSpectator(spectatorId) {
+    const removed = this.spectators.delete(spectatorId);
+    if (removed) {
+      this.emit('spectator_left', { spectatorId, count: this.getSpectatorCount() });
+    }
+    return removed;
+  }
+
+  removeSpectator(spectatorId) {
+    return this.unregisterSpectator(spectatorId);
+  }
+
+  /**
+   * Returns current count of registered spectators (INV-SPEC-1).
+   * @returns {number}
+   */
+  getSpectatorCount() {
+    return this.spectators.size;
   }
 
   /**
@@ -416,6 +533,8 @@ export class LobbyManager extends EventEmitter {
   handleDisconnect(identifier, graceMs = this.disconnectGraceMs) {
     const slot = this._resolveSlot(identifier);
     if (!slot) return;
+
+    this.abortCountdown('PLAYER_DISCONNECTED', { slotId: slot.slotId, playerId: slot.playerId });
 
     slot.connectionStatus = 'DISCONNECTED';
     slot.graceTimerRemainingMs = graceMs;

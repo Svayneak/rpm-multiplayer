@@ -318,5 +318,30 @@
   5. Verified live in Google Chrome via Chrome DevTools MCP with complete onboarding and seat hopping validation.
   6. Independent Verificator Pro Audit completed: CERTIFIED 100% COMPLIANT.
 
+---
 
-
+### DEC-021 — Lobby Hub, Zero-Auth Spectator Directory, Battle Mechanics Enforcement & Phase Tracker
+- **Context & Problem**: User feedback during playtesting revealed 6 gameplay and lifecycle defects:
+  1. *Lobby Countdown Defect*: Start Game button immediately triggered d20 roll-off without countdown or cancellation grace.
+  2. *Missing Phase Tracker*: Arena lacked a visual phase tracker; players did not know what step or phase they were in.
+  3. *Conflated Turn Counts*: Turn counts were tracked as a single integer, conflating individual player turns ($T_{\text{player}}$) and full table rounds ($R_{\text{table}}$).
+  4. *Unlimited Land Drops*: Players could play unlimited lands in one turn without restrictions (violating MTG CR 305.1).
+  5. *Vanishing Permanents*: Casting a creature and passing priority caused the creature to vanish from the stack into nothingness instead of entering the battlefield (violating MTG CR 608.3 & CR 608.2k).
+  6. *Premature Auth Wall*: Unauthenticated visitors were blocked from browsing modes or watching active games without logging in.
+- **Options Evaluated**:
+  - *Option A*: Patch individual bugs piecemeal in `app.js` without formal state machine invariants.
+  - *Option B (Recommended)*: **Comprehensive Formal Specification & Unified Invariant Hierarchy (`SPEC-RPM-BATTLE-016`)**:
+    1. **Universal Lobby Landing & Mode Selector (`INV-HUB-1`)**: App boots unconditionally to `LOBBY` with 1v1 Ranked, Multiplayer Pod, Custom Room, and Perkins Solo cards.
+    2. **Zero-Auth Spectator Directory & Viewer (`INV-SPEC-1`)**: Public directory of active tables; visitors can watch live matches in read-only mode with full fog-of-war board projection, chit-chat access, and zero auth requirements.
+    3. **Contextual Participant Gate (`INV-AUTH-GATE-2`)**: Auth and Deck Creator modals are triggered only when asserting participant intent (claiming a seat, queuing, or creating a room).
+    4. **3-Second Synchronized Countdown (`INV-COUNTDOWN-1`)**: Animated 3-second visual countdown before roll-off with atomic abort if any player un-confirms, leaves, or a new player arrives.
+    5. **Turn Phase Marker Strip (`INV-PHASE-1`)**: Prominent 7-step horizontal strip (`UNTAP` -> `UPKEEP` -> `DRAW` -> `MAIN 1` -> `COMBAT` -> `MAIN 2` -> `END`) with 1-tap `[ ⏭️ Next Phase ]` and empty-stack consensus auto-advance (CR 500.2).
+    6. **Two-Layer Turn & Round Counter (`INV-TURN-LAYER-1`)**: Separates $R_{\text{table}}$ (advances when turn order wraps around to starting player) from $T_{\text{player}}$ (advances on player's UNTAP).
+    7. **1 Land Per Turn Mechanics (`INV-LAND-1`)**: Enforces Main phase, empty stack, priority held, and $L_{\text{played}} < 1$; resets counter on UNTAP.
+    8. **Permanent Spell Resolution Engine (`INV-STACK-RESOLVE-1`)**: Resolves permanent spells to controller's `battlefield` subzones (`creatures`, `lands`, `noncreatures`, `planeswalkers`) with summoning sickness, and non-permanents to graveyard.
+- **User Decision**: **Option B (Recommended)**.
+- **Impact & Implementation**:
+  1. Authored `specs/FEATURE_16_BATTLE_AND_SPECTATOR_SPEC.md` (`SPEC-RPM-BATTLE-016`, 666 lines).
+  2. Defined and fully implemented 16-vector acceptance test matrix (`TC-BATTLE-01` through `TC-BATTLE-16`) in `test/test_battle_spectator.js`.
+  3. Implemented invariants across `TabletopStateManager.js`, `PriorityStateMachine.js`, `LobbyManager.js`, `TabRouter.js`, `DualChannelChat.js`, `index.html`, `tabletop.css`, and `app.js`.
+  4. Verified full regression test suite: all 15 test suites pass 100% (216+ total assertions, 0 failures).

@@ -1424,7 +1424,9 @@
 }
 
 /* Concede Confirmation Modal (INV-LOCKOUT-1) */
-.concede-modal-backdrop {
+.concede-modal-backdrop,
+.auth-modal-backdrop,
+.deck-modal-backdrop {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.75);
@@ -1432,6 +1434,8 @@
   align-items: center;
   justify-content: center;
   z-index: var(--z-modal-backdrop);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* Seating Grid (INV-LOBBY-2) */
@@ -1760,4 +1764,303 @@
   font-size: 0.85rem;
   padding: 8px 12px;
 }
+
+/* ==========================================================================
+   Feature 16: Lobby Hub & Spectator Directory, Battle Mechanics & Phase Strip
+   ========================================================================== */
+
+/* Turn Phase Marker Strip (INV-PHASE-1) */
+.phase-track-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: var(--radius-md);
+  padding: 10px 16px;
+  margin-bottom: 14px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  flex-wrap: wrap;
+}
+
+.phase-step-list {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.phase-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border-radius: 9999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #94a3b8;
+  background: #1e293b;
+  border: 1px solid #334155;
+  transition: all 0.25s ease;
+  user-select: none;
+}
+
+.phase-step:hover:not(.active) {
+  border-color: #64748b;
+  color: #cbd5e1;
+}
+
+.phase-step.active,
+.phase-step.phase-active-step {
+  color: #f0fdf4;
+  background: #0284c7;
+  border-color: #38bdf8;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.6);
+  animation: pulseStepGlow 1.6s infinite alternate;
+}
+
+@keyframes pulseStepGlow {
+  0% {
+    box-shadow: 0 0 6px rgba(56, 189, 248, 0.4);
+    transform: scale(1);
+  }
+  100% {
+    box-shadow: 0 0 18px rgba(56, 189, 248, 0.85);
+    transform: scale(1.05);
+  }
+}
+
+.btn-next-phase {
+  background: #059669;
+  color: #ffffff;
+  border: 1px solid #10b981;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-next-phase:hover {
+  background: #10b981;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-next-phase:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Arena Warning Banner (INV-LAND-1) */
+.arena-warning-banner {
+  background: rgba(220, 38, 38, 0.2);
+  border: 1px solid #ef4444;
+  color: #fca5a5;
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  margin-bottom: 12px;
+  text-align: center;
+  animation: slideDown 0.2s ease;
+}
+
+/* Synchronized 3-Second Countdown Button (INV-COUNTDOWN-1) */
+.btn-countdown-active {
+  background: #f59e0b !important;
+  color: #0f172a !important;
+  font-weight: 800 !important;
+  border-color: #fbbf24 !important;
+  animation: pulseCountdown 0.9s infinite alternate !important;
+  letter-spacing: 0.3px;
+}
+
+@keyframes pulseCountdown {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+  }
+  100% {
+    transform: scale(1.03);
+    box-shadow: 0 0 20px rgba(245, 158, 11, 0.9);
+  }
+}
+
+/* Mode Selector Cards (INV-HUB-1) */
+.lobby-hub-header {
+  margin-bottom: 20px;
+}
+
+.lobby-hub-header h2 {
+  font-size: 1.35rem;
+  color: #f8fafc;
+  margin: 0 0 6px 0;
+}
+
+.lobby-hub-header p {
+  color: #94a3b8;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.lobby-mode-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.lobby-mode-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: var(--radius-md);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+  transition: all 0.2s ease;
+}
+
+.lobby-mode-card:hover {
+  border-color: #38bdf8;
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.lobby-mode-card h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: #f8fafc;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lobby-mode-card p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  flex: 1;
+}
+
+/* Spectator Directory (INV-SPEC-1) */
+.spectator-directory-section {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: var(--radius-md);
+  padding: 20px;
+  margin-top: 28px;
+}
+
+.spectator-directory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.spectator-directory-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+  color: #f8fafc;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spectator-table-wrapper {
+  overflow-x: auto;
+}
+
+.spectator-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.spectator-table th {
+  background: #1e293b;
+  color: #94a3b8;
+  text-align: left;
+  padding: 10px 14px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid #334155;
+}
+
+.spectator-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid #1e293b;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+
+.spectator-table tr:hover td {
+  background: rgba(30, 41, 59, 0.5);
+}
+
+.btn-spectate-match {
+  background: #0284c7;
+  color: #ffffff;
+  border: 1px solid #38bdf8;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-spectate-match:hover {
+  background: #0369a1;
+  box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+}
+
+.btn-exit-spectator {
+  background: #334155;
+  color: #f8fafc;
+  border: 1px solid #64748b;
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-exit-spectator:hover {
+  background: #475569;
+  border-color: #94a3b8;
+}
+
+.spectator-watermark {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: rgba(14, 165, 233, 0.15);
+  color: #38bdf8;
+  border: 1px solid #0284c7;
+  padding: 3px 8px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 

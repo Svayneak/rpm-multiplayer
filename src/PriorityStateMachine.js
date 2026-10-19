@@ -19,10 +19,19 @@
 import { StackAlarmManager } from './StackAlarmManager.js';
 
 /**
- * Canonical MTG Turn Phases and Steps (CR 500-514)
- * @type {readonly string[]}
+ * Canonical MTG Turn Phases and Steps
  */
-export const PHASE_STEPS = Object.freeze([
+export const SEVEN_PHASE_STEPS = Object.freeze([
+  'UNTAP',
+  'UPKEEP',
+  'DRAW',
+  'PRECOMBAT_MAIN',
+  'COMBAT',
+  'POSTCOMBAT_MAIN',
+  'END'
+]);
+
+export const TWELVE_PHASE_STEPS = Object.freeze([
   'UNTAP',              // CR 502: Untap step (Active player untaps all permanents, no priority)
   'UPKEEP',             // CR 503: Upkeep step (Active player receives priority)
   'DRAW',               // CR 504: Draw step (Active player draws 1 card, receives priority)
@@ -36,6 +45,8 @@ export const PHASE_STEPS = Object.freeze([
   'END_STEP',           // CR 513: End of turn step
   'CLEANUP'             // CR 514: Cleanup step (Discard to hand size, damage removed)
 ]);
+
+export const PHASE_STEPS = SEVEN_PHASE_STEPS;
 
 /**
  * Generates an RFC-compliant Stack Item ID
@@ -195,6 +206,16 @@ export class PriorityStateMachine {
     this.priorityPlayerId = options.priorityPlayerId || this.activePlayerId;
     this.currentPhaseStep = options.initialPhaseStep || options.currentPhaseStep || 'UNTAP';
     this.turnNumber = typeof options.turnNumber === 'number' ? options.turnNumber : 1;
+    this.roundNumber = typeof options.roundNumber === 'number' ? options.roundNumber : 1;
+    this.startingPlayerId = options.startingPlayerId || this.players[0] || 'p1';
+    this.playerTurnCounts = new Map();
+    for (const pid of this.players) {
+      this.playerTurnCounts.set(pid, pid === this.activePlayerId ? 1 : 0);
+    }
+    this.phaseSteps = options.phaseSteps
+      ? [...options.phaseSteps]
+      : (options.use7Steps ? [...SEVEN_PHASE_STEPS] : [...TWELVE_PHASE_STEPS]);
+
     this.consecutivePassCount = 0;
     this.stack = [];
     this.isTurnEnded = false;
@@ -456,8 +477,14 @@ export class PriorityStateMachine {
    * @param {string} step
    */
   setPhaseStep(step) {
-    if (!PHASE_STEPS.includes(step)) {
-      throw new Error(`Invalid phase/step: ${step}`);
+    if (!this.phaseSteps.includes(step)) {
+      if (TWELVE_PHASE_STEPS.includes(step)) {
+        this.phaseSteps = [...TWELVE_PHASE_STEPS];
+      } else if (SEVEN_PHASE_STEPS.includes(step)) {
+        this.phaseSteps = [...SEVEN_PHASE_STEPS];
+      } else {
+        throw new Error(`Invalid phase/step: ${step}`);
+      }
     }
     const previousStep = this.currentPhaseStep;
     this.currentPhaseStep = step;
@@ -467,19 +494,22 @@ export class PriorityStateMachine {
     this.emit('PHASE_STEP_CHANGED', {
       previousStep,
       currentPhaseStep: this.currentPhaseStep,
+      roundNumber: this.roundNumber,
+      playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1,
       turnNumber: this.turnNumber,
-      activePlayerId: this.activePlayerId
+      activePlayerId: this.activePlayerId,
+      priorityPlayerId: this.priorityPlayerId
     });
   }
 
   /**
    * Advances to the next phase/step according to MTG CR 500-514.
-   * If advancing past CLEANUP, hands turn over to next active player.
+   * If advancing past the final step, hands turn over to next active player.
    * 
    * @returns {string} New phase step
    */
   advanceStep() {
-    const currentIndex = PHASE_STEPS.indexOf(this.currentPhaseStep);
+    const currentIndex = this.phaseSteps.indexOf(this.currentPhaseStep);
     if (currentIndex === -1) {
       throw new Error(`Unknown phase/step: ${this.currentPhaseStep}`);
     }
@@ -490,20 +520,38 @@ export class PriorityStateMachine {
     const previousStep = this.currentPhaseStep;
     const nextIndex = currentIndex + 1;
 
-    if (nextIndex >= PHASE_STEPS.length) {
+    if (nextIndex >= this.phaseSteps.length) {
       // Turn ends -> Advance to next player's UNTAP step
-      this.turnNumber++;
-      this.activePlayerId = this.nextPlayer(this.activePlayerId);
-      this.currentPhaseStep = PHASE_STEPS[0]; // 'UNTAP'
+      const previousPlayerId = this.activePlayerId;
+      const nextPlayerId = this.nextPlayer(this.activePlayerId);
+      this.activePlayerId = nextPlayerId;
+      this.currentPhaseStep = this.phaseSteps[0]; // 'UNTAP'
       this.priorityPlayerId = this.activePlayerId;
       this.consecutivePassCount = 0;
+      this.turnNumber++;
+
+      const nextTurnCount = (this.playerTurnCounts.get(nextPlayerId) || 0) + 1;
+      this.playerTurnCounts.set(nextPlayerId, nextTurnCount);
+
+      if (nextPlayerId === this.startingPlayerId) {
+        this.roundNumber++;
+      }
+
+      this.emit('TURN_ROTATED', {
+        roundNumber: this.roundNumber,
+        activePlayerId: nextPlayerId,
+        playerTurnCount: nextTurnCount,
+        previousPlayerId
+      });
 
       this.emit('TURN_ADVANCED', {
         turnNumber: this.turnNumber,
-        activePlayerId: this.activePlayerId
+        roundNumber: this.roundNumber,
+        activePlayerId: this.activePlayerId,
+        playerTurnCount: nextTurnCount
       });
     } else {
-      this.currentPhaseStep = PHASE_STEPS[nextIndex];
+      this.currentPhaseStep = this.phaseSteps[nextIndex];
       this.priorityPlayerId = this.activePlayerId;
       this.consecutivePassCount = 0;
     }
@@ -511,11 +559,34 @@ export class PriorityStateMachine {
     this.emit('PHASE_STEP_CHANGED', {
       previousStep,
       currentPhaseStep: this.currentPhaseStep,
+      roundNumber: this.roundNumber,
+      playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1,
       turnNumber: this.turnNumber,
-      activePlayerId: this.activePlayerId
+      activePlayerId: this.activePlayerId,
+      priorityPlayerId: this.priorityPlayerId
     });
 
     return this.currentPhaseStep;
+  }
+
+  /**
+   * 1-Tap shortcut to advance to next phase if priority is held and stack is empty.
+   * 
+   * @param {string} [playerId]
+   * @returns {string} New phase step
+   */
+  nextPhase(playerId) {
+    if (playerId && this.activePlayerId !== playerId) {
+      throw new PriorityViolationError(`Only active player '${this.activePlayerId}' may advance phase.`);
+    }
+    if (this.stack.length > 0) {
+      throw new PriorityViolationError('Cannot advance phase while stack is not empty.');
+    }
+    if (this.currentPhaseStep === 'PRECOMBAT_MAIN') {
+      this.setPhaseStep('COMBAT');
+      return this.currentPhaseStep;
+    }
+    return this.advanceStep();
   }
 
   /**
@@ -523,6 +594,31 @@ export class PriorityStateMachine {
    */
   advancePhaseStep() {
     return this.advanceStep();
+  }
+
+  /**
+   * Returns turn summary: roundNumber and playerTurnCount.
+   * 
+   * @param {string} [playerId]
+   * @returns {{ roundNumber: number, playerTurnCount: number, activePlayerId: string }}
+   */
+  getTurnSummary(playerId = this.activePlayerId) {
+    return {
+      roundNumber: this.roundNumber,
+      playerTurnCount: this.getPlayerTurnCount(playerId),
+      activePlayerId: this.activePlayerId
+    };
+  }
+
+  /**
+   * Returns current player turn count (T_player).
+   * 
+   * @param {string} [playerId]
+   * @returns {number}
+   */
+  getPlayerTurnCount(playerId = this.activePlayerId) {
+    const count = this.playerTurnCounts.get(playerId);
+    return (count === undefined || count === 0) ? 1 : count;
   }
 
   // ==========================================
@@ -604,8 +700,13 @@ export class PriorityStateMachine {
       this.alarmManager.cancel();
     }
 
+    const card = resolvedItem.card || resolvedItem;
+    const controllerId = resolvedItem.sourcePlayerId || resolvedItem.controllerId || card.controllerId || card.ownerId || this.activePlayerId;
+
     this.emit('STACK_RESOLVE', {
       resolvedItem,
+      card,
+      controllerId,
       remainingStackSize: this.stack.length
     });
 
@@ -808,6 +909,7 @@ export class PriorityStateMachine {
         return this.resolveTop();
       }
 
+      case 'NEXT_PHASE':
       case 'ADVANCE_PHASE_STEP': {
         return this.advanceStep();
       }

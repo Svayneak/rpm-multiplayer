@@ -213,8 +213,13 @@ export class ZoneModel {
           R: 0,
           G: 0,
           C: 0
-        }
-      }
+        },
+        landsPlayedThisTurn: 0,
+        maxLandsPerTurn: 1
+      },
+      landsPlayedThisTurn: 0,
+      maxLandsPerTurn: 1,
+      landsPerTurnLimit: 1
     };
   }
 

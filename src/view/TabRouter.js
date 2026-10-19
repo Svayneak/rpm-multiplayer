@@ -43,6 +43,7 @@ export class TabRouter extends EventEmitter {
   constructor(options = {}) {
     super();
     this.currentTab = (options.initialTab || TABS.LOBBY).toUpperCase();
+    this.strictAuthGate = Boolean(options.strictAuthGate || options.initialTab === TABS.AUTH || options.initialTab === 'AUTH');
     this.onTabChange = options.onTabChange || null;
     this.onLockoutBlocked = options.onLockoutBlocked || null;
   }
@@ -56,7 +57,7 @@ export class TabRouter extends EventEmitter {
   }
 
   /**
-   * Evaluates if navigation to targetTab is permitted under INV-AUTH-1, INV-ONBOARD-1, INV-ROUTER-2, and INV-LOCKOUT-1.
+   * Evaluates if navigation to targetTab is permitted under INV-AUTH-1, INV-ONBOARD-1, INV-ROUTER-2, INV-HUB-1, and INV-SPEC-1.
    * 
    * @param {string} targetTab 
    * @param {Object} [context={}] 
@@ -67,19 +68,24 @@ export class TabRouter extends EventEmitter {
     if (!targetTab) return false;
     const tab = targetTab.toUpperCase();
 
-    // Spectators are strictly exempt from lockout
+    // Spectators are strictly exempt from lockout and auth (INV-SPEC-1)
     if (isSpectator === true || context.isSpectator === true) {
+      return true;
+    }
+
+    // 0. Universal Lobby Landing (INV-HUB-1)
+    if (tab === TABS.LOBBY && !this.strictAuthGate) {
       return true;
     }
 
     // 1. Authentication Check (INV-AUTH-1)
     if (context.isAuthenticated === false) {
-      return tab === TABS.AUTH;
+      return tab === TABS.AUTH || (!this.strictAuthGate && tab === TABS.LOBBY);
     }
 
     // 2. Onboarding Deck Check (INV-ONBOARD-1)
     if (context.isOnboarded === false) {
-      return tab === TABS.DECKBUILDER || tab === TABS.AUTH;
+      return tab === TABS.DECKBUILDER || tab === TABS.AUTH || (!this.strictAuthGate && tab === TABS.LOBBY);
     }
 
     // 3. Match Lockout (INV-LOCKOUT-1)
@@ -97,7 +103,7 @@ export class TabRouter extends EventEmitter {
     }
 
     // 4. Arena Access Rule (INV-ROUTER-2)
-    // When match is not active, Arena is blocked unless context is a legacy call without auth context
+    // When match is not active, Arena is blocked unless spectator or legacy call without auth context
     if (tab === TABS.ARENA) {
       if (context.isAuthenticated !== undefined || context.isOnboarded !== undefined) {
         return false;
@@ -123,25 +129,37 @@ export class TabRouter extends EventEmitter {
     }
 
     const tab = targetTab.toUpperCase();
+    const isSpec = Boolean(isSpectator || context.isSpectator);
 
-    // 1. Auth required
-    if (context.isAuthenticated === false && tab !== TABS.AUTH) {
-      return {
-        success: false,
-        activeTab: this.currentTab,
-        reason: 'AUTH_REQUIRED',
-        targetTab: tab
-      };
-    }
+    if (!isSpec) {
+      // 1. Auth required
+      if (context.isAuthenticated === false) {
+        if (this.strictAuthGate && tab !== TABS.AUTH) {
+          return {
+            success: false,
+            activeTab: this.currentTab,
+            reason: 'AUTH_REQUIRED',
+            targetTab: tab
+          };
+        } else if (!this.strictAuthGate && tab !== TABS.AUTH && tab !== TABS.LOBBY) {
+          return {
+            success: false,
+            activeTab: this.currentTab,
+            reason: 'AUTH_REQUIRED',
+            targetTab: tab
+          };
+        }
+      }
 
-    // 2. Deck onboarding required
-    if (context.isOnboarded === false && (tab === TABS.LOBBY || tab === TABS.ARENA || tab === TABS.PROFILE || tab === TABS.LEADERBOARD)) {
-      return {
-        success: false,
-        activeTab: this.currentTab,
-        reason: 'DECK_ONBOARDING_REQUIRED',
-        targetTab: tab
-      };
+      // 2. Deck onboarding required
+      if (context.isOnboarded === false && (tab === TABS.ARENA || tab === TABS.PROFILE || tab === TABS.LEADERBOARD || (this.strictAuthGate && tab === TABS.LOBBY))) {
+        return {
+          success: false,
+          activeTab: this.currentTab,
+          reason: 'DECK_ONBOARDING_REQUIRED',
+          targetTab: tab
+        };
+      }
     }
 
     // 3. Active match lockout
@@ -151,7 +169,7 @@ export class TabRouter extends EventEmitter {
       context.status === 'ROLL_OFF_PHASE'
     );
 
-    if (isMatchActive && LOCKED_TABS_DURING_MATCH.has(tab) && !isSpectator && !context.isSpectator) {
+    if (isMatchActive && LOCKED_TABS_DURING_MATCH.has(tab) && !isSpec) {
       if (typeof this.onLockoutBlocked === 'function') {
         this.onLockoutBlocked(tab);
       }
@@ -169,7 +187,7 @@ export class TabRouter extends EventEmitter {
     }
 
     // 4. Arena match required when idle
-    if (tab === TABS.ARENA && !isMatchActive && !isSpectator && !context.isSpectator) {
+    if (tab === TABS.ARENA && !isMatchActive && !isSpec) {
       if (context.isAuthenticated !== undefined || context.isOnboarded !== undefined) {
         return {
           success: false,
