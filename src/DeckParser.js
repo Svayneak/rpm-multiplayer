@@ -235,8 +235,16 @@ export function parseDecklist(rawText, options = {}) {
   };
 }
 
+export const DeckParser = {
+  parse: parseDecklist,
+  parseDecklist,
+  REGEX_DECK_COMPREHENSIVE,
+  REGEX_DECK_SIMPLE
+};
+
 export default {
   parseDecklist,
+  DeckParser,
   REGEX_DECK_COMPREHENSIVE,
   REGEX_DECK_SIMPLE
 };

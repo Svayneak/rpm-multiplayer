@@ -19,6 +19,8 @@
  */
 
 import { StorageAdapter, validateAndGuardGuidelineQuota } from './StorageAdapter.js';
+import { DeckValidator, VALIDATION_ERRORS } from './DeckValidator.js';
+import { evaluateDeckSlots, DECK_SLOT_MILESTONES } from './VictoryFanfare.js';
 
 // =============================================================================
 // Constants & Semantic Vocabulary
@@ -560,6 +562,76 @@ export class DeckbuilderAI {
     this.storage = options.storage || new StorageAdapter(options);
     this.defaultUserId = options.defaultUserId || 'local_player';
     this._counter = 0;
+    this.activeDeckSlots = {
+      FREE_CONSTRUCT: 1,
+      RANKED_CONSTRUCT: 1
+    };
+    this.validator = new DeckValidator(options);
+  }
+
+  /**
+   * Validates a decklist adhering to format copy constraints and Oracle overrides (INV-DECK-1).
+   * @param {Object|Array|string} deck
+   * @param {Object} [options={}]
+   * @returns {Object}
+   */
+  validateDeck(deck, options = {}) {
+    return this.validator.validate(deck, options);
+  }
+
+  /**
+   * Evaluates unlocked deck slot milestone progression (INV-AUDIO-6).
+   * @param {Object} [profile={}]
+   * @returns {Object}
+   */
+  getDeckSlotProgression(profile = {}) {
+    const wins = profile.wins || profile.lifetimeWins || 0;
+    const perks = profile.perks || profile.totalPerks || 0;
+    return evaluateDeckSlots(wins, perks, 1);
+  }
+
+  /**
+   * Gets current active slot for a mode (1..5).
+   * @param {'FREE_CONSTRUCT'|'RANKED_CONSTRUCT'} [format='FREE_CONSTRUCT']
+   * @returns {number}
+   */
+  getActiveSlot(format = 'FREE_CONSTRUCT') {
+    const fmt = format.toUpperCase().includes('RANKED') ? 'RANKED_CONSTRUCT' : 'FREE_CONSTRUCT';
+    return this.activeDeckSlots[fmt] || 1;
+  }
+
+  /**
+   * Sets active slot for a mode after verifying milestone unlock progression (INV-AUDIO-6).
+   * 
+   * @param {number} slotNumber - 1 to 5
+   * @param {Object} [profile={}]
+   * @param {'FREE_CONSTRUCT'|'RANKED_CONSTRUCT'} [format='FREE_CONSTRUCT']
+   * @returns {{ success: boolean, slotNumber: number, unlockedSlots: number }}
+   */
+  setActiveSlot(slotNumber, profile = {}, format = 'FREE_CONSTRUCT') {
+    if (typeof slotNumber !== 'number' || slotNumber < 1 || slotNumber > 5) {
+      throw new Error(`Invalid slot number ${slotNumber}. Must be between 1 and 5.`);
+    }
+
+    const progression = this.getDeckSlotProgression(profile);
+    const unlocked = progression.unlockedSlots || 1;
+
+    if (slotNumber > unlocked) {
+      const nextMilestone = DECK_SLOT_MILESTONES.find(m => m.slot === slotNumber) || {};
+      throw new Error(
+        `Milestone Violation: Deck slot ${slotNumber} is locked. Requires ${nextMilestone.minWins || 0} wins or ${nextMilestone.minPerks || 0} perks (current: ${progression.currentWins} wins, ${progression.totalPerks} perks).`
+      );
+    }
+
+    const fmt = format.toUpperCase().includes('RANKED') ? 'RANKED_CONSTRUCT' : 'FREE_CONSTRUCT';
+    this.activeDeckSlots[fmt] = slotNumber;
+
+    return {
+      success: true,
+      slotNumber,
+      format: fmt,
+      unlockedSlots: unlocked
+    };
   }
 
   // ===========================================================================

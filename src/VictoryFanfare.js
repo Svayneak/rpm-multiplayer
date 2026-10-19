@@ -241,7 +241,7 @@ export function validateFanfareConfig(config, options = { clamp: true }) {
  * @param {number} [previouslyUnlockedSlots=1]
  * @returns {Object} Progress report
  */
-export function evaluateDeckSlots(currentWins, totalPerks, previouslyUnlockedSlots = 1) {
+export function evaluateDeckSlots(currentWins, totalPerks, previouslyUnlockedSlots) {
   let earnedSlots = 1;
   for (let i = 1; i < DECK_SLOT_MILESTONES.length; i++) {
     const milestone = DECK_SLOT_MILESTONES[i];
@@ -250,9 +250,15 @@ export function evaluateDeckSlots(currentWins, totalPerks, previouslyUnlockedSlo
     }
   }
 
+  // If invoked with (wins, perks), return slot integer directly
+  if (arguments.length < 3) {
+    return earnedSlots;
+  }
+
+  const prev = previouslyUnlockedSlots ?? 1;
   // Enforce Monotonic Anti-Regression Law (INV-AUDIO-6)
-  const finalSlots = Math.max(previouslyUnlockedSlots, earnedSlots);
-  const unlockedJustNow = finalSlots > previouslyUnlockedSlots;
+  const finalSlots = Math.max(prev, earnedSlots);
+  const unlockedJustNow = finalSlots > prev;
   const nextMilestone = DECK_SLOT_MILESTONES.find(m => m.slot === finalSlots + 1) || null;
 
   return {

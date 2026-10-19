@@ -30,7 +30,28 @@ export class ActionLexerError extends Error {
 
 // Priority Passing
 const REGEX_PASS_EN = /^(?:pass(?:\s+priority)?|go|your\s+turn|turn|done)$/i;
-const REGEX_PASS_ES = /^(?:paso(?:\s+prioridad)?|cedo(?:\s+prioridad)?|tu\s+turno|turno|listo|pasa)$/i;
+const REGEX_PASS_ES = /^(?:paso(?:\s+turno|\s+prioridad)?|cedo(?:\s+turno|\s+prioridad)?|fin\s+de\s+turno|tu\s+turno|turno|listo|pasa)$/i;
+
+// Dice & Perk Rolling
+export const REGEX_ROLL_DICE_BILINGUAL = /^(?:roll\s*(?:dice|dados|perk|d10|d20)?|tirar\s*(?:dados|dado|perk|d10|d20)?|dado\s+perk|dados?|dado)$/i;
+
+// Spanish Color Land Mapping
+export const SPANISH_COLOR_LAND_MAP = Object.freeze({
+  'tierra negra': 'Swamp',
+  'tierra azul': 'Island',
+  'tierra roja': 'Mountain',
+  'tierra verde': 'Forest',
+  'tierra blanca': 'Plains',
+  'pantano': 'Swamp',
+  'isla': 'Island',
+  'montana': 'Mountain',
+  'bosque': 'Forest',
+  'llanura': 'Plains',
+  'fetch': 'Fetchland',
+  'shock': 'Shockland',
+  'shockland': 'Shockland',
+  'trioma': 'Triome'
+});
 
 // Life Adjustments - SET
 const REGEX_LIFE_SET = /^(?:(?:life|vida|vidas|to|a|baja\s+a|sube\s+a|vida\s+a)\s*(\d+)|(?:set\s+life\s+to|poner\s+vida\s+en)\s*(\d+))$/i;
@@ -45,7 +66,7 @@ const REGEX_LIFE_PLUS_ES = /^(?:(?:gano|subo|cura)\s*(\d+)(?:\s*(?:de\s+vida|vid
 
 // Play Land
 const REGEX_LAND_EN = /^(?:play|land|drop)\s+(?:a\s+|an\s+)?([a-z0-9\s',/-]+)$/i;
-const REGEX_LAND_ES = /^(?:bajo|juego|tierra)\s+(?:un\s+|una\s+)?([a-z0-9\s',/-]+)$/i;
+const REGEX_LAND_ES = /^(?:bajo|juego|tierra|pongo)\s+(?:un\s+|una\s+)?([a-z0-9\s',/-]+)$/i;
 
 // Cast Spell
 const REGEX_CAST_EN = /^(?:cast|play)\s+([a-z0-9\s',/-]+?)(?:\s+(?:on|targeting|to)\s+([a-z0-9\s',/-]+))?$/i;
@@ -73,13 +94,19 @@ const CARD_ALIASES = Object.freeze({
   'bosque': 'Forest',
   'forest': 'Forest',
   'llanura': 'Plains',
-  'plains': 'Plains'
+  'plains': 'Plains',
+  'tierra negra': 'Swamp',
+  'tierra azul': 'Island',
+  'tierra roja': 'Mountain',
+  'tierra verde': 'Forest',
+  'tierra blanca': 'Plains'
 });
 
 // Known Land Names & Subtypes for Disambiguation
 const KNOWN_LAND_KEYWORDS = new Set([
   'mountain', 'island', 'swamp', 'forest', 'plains',
   'montana', 'isla', 'pantano', 'bosque', 'llanura',
+  'tierra negra', 'tierra azul', 'tierra roja', 'tierra verde', 'tierra blanca',
   'blood crypt', 'steam vents', 'overgrown tomb', 'watery grave',
   'sacred foundry', 'temple garden', 'breeding pool', 'stomping ground',
   'godless shrine', 'hallowed fountain', 'arid mesa', 'scalding tarn',
@@ -155,6 +182,13 @@ function buildConfirmationDisplay(actionType, cardName, params = {}) {
         badgeColor: '#E2904A'
       };
     }
+    case 'ROLL_DICE':
+      return {
+        title: 'Confirm: Roll Dice',
+        subtitle: params.diceType === 'd20' ? 'Roll d20 for turn order' : 'Roll dice / Upkeep Perk',
+        icon: 'dices',
+        badgeColor: '#9B51E0'
+      };
     default:
       return {
         title: `Confirm: ${actionType}`,
@@ -417,6 +451,30 @@ export class ActionLexer {
       };
     }
 
+    // 4.5 Dice & Perk Rolling
+    if (REGEX_ROLL_DICE_BILINGUAL.test(normalized)) {
+      const isES = /tirar|dado/i.test(normalized);
+      const isD20 = /d20/i.test(normalized);
+      const params = {
+        diceType: isD20 ? 'd20' : (/perk/i.test(normalized) ? 'perk' : 'dice')
+      };
+      return {
+        id: proposalId,
+        sessionId: context.sessionId || 'session',
+        playerId: context.activePlayerId || 'p1',
+        actionType: 'ROLL_DICE',
+        cardName: null,
+        params,
+        confidence: 1.0,
+        rawText: rawTrimmed,
+        language: isES ? 'es' : 'en',
+        status: 'STAGED',
+        createdAt: now,
+        expiresAt: now + 30000,
+        confirmationDisplay: buildConfirmationDisplay('ROLL_DICE', null, params)
+      };
+    }
+
     // 5. Land Plays vs Spells
     const landEnMatch = normalized.match(REGEX_LAND_EN);
     const landEsMatch = normalized.match(REGEX_LAND_ES);
@@ -424,16 +482,24 @@ export class ActionLexer {
     const castEsMatch = normalized.match(REGEX_CAST_ES);
     const shorthandMatch = normalized.match(REGEX_SHORTHAND_SPELL);
 
+    // Direct Spanish color land matching (e.g. "tierra azul", "tierra negra", "pantano", "isla", "bosque", "llanura")
+    const colorLandDirect = SPANISH_COLOR_LAND_MAP[normalized];
+
     // Check if definitely Land
-    const isLandVerb = /^(?:land|drop|bajo|tierra)\b/i.test(normalized);
+    const isLandVerb = /^(?:land|drop|bajo|tierra|pongo)\b/i.test(normalized);
     const isCastVerb = /^(?:cast|tiro|lanzo|casteo)\b/i.test(normalized);
 
     // Resolve Land Drops
-    if ((isLandVerb && (landEnMatch || landEsMatch)) ||
+    if (colorLandDirect || (isLandVerb && (landEnMatch || landEsMatch)) ||
         ((landEnMatch || landEsMatch) && !isCastVerb && ActionLexer.isLand((landEnMatch || landEsMatch)[1], handCards))) {
       const match = landEnMatch || landEsMatch;
-      const rawCardToken = match[1].trim();
-      const isES = Boolean(landEsMatch);
+      let rawCardToken = colorLandDirect ? normalized : (match ? match[1].trim() : normalized);
+      const isES = Boolean(landEsMatch || colorLandDirect);
+
+      // If shorthand like "tierra azul" was split into verb "tierra" and "azul"
+      if (['azul', 'roja', 'negra', 'verde', 'blanca'].includes(rawCardToken)) {
+        rawCardToken = 'tierra ' + rawCardToken;
+      }
 
       // Check hand cards match
       const handMatch = ActionLexer.matchHandCard(rawCardToken, handCards);
@@ -444,6 +510,9 @@ export class ActionLexer {
         cardName: resolvedCardName,
         cardId
       };
+      if (SPANISH_COLOR_LAND_MAP[rawCardToken]) {
+        params.canonicalLandName = SPANISH_COLOR_LAND_MAP[rawCardToken];
+      }
 
       const proposal = {
         id: proposalId,

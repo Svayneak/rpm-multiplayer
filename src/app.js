@@ -43,10 +43,17 @@ import {
   ProfileManager,
   primeAudio,
   renderFallbackBanner,
-  createDefaultProfile
+  createDefaultProfile,
+  evaluateDeckSlots
 } from './VictoryFanfare.js';
 import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
 import { generateInstanceId } from './ZoneModel.js';
+import { TabRouter, TABS, LOCKED_TABS_DURING_MATCH } from './view/TabRouter.js';
+import { DeckValidator, VALIDATION_ERRORS, ORACLE_UNLIMITED_CARDS } from './DeckValidator.js';
+import { LobbyManager, LOBBY_STATUS } from './LobbyManager.js';
+import { MatchmakingQueue } from './MatchmakingQueue.js';
+import { TurnRollOffManager, generateAuthoritativeD20 } from './TurnRollOffManager.js';
+import { SPANISH_COLOR_LAND_MAP } from './ActionLexer.js';
 
 /**
  * Standard MTG Zone Drawers
@@ -221,6 +228,355 @@ export class RPMAppController {
         ? document.querySelector(options.container)
         : options.container;
     }
+
+    // Feature 14 Tab Router & State
+    this.tabRouter = options.tabRouter || new TabRouter({
+      initialTab: options.initialTab || 'ARENA',
+      onTabChange: (newTab, prevTab) => {
+        this.reconcileDOM();
+      },
+      onLockoutBlocked: (targetTab) => {
+        this.showConcedeModal(() => {
+          this.concedeMatch();
+          this.tabRouter.navigate(targetTab, this.getMatchState(), this.isSpectator());
+        });
+      }
+    });
+
+    this.isMatchActiveFlag = Boolean(options.isMatchActive);
+    this._hasMatchStarted = Boolean(options.hasMatchStarted);
+    this.selectedHandCardId = null;
+    this.turnRollOffManager = null;
+    this.isRollOffActive = false;
+    this.rollOffResult = null;
+    this.deckbuilderMode = 'FREE_CONSTRUCT';
+    this.queueSearchStartTime = null;
+    this.queueSearchInterval = null;
+    this.activeDeckSlot = 1;
+
+    // Lobby & Matchmaking
+    this.lobbyManager = options.lobbyManager || new LobbyManager({ roomCode: 'LOBBY1' });
+    this.lobbyManager.claimSeat(this.myPlayerId, this.username, 1);
+    this.lobbyManager.on('LOBBY_READY_RESET', () => {
+      this.reconcileDOM();
+    });
+    this.lobbyManager.on('MATCH_START_TRIGGERED', () => {
+      this.startRollOff();
+    });
+    this.matchmakingQueue = options.matchmakingQueue || new MatchmakingQueue();
+  }
+
+  isMatchActive() {
+    if (this.isMatchActiveFlag) return true;
+    if (this._hasMatchStarted) return true;
+    if (this.relayClient?.roomStatus === 'MATCH_ACTIVE') return true;
+    return false;
+  }
+
+  getMatchState() {
+    return {
+      status: this.isMatchActive() ? 'ACTIVE' : 'IDLE',
+      isMatchActive: this.isMatchActive()
+    };
+  }
+
+  isSpectator() {
+    return Boolean(this.options.isSpectator || this.relayClient?.isSpectator);
+  }
+
+  startMatch() {
+    this._hasMatchStarted = true;
+    this.isMatchActiveFlag = true;
+    this.dealStartingHands();
+    this.reconcileDOM();
+  }
+
+  concedeMatch() {
+    this.isMatchActiveFlag = false;
+    this._hasMatchStarted = false;
+    if (this.tabletopState && typeof this.tabletopState.eliminatePlayer === 'function') {
+      try {
+        this.tabletopState.eliminatePlayer(this.myPlayerId, 'CONCEDED');
+      } catch (_) {}
+    }
+    if (this.relayClient && typeof this.relayClient.send === 'function') {
+      try {
+        this.relayClient.send({ type: 'CONCEDE_MATCH' });
+      } catch (_) {}
+    }
+    const modalRoot = this.container?.querySelector('#modal-root');
+    if (modalRoot) {
+      const cm = modalRoot.querySelector('#concede-modal');
+      if (cm) cm.remove();
+      if (!modalRoot.querySelector('.modal-dialog-box')) {
+        modalRoot.setAttribute('aria-hidden', 'true');
+      }
+    }
+    this.tabRouter.unlockAll?.();
+    this.tabRouter.reset('LOBBY');
+    this.reconcileDOM();
+  }
+
+  showConcedeModal(onConfirm, onCancel) {
+    const modalRoot = this.container?.querySelector('#modal-root');
+    if (!modalRoot) return;
+
+    const existing = modalRoot.querySelector('#concede-modal');
+    if (existing) {
+      try { existing.remove(); } catch (_) {}
+    }
+
+    modalRoot.setAttribute('aria-hidden', 'false');
+    const concedeModal = document.createElement('div');
+    concedeModal.id = 'concede-modal';
+    concedeModal.className = 'modal-backdrop concede-modal-backdrop';
+    concedeModal.innerHTML = `
+      <div class="modal-dialog-box" role="dialog" aria-modal="true" aria-label="Concede Match Confirmation">
+        <h2 style="color: #ff4d4d; margin-top: 0;">⚠️ ACTIVE MATCH IN PROGRESS</h2>
+        <p style="color: #cbd5e1; font-size: 0.95rem; line-height: 1.5;">
+          You are currently in an active match in the Arena. Leaving this screen will immediately <strong>CONCEDE</strong> the game to your opponent.
+        </p>
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+          <button id="btn-concede-cancel" class="btn btn-secondary">Keep Playing</button>
+          <button id="btn-concede-confirm" class="btn btn-danger" style="background: #dc2626; color: white;">Concede Match & Exit</button>
+        </div>
+      </div>
+    `;
+
+    const btnCancel = concedeModal.querySelector('#btn-concede-cancel');
+    const btnConfirm = concedeModal.querySelector('#btn-concede-confirm');
+
+    const cleanup = () => {
+      try { concedeModal.remove(); } catch (_) {}
+      const remaining = modalRoot.querySelectorAll('.modal-dialog-box, #concede-modal');
+      if (remaining.length === 0) {
+        modalRoot.setAttribute('aria-hidden', 'true');
+      }
+    };
+
+    btnCancel.addEventListener('click', () => {
+      cleanup();
+      if (typeof onCancel === 'function') onCancel();
+    });
+
+    btnConfirm.addEventListener('click', () => {
+      cleanup();
+      if (typeof onConfirm === 'function') onConfirm();
+    });
+
+    modalRoot.appendChild(concedeModal);
+  }
+
+  dealStartingHands() {
+    const starterCardNames = [
+      'Steam Vents', 'Mountain', 'Swamp', 'Lightning Bolt', 'Goblin Guide', 'Monastery Swiftspear', 'Lava Spike'
+    ];
+    for (const pid of this.playerIds) {
+      const p = this.tabletopState?.players?.[pid];
+      if (p) {
+        if (!p.zones) {
+          p.zones = { hand: [], library: [], graveyard: [], exile: [], battlefield: [] };
+        }
+        if (!p.zones.hand || p.zones.hand.length === 0) {
+          p.zones.hand = starterCardNames.map((name, idx) => ({
+            instanceId: `card_${pid}_${idx}_${Date.now()}`,
+            name,
+            typeLine: name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature'),
+            manaCost: name.includes('Bolt') || name.includes('Spike') || name.includes('Guide') || name.includes('Swiftspear') ? '{R}' : '',
+            owner: pid,
+            zone: 'HAND'
+          }));
+        }
+      }
+    }
+  }
+
+  playLandFromHand(card) {
+    const p = this.tabletopState?.players?.[this.myPlayerId];
+    if (!p) return;
+    p.zones.hand = (p.zones.hand || []).filter(c => (c.instanceId || c.id || c.name) !== (card.instanceId || card.id || card.name));
+    if (!p.zones.battlefield) p.zones.battlefield = [];
+    const battlefieldCard = {
+      ...card,
+      subzone: 'lands',
+      isTapped: false,
+      zone: 'BATTLEFIELD'
+    };
+    p.zones.battlefield.push(battlefieldCard);
+    this.selectedHandCardId = null;
+    this.dispatchAction({
+      type: 'PLAY_LAND',
+      payload: { playerId: this.myPlayerId, cardName: card.name, cardInstanceId: card.instanceId }
+    }, { origin: 'LOCAL' });
+    this.reconcileDOM();
+  }
+
+  castSpellToStack(card) {
+    const p = this.tabletopState?.players?.[this.myPlayerId];
+    if (p) {
+      p.zones.hand = (p.zones.hand || []).filter(c => (c.instanceId || c.id || c.name) !== (card.instanceId || card.id || card.name));
+    }
+    this.selectedHandCardId = null;
+    this.dispatchAction({
+      type: 'CAST_SPELL',
+      payload: { playerId: this.myPlayerId, cardName: card.name, cardInstanceId: card.instanceId }
+    }, { origin: 'LOCAL' });
+    this.reconcileDOM();
+  }
+
+  playLandByName(landName) {
+    const p = this.tabletopState?.players?.[this.myPlayerId];
+    if (!p) return;
+    const hand = p.zones?.hand || [];
+    const idx = hand.findIndex(c => c.name.toLowerCase() === landName.toLowerCase() || (c.typeLine || '').toLowerCase().includes('land'));
+    let card;
+    if (idx !== -1) {
+      [card] = hand.splice(idx, 1);
+    } else {
+      card = {
+        instanceId: `land_${Date.now()}`,
+        name: landName,
+        typeLine: 'Basic Land — ' + landName,
+        zone: 'BATTLEFIELD'
+      };
+    }
+    if (!p.zones.battlefield) p.zones.battlefield = [];
+    p.zones.battlefield.push({ ...card, subzone: 'lands', isTapped: false, zone: 'BATTLEFIELD' });
+    this.reconcileDOM();
+  }
+
+  castSpellByName(spellName, targets = null) {
+    const p = this.tabletopState?.players?.[this.myPlayerId];
+    if (p && Array.isArray(p.zones?.hand)) {
+      const idx = p.zones.hand.findIndex(c => c.name.toLowerCase() === spellName.toLowerCase());
+      if (idx !== -1) {
+        p.zones.hand.splice(idx, 1);
+      }
+    }
+    if (this.priorityMachine) {
+      try {
+        this.priorityMachine.dispatch('CAST_SPELL', {
+          playerId: this.myPlayerId,
+          cardName: spellName,
+          targets
+        });
+      } catch (_) {}
+    }
+    this.reconcileDOM();
+  }
+
+  triggerDiceRoll(diceType = 'dice') {
+    if (diceType === 'd20' || this.isRollOffActive) {
+      this.submitRollOff();
+    } else {
+      const roll = executeAuthoritativeRoll();
+      this.handlePerkRolled({
+        ...roll,
+        isMiss: roll.perkId === null
+      });
+    }
+  }
+
+  startRollOff(playerIds = this.playerIds) {
+    this.isRollOffActive = true;
+    this.rollOffResult = null;
+    this.turnRollOffManager = new TurnRollOffManager(playerIds && playerIds.length > 0 ? playerIds : ['p1', 'p2']);
+    this.reconcileDOM();
+  }
+
+  submitRollOff(forcedValue = null) {
+    return this.submitRollOffForPlayer(this.myPlayerId, forcedValue);
+  }
+
+  submitRollOffForPlayer(playerId, forcedValue = null) {
+    if (!this.turnRollOffManager) {
+      this.startRollOff();
+    }
+    const roll = this.turnRollOffManager.submitRoll(playerId, forcedValue);
+
+    // Auto-roll for bot opponents if in solo mode
+    if (playerId === this.myPlayerId) {
+      if (this.perkinsAgent || this.playerIds.includes('perkins') || this.playerIds.includes('p2_perkins')) {
+        const otherPlayers = this.playerIds.filter(pid => pid !== this.myPlayerId);
+        for (const opId of otherPlayers) {
+          if (this.turnRollOffManager.pendingPlayerIds.has(opId)) {
+            this.turnRollOffManager.submitRoll(opId);
+          }
+        }
+      }
+    }
+
+    if (this.turnRollOffManager.isRoundComplete()) {
+      const res = this.turnRollOffManager.evaluateRound();
+      this.rollOffResult = res;
+      if (res.isComplete) {
+        if (this.priorityMachine) {
+          this.priorityMachine.players = res.sortedPlayers;
+          this.priorityMachine.activePlayerId = res.sortedPlayers[0];
+          this.priorityMachine.priorityPlayerId = res.sortedPlayers[0];
+        }
+        this.isRollOffActive = false;
+        this.startMatch();
+      }
+    }
+    this.reconcileDOM();
+    return roll;
+  }
+
+  start1v1QueueSearch() {
+    this.queueSearchStartTime = Date.now();
+    const banner = this.container?.querySelector('#queue-search-banner');
+    const btnFind = this.container?.querySelector('#btn-find-1v1');
+    if (banner) banner.style.display = 'flex';
+    if (btnFind) btnFind.style.display = 'none';
+
+    if (this.queueSearchInterval) clearInterval(this.queueSearchInterval);
+    this.queueSearchInterval = setInterval(() => {
+      this._updateQueueTimer();
+    }, 1000);
+    this._updateQueueTimer();
+  }
+
+  cancel1v1QueueSearch() {
+    if (this.queueSearchInterval) {
+      clearInterval(this.queueSearchInterval);
+      this.queueSearchInterval = null;
+    }
+    this.queueSearchStartTime = null;
+    const banner = this.container?.querySelector('#queue-search-banner');
+    const btnFind = this.container?.querySelector('#btn-find-1v1');
+    const wModal = this.container?.querySelector('#queue-watchdog-modal');
+    if (banner) banner.style.display = 'none';
+    if (btnFind) btnFind.style.display = 'inline-block';
+    if (wModal) wModal.style.display = 'none';
+  }
+
+  _updateQueueTimer() {
+    if (!this.queueSearchStartTime) return;
+    const elapsedSec = Math.floor((Date.now() - this.queueSearchStartTime) / 1000);
+    const mm = String(Math.floor(elapsedSec / 60)).padStart(2, '0');
+    const ss = String(elapsedSec % 60).padStart(2, '0');
+    const label = this.container?.querySelector('#queue-timer-label');
+    if (label) {
+      label.textContent = `🔍 Searching for Opponent... ${mm}:${ss}`;
+    }
+
+    // 45s Perkins Watchdog (INV-QUEUE-1)
+    if (elapsedSec >= 45) {
+      const wModal = this.container?.querySelector('#queue-watchdog-modal');
+      if (wModal) wModal.style.display = 'block';
+    }
+  }
+
+  toggleLobbyReady() {
+    if (!this.lobbyManager) return;
+    const mySlot = Array.from(this.lobbyManager.slots.values()).find(s => s.playerId === this.myPlayerId);
+    if (!mySlot) {
+      this.lobbyManager.claimSeat(this.myPlayerId, this.username, 1);
+    }
+    const currentReady = Boolean(this.lobbyManager.slots.get(mySlot?.slotId || 1)?.isReady);
+    this.lobbyManager.setReady(this.myPlayerId, !currentReady);
+    this.reconcileDOM();
   }
 
   // ==========================================================================
@@ -318,6 +674,13 @@ export class RPMAppController {
       try { this.perkinsAgent.destroy(); } catch (_) {}
       this.perkinsAgent = null;
     }
+    if (this.queueSearchInterval) {
+      clearInterval(this.queueSearchInterval);
+      this.queueSearchInterval = null;
+    }
+    if (this.lobbyManager) {
+      try { this.lobbyManager.removeAllListeners(); } catch (_) {}
+    }
 
     // 5. Clear container DOM
     if (this.container) {
@@ -357,6 +720,13 @@ export class RPMAppController {
           <span class="brand-glyph">⚔️</span>
           <h1 class="brand-title">RPM TABLETOP</h1>
         </div>
+        <nav class="header-nav-tabs" role="tablist" aria-label="Main Navigation">
+          <button id="tab-btn-arena" class="nav-tab active" data-tab="ARENA" role="tab" aria-selected="true">🏟️ Arena</button>
+          <button id="tab-btn-deckbuilder" class="nav-tab" data-tab="DECKBUILDER" role="tab" aria-selected="false">📚 Deckbuilder</button>
+          <button id="tab-btn-lobby" class="nav-tab" data-tab="LOBBY" role="tab" aria-selected="false">🔍 Lobby</button>
+          <button id="tab-btn-profile" class="nav-tab" data-tab="PROFILE" role="tab" aria-selected="false">👤 Profile</button>
+          <button id="tab-btn-leaderboard" class="nav-tab" data-tab="LEADERBOARD" role="tab" aria-selected="false">🏆 Leaderboard</button>
+        </nav>
         <div class="header-room-controls">
           <input type="text" id="room-code-input" class="room-input" placeholder="ROOM CODE" maxlength="8" spellcheck="false" autocomplete="off" />
           <button id="btn-join-room" class="btn btn-secondary">Join</button>
@@ -384,6 +754,79 @@ export class RPMAppController {
         </div>
       `;
       this.container.appendChild(headerBar);
+    } else {
+      let navTabs = headerBar.querySelector('.header-nav-tabs');
+      if (!navTabs) {
+        navTabs = document.createElement('nav');
+        navTabs.className = 'header-nav-tabs';
+        navTabs.setAttribute('role', 'tablist');
+        navTabs.setAttribute('aria-label', 'Main Navigation');
+        navTabs.innerHTML = `
+          <button id="tab-btn-arena" class="nav-tab active" data-tab="ARENA" role="tab" aria-selected="true">🏟️ Arena</button>
+          <button id="tab-btn-deckbuilder" class="nav-tab" data-tab="DECKBUILDER" role="tab" aria-selected="false">📚 Deckbuilder</button>
+          <button id="tab-btn-lobby" class="nav-tab" data-tab="LOBBY" role="tab" aria-selected="false">🔍 Lobby</button>
+          <button id="tab-btn-profile" class="nav-tab" data-tab="PROFILE" role="tab" aria-selected="false">👤 Profile</button>
+          <button id="tab-btn-leaderboard" class="nav-tab" data-tab="LEADERBOARD" role="tab" aria-selected="false">🏆 Leaderboard</button>
+        `;
+        const brand = headerBar.querySelector('.header-brand');
+        if (brand && brand.nextSibling) {
+          headerBar.insertBefore(navTabs, brand.nextSibling);
+        } else {
+          headerBar.appendChild(navTabs);
+        }
+      }
+    }
+
+    let viewHost = this.container.querySelector('#view-host');
+    if (!viewHost) {
+      viewHost = document.createElement('div');
+      viewHost.id = 'view-host';
+      viewHost.className = 'rpm-view-host';
+      this.container.appendChild(viewHost);
+    }
+
+    let viewArena = viewHost.querySelector('#view-arena');
+    if (!viewArena) {
+      viewArena = document.createElement('div');
+      viewArena.id = 'view-arena';
+      viewArena.className = 'view-pane active';
+      viewHost.appendChild(viewArena);
+    }
+
+    let viewDeckbuilder = viewHost.querySelector('#view-deckbuilder');
+    if (!viewDeckbuilder) {
+      viewDeckbuilder = document.createElement('div');
+      viewDeckbuilder.id = 'view-deckbuilder';
+      viewDeckbuilder.className = 'view-pane';
+      viewDeckbuilder.style.display = 'none';
+      viewHost.appendChild(viewDeckbuilder);
+    }
+
+    let viewLobby = viewHost.querySelector('#view-lobby');
+    if (!viewLobby) {
+      viewLobby = document.createElement('div');
+      viewLobby.id = 'view-lobby';
+      viewLobby.className = 'view-pane';
+      viewLobby.style.display = 'none';
+      viewHost.appendChild(viewLobby);
+    }
+
+    let viewProfile = viewHost.querySelector('#view-profile');
+    if (!viewProfile) {
+      viewProfile = document.createElement('div');
+      viewProfile.id = 'view-profile';
+      viewProfile.className = 'view-pane';
+      viewProfile.style.display = 'none';
+      viewHost.appendChild(viewProfile);
+    }
+
+    let viewLeaderboard = viewHost.querySelector('#view-leaderboard');
+    if (!viewLeaderboard) {
+      viewLeaderboard = document.createElement('div');
+      viewLeaderboard.id = 'view-leaderboard';
+      viewLeaderboard.className = 'view-pane';
+      viewLeaderboard.style.display = 'none';
+      viewHost.appendChild(viewLeaderboard);
     }
 
     let mainArena = this.container.querySelector('#tabletop-arena');
@@ -392,7 +835,9 @@ export class RPMAppController {
       mainArena.id = 'tabletop-arena';
       mainArena.className = 'rpm-tabletop-arena';
       mainArena.setAttribute('role', 'main');
-      this.container.appendChild(mainArena);
+      viewArena.appendChild(mainArena);
+    } else if (mainArena.parentElement !== viewArena) {
+      viewArena.appendChild(mainArena);
     }
 
     if (!opponentsContainer) {
@@ -456,12 +901,34 @@ export class RPMAppController {
       mainArena.appendChild(playerDashboard);
     }
 
+    let rollOffOverlay = this.container.querySelector('#roll-off-overlay');
+    if (!rollOffOverlay) {
+      rollOffOverlay = document.createElement('div');
+      rollOffOverlay.id = 'roll-off-overlay';
+      rollOffOverlay.className = 'roll-off-overlay';
+      rollOffOverlay.style.display = 'none';
+      rollOffOverlay.setAttribute('aria-live', 'assertive');
+      rollOffOverlay.innerHTML = `
+        <div class="roll-off-box">
+          <h2 class="roll-off-title">🎲 Pre-Game d20 Roll-Off</h2>
+          <p id="roll-off-status-text" class="roll-off-status">Roll d20 to determine turn order (Highest goes first).</p>
+          <div id="roll-off-results-list" class="roll-off-results"></div>
+          <div class="roll-off-actions">
+            <button id="btn-roll-d20" class="btn btn-primary btn-roll-d20">🎲 Roll d20 for Turn Order</button>
+          </div>
+        </div>
+      `;
+      viewArena.appendChild(rollOffOverlay);
+    }
+
     if (!chatDrawer) {
       chatDrawer = document.createElement('aside');
       chatDrawer.id = 'chat-drawer';
       chatDrawer.className = 'rpm-chat-drawer';
       chatDrawer.setAttribute('aria-label', 'Chat and Turn Commands');
-      this.container.appendChild(chatDrawer);
+      viewArena.appendChild(chatDrawer);
+    } else if (chatDrawer.parentElement !== viewArena) {
+      viewArena.appendChild(chatDrawer);
     }
 
     if (!modalRoot) {
@@ -672,6 +1139,26 @@ export class RPMAppController {
       btnHold.addEventListener('click', handler);
       this._domListeners.push(() => btnHold.removeEventListener('click', handler));
     }
+
+    // Top-Level Nav Tabs
+    const navTabs = this.container.querySelectorAll('.nav-tab');
+    navTabs.forEach(btn => {
+      const handler = () => {
+        const targetTab = btn.getAttribute('data-tab');
+        if (!targetTab) return;
+        this.tabRouter.navigate(targetTab, this.getMatchState(), this.isSpectator());
+      };
+      btn.addEventListener('click', handler);
+      this._domListeners.push(() => btn.removeEventListener('click', handler));
+    });
+
+    // Roll-off Button
+    const btnRollD20 = this.container.querySelector('#btn-roll-d20');
+    if (btnRollD20) {
+      const handler = () => this.submitRollOff();
+      btnRollD20.addEventListener('click', handler);
+      this._domListeners.push(() => btnRollD20.removeEventListener('click', handler));
+    }
   }
 
   // ==========================================================================
@@ -787,7 +1274,7 @@ export class RPMAppController {
     agent.attach(this);
     this.perkinsAgent = agent;
 
-    this.reconcileDOM();
+    this.startMatch();
     return agent;
   }
 
@@ -939,13 +1426,32 @@ export class RPMAppController {
         }
         break;
 
-      case 'TURN_COMMAND':
-        if (this.dualChat && payload.command) {
-          try {
-            this.dualChat.submitTurnCommand(payload.command, { senderId: payload.senderId || this.myPlayerId });
-          } catch (_) {}
+      case 'TURN_COMMAND': {
+        const cmdText = payload.command || action.command || payload.text;
+        if (cmdText) {
+          let proposal = null;
+          if (this.dualChat) {
+            try {
+              proposal = this.dualChat.submitTurnCommand(cmdText, {
+                senderId: payload.senderId || action.playerId || this.myPlayerId,
+                handCards: this.tabletopState?.players?.[this.myPlayerId]?.zones?.hand || []
+              });
+            } catch (_) {}
+          }
+          if (!proposal && this.actionLexer) {
+            try {
+              proposal = ActionLexer.parse(cmdText, {
+                activePlayerId: this.myPlayerId,
+                handCards: this.tabletopState?.players?.[this.myPlayerId]?.zones?.hand || []
+              });
+            } catch (_) {}
+          }
+          if (proposal && (proposal.status === 'READY' || proposal.status === 'STAGED')) {
+            this.executeActionProposal(proposal);
+          }
         }
         break;
+      }
 
       case 'PLAYER_CONCEDED':
       case 'PLAYER_ELIMINATED':
@@ -965,6 +1471,62 @@ export class RPMAppController {
     }
 
     // Reconcile DOM views
+    this.reconcileDOM();
+  }
+
+  /**
+   * Executes an ActionLexer proposal directly onto tabletop state.
+   * @param {Object} proposal
+   */
+  executeActionProposal(proposal) {
+    if (!proposal) return;
+    switch (proposal.actionType) {
+      case 'PLAY_LAND': {
+        const landName = proposal.params?.canonicalLandName || proposal.params?.cardName || proposal.cardName || proposal.params?.landName;
+        if (landName) {
+          this.playLandByName(landName);
+        }
+        break;
+      }
+      case 'CAST_SPELL': {
+        const spellName = proposal.params?.cardName || proposal.cardName || proposal.params?.spellName;
+        if (spellName) {
+          this.castSpellByName(spellName, proposal.params?.targets);
+        }
+        break;
+      }
+      case 'ROLL_DICE': {
+        const diceType = proposal.params?.diceType || 'dice';
+        this.triggerDiceRoll(diceType);
+        break;
+      }
+      case 'PASS_PRIORITY': {
+        if (this.priorityMachine) {
+          try {
+            this.priorityMachine.passPriority(this.myPlayerId);
+          } catch (_) {}
+        }
+        break;
+      }
+      case 'ADJUST_LIFE': {
+        const mode = proposal.params?.mode;
+        const amount = proposal.params?.amount;
+        if (mode === 'SET' && amount !== undefined) {
+          this.dispatchAction({
+            type: 'CHANGE_LIFE',
+            payload: { playerId: this.myPlayerId, amount }
+          });
+        } else if (mode === 'DELTA' && amount !== undefined) {
+          this.dispatchAction({
+            type: 'CHANGE_LIFE',
+            payload: { playerId: this.myPlayerId, delta: amount }
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
     this.reconcileDOM();
   }
 
@@ -1274,20 +1836,58 @@ export class RPMAppController {
   reconcileDOM() {
     if (!this.container || this.isDestroyed) return;
 
-    // 1. Header Bar
+    // 1. Header Bar & Nav Tabs
     this._reconcileHeader();
 
-    // 2. Opponents Pod (Auto-scaling 1 to 5 opponents)
+    // 2. Tab Panes Visibility
+    this._reconcileTabPanes();
+
+    // 3. Opponents Pod (Auto-scaling 1 to 5 opponents)
     this._reconcileOpponents();
 
-    // 3. Center Battlefield & Stack
+    // 4. Center Battlefield & Stack
     this._reconcileStack();
 
-    // 4. Bottom Player Dashboard
+    // 5. Bottom Player Dashboard
     this._reconcilePlayerDashboard();
 
-    // 5. Dual-Channel Chat
+    // 6. Dual-Channel Chat
     this._reconcileChat();
+
+    // 7. Roll-off Overlay
+    this._reconcileRollOff();
+
+    // 8. Views
+    this._reconcileDeckbuilderView();
+    this._reconcileLobbyView();
+    this._reconcileProfileView();
+    this._reconcileLeaderboardView();
+  }
+
+  /**
+   * Reconciles Tab Panes visibility.
+   * @private
+   */
+  _reconcileTabPanes() {
+    const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const panes = {
+      ARENA: this.container.querySelector('#view-arena'),
+      DECKBUILDER: this.container.querySelector('#view-deckbuilder'),
+      LOBBY: this.container.querySelector('#view-lobby'),
+      PROFILE: this.container.querySelector('#view-profile'),
+      LEADERBOARD: this.container.querySelector('#view-leaderboard')
+    };
+
+    for (const [tabKey, el] of Object.entries(panes)) {
+      if (!el) continue;
+      if (tabKey === curTab) {
+        el.style.display = 'block';
+        el.classList.add('active');
+      } else {
+        el.style.display = 'none';
+        el.classList.remove('active');
+      }
+    }
   }
 
   /**
@@ -1306,6 +1906,26 @@ export class RPMAppController {
     if (currentPhaseName && this.priorityMachine) {
       currentPhaseName.textContent = capitalize(this.priorityMachine.currentPhaseStep || 'Untap');
     }
+
+    // Reconcile Nav Tabs
+    const currentTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const isLocked = this.isMatchActive() && !this.isSpectator();
+
+    const navTabs = this.container.querySelectorAll('.nav-tab');
+    navTabs.forEach(btn => {
+      const tabName = (btn.getAttribute('data-tab') || '').toUpperCase();
+      const isActive = tabName === currentTab;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+
+      if (isLocked && LOCKED_TABS_DURING_MATCH.has(tabName)) {
+        btn.classList.add('tab-locked');
+        btn.setAttribute('title', 'Locked during active match. Concede to navigate away.');
+      } else {
+        btn.classList.remove('tab-locked');
+        btn.removeAttribute('title');
+      }
+    });
   }
 
   /**
@@ -1510,7 +2130,22 @@ export class RPMAppController {
     const poison = pData?.resources?.poison ?? 0;
     const energy = pData?.resources?.energy ?? 0;
     const mana = pData?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
-    const hand = Array.isArray(pData?.zones?.hand) ? pData.zones.hand : [];
+    const hand = Array.isArray(pData?.zones?.hand) ? pData.zones.hand : (Array.isArray(pData?.hand) ? pData.hand : []);
+
+    // Random Perk Upkeep Dormancy (INV-PERK-UI-1)
+    const unlockTurn = (this.playerIds.length <= 2 ? 4 : 2);
+    const currentTurn = this.priorityMachine?.turnNumber || 1;
+    const isDormant = currentTurn < unlockTurn;
+    const emblemText = isDormant
+      ? `🔮 Perk: Dormant until Turn ${unlockTurn}`
+      : `🔮 Perk Emblem: Active`;
+
+    // Battlefield cards
+    const battlefieldCards = Array.isArray(pData?.zones?.battlefield)
+      ? pData.zones.battlefield
+      : (Array.isArray(pData?.battlefield) ? pData.battlefield : []);
+    const lands = battlefieldCards.filter(c => (c.typeLine || c.type || '').toLowerCase().includes('land') || c.subzone === 'lands');
+    const creatures = battlefieldCards.filter(c => (c.typeLine || c.type || '').toLowerCase().includes('creature') || c.subzone === 'creatures');
 
     dashboard.innerHTML = `
       <div class="player-stats-row">
@@ -1533,8 +2168,18 @@ export class RPMAppController {
           <span class="mana-chip chip-g">G:${mana.G || 0}</span>
           <span class="mana-chip chip-c">C:${mana.C || 0}</span>
         </div>
-        <div class="command-emblem-badge">
-          <span>🔮 Perk Emblem: Active</span>
+        <div class="command-emblem-badge ${isDormant ? 'dormant' : 'active'}">
+          <span id="command-emblem-text">${emblemText}</span>
+        </div>
+      </div>
+      <div id="battlefield-strips" class="player-battlefield-strips">
+        <div id="battlefield-lands" class="battlefield-strip battlefield-lands">
+          <div class="strip-label">Lands (<span class="lands-count">${lands.length}</span>)</div>
+          <div class="strip-cards">${lands.map(c => `<span class="battlefield-card-chip land-chip ${c.isTapped ? 'tapped' : ''}">${c.name}</span>`).join('')}</div>
+        </div>
+        <div id="battlefield-creatures" class="battlefield-strip battlefield-creatures">
+          <div class="strip-label">Creatures (<span class="creatures-count">${creatures.length}</span>)</div>
+          <div class="strip-cards">${creatures.map(c => `<span class="battlefield-card-chip creature-chip ${c.isTapped ? 'tapped' : ''}">${c.name}</span>`).join('')}</div>
         </div>
       </div>
       <div id="player-hand" class="player-hand-grid"></div>
@@ -1556,12 +2201,67 @@ export class RPMAppController {
     const handGrid = dashboard.querySelector('#player-hand');
     if (handGrid) {
       hand.forEach(card => {
+        const cardId = card.instanceId || card.id || card.name;
+        const isSelected = this.selectedHandCardId === cardId;
         const chip = document.createElement('div');
-        chip.className = 'hand-card-chip';
+        chip.className = `hand-card-chip ${isSelected ? 'selected' : ''}`;
         chip.textContent = card.name || 'Card';
-        chip.addEventListener('click', () => {
-          this.openModal('CARD_OVERLAY', card);
+
+        if (isSelected) {
+          const isLand = (card.typeLine || card.type || '').toLowerCase().includes('land');
+          const popover = document.createElement('div');
+          popover.className = 'hand-card-popover';
+          popover.innerHTML = `
+            ${isLand
+              ? `<button id="btn-play-land" class="btn btn-popover-action">🏔️ Play Land</button>`
+              : `<button id="btn-cast-spell" class="btn btn-popover-action">⚡ Cast to Stack</button>`
+            }
+            <button id="btn-inspect-card" class="btn btn-popover-inspect">🔍 Inspect</button>
+            <button id="btn-close-popover" class="btn btn-popover-close">✖️</button>
+          `;
+
+          const btnPlay = popover.querySelector('#btn-play-land');
+          if (btnPlay) {
+            btnPlay.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.playLandFromHand(card);
+            });
+          }
+
+          const btnCast = popover.querySelector('#btn-cast-spell');
+          if (btnCast) {
+            btnCast.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.castSpellToStack(card);
+            });
+          }
+
+          const btnInspect = popover.querySelector('#btn-inspect-card');
+          if (btnInspect) {
+            btnInspect.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.openModal('CARD_OVERLAY', card);
+            });
+          }
+
+          const btnClose = popover.querySelector('#btn-close-popover');
+          if (btnClose) {
+            btnClose.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.selectedHandCardId = null;
+              this.reconcileDOM();
+            });
+          }
+
+          chip.appendChild(popover);
+        }
+
+        chip.addEventListener('click', (ev) => {
+          if (ev.target.closest('.hand-card-popover')) return;
+          this.selectedHandCardId = (this.selectedHandCardId === cardId ? null : cardId);
+          this.reconcileDOM();
         });
+
         handGrid.appendChild(chip);
       });
     }
@@ -1702,6 +2402,424 @@ export class RPMAppController {
         chatFeed.scrollTop = chatFeed.scrollHeight;
       }
     }
+  }
+
+  /**
+   * Reconciles Pre-Game d20 Roll-Off overlay.
+   * @private
+   */
+  _reconcileRollOff() {
+    const overlay = this.container.querySelector('#roll-off-overlay');
+    if (!overlay) return;
+
+    if (this.isRollOffActive) {
+      overlay.style.display = 'flex';
+      const statusText = overlay.querySelector('#roll-off-status-text');
+      const resultsList = overlay.querySelector('#roll-off-results-list');
+      const rollBtn = overlay.querySelector('#btn-roll-d20');
+
+      if (this.turnRollOffManager) {
+        const round = this.turnRollOffManager.round;
+        const hasTies = this.rollOffResult?.hasTies;
+        const pending = this.turnRollOffManager.pendingPlayerIds;
+
+        if (statusText) {
+          if (this.rollOffResult?.isComplete) {
+            const sorted = this.rollOffResult.sortedPlayers || [];
+            const winner = sorted[0];
+            statusText.textContent = `Turn order resolved! ${winner === this.myPlayerId ? 'You take' : `Player ${winner.toUpperCase()} takes`} Turn 1. Starting match...`;
+          } else if (hasTies) {
+            statusText.textContent = `Round ${round} (Tie Breaker): Tied players re-roll!`;
+          } else {
+            statusText.textContent = `Round ${round}: Roll d20 for Turn Order`;
+          }
+        }
+
+        if (resultsList) {
+          const rolls = Array.from(this.turnRollOffManager.currentRolls.entries());
+          resultsList.innerHTML = rolls.map(([pid, val]) => `
+            <div class="roll-result-chip">
+              <span class="roll-player">${pid === this.myPlayerId ? 'You' : pid.toUpperCase()}:</span>
+              <span class="roll-val">🎲 ${val}</span>
+            </div>
+          `).join('');
+        }
+
+        if (rollBtn) {
+          const myPending = pending.has(this.myPlayerId);
+          rollBtn.disabled = !myPending;
+          rollBtn.textContent = myPending ? '🎲 Roll d20 for Turn Order' : '✅ Roll Submitted (Waiting for others...)';
+        }
+      }
+    } else {
+      overlay.style.display = 'none';
+    }
+  }
+
+  /**
+   * Reconciles Deckbuilder View panel.
+   * @private
+   */
+  _reconcileDeckbuilderView() {
+    const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const view = this.container.querySelector('#view-deckbuilder');
+    if (!view) return;
+    if (curTab !== 'DECKBUILDER') return;
+
+    if (!view.querySelector('.deckbuilder-view-container')) {
+      view.innerHTML = `
+        <div class="deckbuilder-view-container">
+          <div class="format-toggle-bar">
+            <button id="btn-mode-free" class="btn btn-mode-toggle ${this.deckbuilderMode === 'FREE_CONSTRUCT' ? 'active' : ''}" data-mode="FREE_CONSTRUCT">⚡ Free Construct</button>
+            <button id="btn-mode-ranked" class="btn btn-mode-toggle ${this.deckbuilderMode === 'RANKED_CONSTRUCT' ? 'active' : ''}" data-mode="RANKED_CONSTRUCT">🏆 Ranked Construct (Modern)</button>
+          </div>
+          <div class="deck-slots-section">
+            <h4>Deck Slots:</h4>
+            <div id="deck-slots-bar" class="deck-slots-bar"></div>
+          </div>
+          <div class="deck-validator-section">
+            <h4>Decklist Validator (Oracle 4-Of Override):</h4>
+            <textarea id="deckbuilder-text-input" class="deck-input-area" placeholder="Paste decklist here...&#10;4 Lightning Bolt&#10;20 Relentless Rats&#10;20 Mountain"></textarea>
+            <div class="deck-validator-controls">
+              <button id="btn-validate-deck" class="btn btn-primary">Validate Decklist</button>
+              <div id="deck-validation-badge" class="deck-validation-badge"></div>
+            </div>
+            <ul id="deck-validation-errors" class="deck-validation-errors"></ul>
+          </div>
+        </div>
+      `;
+
+      // Bind format toggle
+      const btnFree = view.querySelector('#btn-mode-free');
+      const btnRanked = view.querySelector('#btn-mode-ranked');
+      if (btnFree) {
+        btnFree.addEventListener('click', () => {
+          this.deckbuilderMode = 'FREE_CONSTRUCT';
+          this.reconcileDOM();
+        });
+      }
+      if (btnRanked) {
+        btnRanked.addEventListener('click', () => {
+          this.deckbuilderMode = 'RANKED_CONSTRUCT';
+          this.reconcileDOM();
+        });
+      }
+
+      // Bind validate button
+      const btnValidate = view.querySelector('#btn-validate-deck');
+      if (btnValidate) {
+        btnValidate.addEventListener('click', () => {
+          const textarea = view.querySelector('#deckbuilder-text-input');
+          const rawText = textarea ? textarea.value : '';
+          const report = DeckValidator.validateDeck(rawText, { format: this.deckbuilderMode });
+          this._renderDeckValidationReport(view, report);
+        });
+      }
+    }
+
+    const btnFree = view.querySelector('#btn-mode-free');
+    const btnRanked = view.querySelector('#btn-mode-ranked');
+    if (btnFree) btnFree.classList.toggle('active', this.deckbuilderMode === 'FREE_CONSTRUCT');
+    if (btnRanked) btnRanked.classList.toggle('active', this.deckbuilderMode === 'RANKED_CONSTRUCT');
+
+    // Deck slots
+    const slotsBar = view.querySelector('#deck-slots-bar');
+    if (slotsBar) {
+      const profile = this.profileManager?.getProfile(this.myPlayerId) || createDefaultProfile(this.myPlayerId);
+      const unlockedSlots = evaluateDeckSlots(profile.lifetimeWins || 0, profile.totalPerksTriggered || 0);
+
+      slotsBar.innerHTML = '';
+      for (let s = 1; s <= 5; s++) {
+        const isUnlocked = s <= unlockedSlots;
+        const isActive = this.activeDeckSlot === s;
+        const btn = document.createElement('button');
+        btn.className = `btn btn-deck-slot ${isActive ? 'active' : ''} ${isUnlocked ? 'unlocked' : 'locked'}`;
+        btn.setAttribute('data-slot', String(s));
+        btn.textContent = isUnlocked ? `Slot ${s}${isActive ? ' (Active)' : ''}` : `🔒 Slot ${s} (Locked)`;
+
+        btn.addEventListener('click', () => {
+          if (isUnlocked) {
+            this.activeDeckSlot = s;
+            this.reconcileDOM();
+          }
+        });
+
+        slotsBar.appendChild(btn);
+      }
+    }
+  }
+
+  /**
+   * Renders deck validation report into Deckbuilder View.
+   * @private
+   */
+  _renderDeckValidationReport(view, report) {
+    const badge = view.querySelector('#deck-validation-badge');
+    const errorList = view.querySelector('#deck-validation-errors');
+    if (!badge || !errorList) return;
+
+    if (report.isValid) {
+      badge.className = 'deck-validation-badge valid';
+      badge.textContent = `✅ VALID (${report.mainCount} Main / ${report.sideboardCount} Sideboard)`;
+      errorList.innerHTML = '';
+    } else {
+      badge.className = 'deck-validation-badge invalid';
+      badge.textContent = `❌ INVALID (${report.errors.length} Errors)`;
+      errorList.innerHTML = report.errors.map(err => `
+        <li class="error-item">
+          <strong>${err.cardName}:</strong> ${err.reason}
+        </li>
+      `).join('');
+    }
+  }
+
+  /**
+   * Reconciles Lobby View panel.
+   * @private
+   */
+  _reconcileLobbyView() {
+    const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const view = this.container.querySelector('#view-lobby');
+    if (!view) return;
+    if (curTab !== 'LOBBY') return;
+
+    if (!view.querySelector('.lobby-view-container')) {
+      view.innerHTML = `
+        <div class="lobby-view-container">
+          <div class="matchmaking-1v1-section">
+            <h3>1v1 Ranked Matchmaking</h3>
+            <button id="btn-find-1v1" class="btn btn-primary">🔍 Find 1v1 Match</button>
+            <div id="queue-search-banner" class="queue-search-banner" style="display: none;">
+              <span id="queue-timer-label">🔍 Searching for Opponent... 00:00</span>
+              <button id="btn-cancel-queue" class="btn btn-secondary">Cancel</button>
+            </div>
+            <div id="queue-watchdog-modal" class="queue-watchdog-box" style="display: none;">
+              <p>⏳ No opponent found (45s elapsed). Would you like to play vs Perkins AI?</p>
+              <button id="btn-watchdog-perkins" class="btn btn-special">🤖 Play vs Perkins AI (Instant)</button>
+              <button id="btn-watchdog-wait" class="btn btn-secondary">Keep Waiting</button>
+            </div>
+          </div>
+          <div class="custom-room-section">
+            <h3>Multiplayer Pod Room Seating (1..6)</h3>
+            <div id="lobby-seating-grid" class="lobby-seating-grid"></div>
+            <div class="lobby-room-actions">
+              <button id="btn-lobby-ready" class="btn btn-primary">Start Game / Ready</button>
+              <span id="lobby-ready-counter" class="lobby-ready-counter">0/0 Ready</span>
+            </div>
+          </div>
+        </div>
+      `;
+
+      // 1v1 Queue Start
+      const btnFind = view.querySelector('#btn-find-1v1');
+      if (btnFind) {
+        btnFind.addEventListener('click', () => {
+          this.start1v1QueueSearch();
+        });
+      }
+
+      // 1v1 Queue Cancel
+      const btnCancel = view.querySelector('#btn-cancel-queue');
+      if (btnCancel) {
+        btnCancel.addEventListener('click', () => {
+          this.cancel1v1QueueSearch();
+        });
+      }
+
+      // Watchdog Play Perkins
+      const btnWatchdogPerkins = view.querySelector('#btn-watchdog-perkins');
+      if (btnWatchdogPerkins) {
+        btnWatchdogPerkins.addEventListener('click', async () => {
+          this.cancel1v1QueueSearch();
+          await this.startPerkinsMatch();
+        });
+      }
+
+      // Watchdog Wait
+      const btnWatchdogWait = view.querySelector('#btn-watchdog-wait');
+      if (btnWatchdogWait) {
+        btnWatchdogWait.addEventListener('click', () => {
+          const wModal = view.querySelector('#queue-watchdog-modal');
+          if (wModal) wModal.style.display = 'none';
+        });
+      }
+
+      // Room Ready
+      const btnReady = view.querySelector('#btn-lobby-ready');
+      if (btnReady) {
+        btnReady.addEventListener('click', () => {
+          this.toggleLobbyReady();
+        });
+      }
+    }
+
+    this._reconcileLobbySeating(view);
+  }
+
+  /**
+   * Reconciles seating pods inside Lobby View.
+   * @private
+   */
+  _reconcileLobbySeating(view) {
+    const grid = view.querySelector('#lobby-seating-grid');
+    const btnReady = view.querySelector('#btn-lobby-ready');
+    const counter = view.querySelector('#lobby-ready-counter');
+    if (!grid) return;
+
+    if (!this.lobbyManager) {
+      this.lobbyManager = new LobbyManager({ roomCode: 'LOBBY1' });
+      this.lobbyManager.claimSeat(this.myPlayerId, this.username, 1);
+    }
+
+    const seatedCount = this.lobbyManager.getSeatedCount();
+    const readyCount = this.lobbyManager.getReadyCount();
+    const canStart = this.lobbyManager.canStart();
+    const mySlot = Array.from(this.lobbyManager.slots.values()).find(s => s.playerId === this.myPlayerId);
+    const isMyReady = Boolean(mySlot?.isReady);
+
+    if (counter) {
+      counter.textContent = `${readyCount}/${seatedCount} Ready (Min ${this.lobbyManager.minPlayersToStart})`;
+    }
+
+    if (btnReady) {
+      btnReady.disabled = !canStart;
+      btnReady.classList.toggle('btn-disabled', !canStart);
+      btnReady.textContent = isMyReady ? 'Cancel Ready' : 'Start Game / Ready';
+    }
+
+    grid.innerHTML = '';
+    for (let s = 1; s <= 6; s++) {
+      const slot = this.lobbyManager.slots.get(s);
+      const pod = document.createElement('div');
+      pod.id = `lobby-seat-${s}`;
+      pod.className = `lobby-seat-pod ${slot ? 'occupied' : 'empty'} ${slot?.isReady ? 'ready' : ''}`;
+      if (slot) {
+        pod.innerHTML = `
+          <div class="seat-num">Seat ${s}</div>
+          <div class="seat-player">${slot.playerName}${slot.playerId === this.myPlayerId ? ' (You)' : ''}</div>
+          <div class="seat-status">${slot.isReady ? '✅ Ready' : '⏳ Waiting'}</div>
+        `;
+      } else {
+        pod.innerHTML = `
+          <div class="seat-num">Seat ${s}</div>
+          <button class="btn btn-claim-seat" data-seat="${s}">Claim Seat</button>
+        `;
+        const claimBtn = pod.querySelector('.btn-claim-seat');
+        if (claimBtn) {
+          claimBtn.addEventListener('click', () => {
+            this.lobbyManager.claimSeat(this.myPlayerId, this.username, s);
+            this.reconcileDOM();
+          });
+        }
+      }
+      grid.appendChild(pod);
+    }
+  }
+
+  /**
+   * Reconciles Profile View panel.
+   * @private
+   */
+  _reconcileProfileView() {
+    const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const view = this.container.querySelector('#view-profile');
+    if (!view) return;
+    if (curTab !== 'PROFILE') return;
+
+    const profile = this.profileManager?.getProfile(this.myPlayerId) || createDefaultProfile(this.myPlayerId);
+    const unlockedSlots = evaluateDeckSlots(profile.lifetimeWins || 0, profile.totalPerksTriggered || 0);
+
+    view.innerHTML = `
+      <div class="profile-view-container">
+        <div class="profile-card">
+          <h2>👤 Planeswalker Profile: ${this.username}</h2>
+          <div class="profile-stats-grid">
+            <div id="profile-elo" class="stat-box"><strong>Elo Rating:</strong> ${profile.elo ?? 1200}</div>
+            <div id="profile-wins" class="stat-box"><strong>Lifetime Wins:</strong> ${profile.lifetimeWins ?? 0}</div>
+            <div id="profile-losses" class="stat-box"><strong>Lifetime Losses:</strong> ${profile.lifetimeLosses ?? 0}</div>
+            <div id="profile-perks" class="stat-box"><strong>Perks Triggered:</strong> ${profile.totalPerksTriggered ?? 0}</div>
+            <div id="deck-slot-milestones" class="stat-box"><strong>Deck Slots Unlocked:</strong> ${unlockedSlots} / 5</div>
+          </div>
+        </div>
+        <div class="fanfare-config-card">
+          <h3>🔊 Victory Fanfare Configuration</h3>
+          <div class="form-row">
+            <label for="fanfare-audio-url">Audio Source (Instagram A-to-B or YouTube):</label>
+            <input type="text" id="fanfare-audio-url" value="${profile.fanfareConfig?.audioUrl || ''}" placeholder="https://instagram.com/reel/... or https://youtube.com/..." />
+          </div>
+          <div class="form-row times-row">
+            <div>
+              <label for="fanfare-start-time">Start Time (sec):</label>
+              <input type="number" id="fanfare-start-time" value="${profile.fanfareConfig?.startTimeSec ?? 0}" min="0" step="0.5" />
+            </div>
+            <div>
+              <label for="fanfare-end-time">End Time (sec):</label>
+              <input type="number" id="fanfare-end-time" value="${profile.fanfareConfig?.endTimeSec ?? 5}" min="0.5" max="30" step="0.5" />
+            </div>
+          </div>
+          <button id="btn-save-fanfare" class="btn btn-primary">Save Fanfare Settings</button>
+        </div>
+      </div>
+    `;
+
+    const btnSave = view.querySelector('#btn-save-fanfare');
+    if (btnSave) {
+      btnSave.addEventListener('click', () => {
+        const urlInput = view.querySelector('#fanfare-audio-url');
+        const startInput = view.querySelector('#fanfare-start-time');
+        const endInput = view.querySelector('#fanfare-end-time');
+        const fanfare = {
+          audioUrl: urlInput ? urlInput.value.trim() : '',
+          startTimeSec: startInput ? parseFloat(startInput.value) || 0 : 0,
+          endTimeSec: endInput ? parseFloat(endInput.value) || 5 : 5
+        };
+        if (this.profileManager && typeof this.profileManager.updateFanfareConfig === 'function') {
+          this.profileManager.updateFanfareConfig(this.myPlayerId, fanfare);
+        }
+        btnSave.textContent = 'Saved! ✓';
+        setTimeout(() => { btnSave.textContent = 'Save Fanfare Settings'; }, 1500);
+      });
+    }
+  }
+
+  /**
+   * Reconciles Leaderboard View panel.
+   * @private
+   */
+  _reconcileLeaderboardView() {
+    const curTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const view = this.container.querySelector('#view-leaderboard');
+    if (!view) return;
+    if (curTab !== 'LEADERBOARD') return;
+
+    view.innerHTML = `
+      <div class="leaderboard-view-container">
+        <h2>🏆 Global Arena Leaderboard</h2>
+        <table id="leaderboard-table" class="leaderboard-table">
+          <thead>
+            <tr><th>Rank</th><th>Planeswalker</th><th>Elo</th><th>W - L</th><th>Win %</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>#1</td><td>Nicol Bolas</td><td>1850</td><td>42 - 3</td><td>93%</td></tr>
+            <tr><td>#2</td><td>Jace Beleren</td><td>1620</td><td>35 - 12</td><td>74%</td></tr>
+            <tr><td>#3</td><td>Chandra Nalaar</td><td>1580</td><td>30 - 15</td><td>67%</td></tr>
+            <tr><td>#4</td><td>${this.username} (You)</td><td>1200</td><td>0 - 0</td><td>--</td></tr>
+          </tbody>
+        </table>
+        <div class="match-history-section">
+          <h3>Recent Match History</h3>
+          <div id="match-history-list" class="match-history-list">
+            <div class="history-empty">No recent matches recorded. Play a match in Arena to record history.</div>
+          </div>
+        </div>
+        <div class="spectator-section">
+          <h3>Live Matches (Spectator Mode)</h3>
+          <div id="spectator-room-list" class="spectator-room-list">
+            <div class="spectator-empty">No active public rooms available to spectate.</div>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   // ==========================================================================

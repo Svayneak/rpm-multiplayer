@@ -25,6 +25,8 @@
 | **DEC-015** | `2026-10-17 14:14` | Argon Systems Audit: 12 Logic Failures & 5 Loop/Deadlock Vectors Neutralized | **A)** Proceed with unhardened micro-spec<br>**B)** Enforce formal invariants INV-RELAY-1 to INV-HARNESS-2 (CSPRNG rolls, ActiveRing filter, CR 603.3d guards, unref test timers) | **Option B (Hardened Invariants)** | Eliminated empty-stack deadlocks, target starvation freezes, PRNG tampering, disconnect race conditions, and test runner process hangs. |
 | **DEC-016** | `2026-10-17 17:33` | Production Packaging, Hosting Readiness & GitHub Publication | **A)** Multi-repo or separate container build<br>**(Recommended) Standalone single-port server (`server.js`) + Public GitHub repository (`Svayneak/rpm-multiplayer`)** | **(Recommended) Standalone Server & Public GitHub Repo** | Engineered `server.js` serving both SPA assets and WebSocket relay on standard `$PORT`, added `/health` probe, passed 119/119 tests (0 failures), and pushed to GitHub `Svayneak/rpm-multiplayer`. |
 | **DEC-017** | `2026-10-18 10:45` | Argon Full Code Audit & Multi-Client Synchronization Hardening | **A)** Rely on basic single-client integration harness<br>**(Recommended) Eliminate DOMContentLoaded race condition, suppress broadcast echoes, rehydrate multi-client dynamic seats, and filter eliminated players from client priority ring** | **(Recommended) Hardened Multi-Client Synchronization** | Resolved 4 critical distributed synchronization bugs, created `test_multi_client_sync.js`, validated all 11 test suites (137+ test vectors), and pushed commit `eeabac5` to GitHub. |
+| **DEC-018** | `2026-10-18 15:30` | Perkins AI Opponent & Companion Coach Architecture | **A)** Cloud LLM API inference<br>**B)** Heavyweight Minimax/MCTS<br>**(Recommended) Forge-Style MTG Heuristic Decision Tree (<1ms SLA) + Dual-Mode Transport + Bilingual Tutorial Coach** | **(Recommended) Forge Heuristics & Dual Transport** | Implemented `PerkinsAgent.js` running full turn cycles in 0.021ms, zero LLM tokens, 12 test vectors (100% pass), and pushed commit `dcd1176` to GitHub. |
+| **DEC-019** | `2026-10-19 04:30` | Unified Decoupled Platform, Lobby & Matchmaking, Oracle Deckbuilder & Bilingual Interaction | **A)** Monolithic harness with modal overlays<br>**(Recommended) Decoupled View Router with Tab Lockout Invariant (`INV-LOCKOUT-1`), 1-6 Player Lobby with Dynamic Arrival Invalidation (`INV-LOBBY-1`), Scryfall Oracle 4-Of Override (`INV-DECK-1`), Pre-Game d20 Roll-Off Turn Sorting (`INV-TURNSORT-1`), 1-Tap Hand Popovers, and Sub-2ms Spanish Lexing** | **(Recommended) Unified Decoupled Platform** | Authored `SPEC-RPM-PLATFORM-014`, engineered `TabRouter.js`, `LobbyManager.js`, `MatchmakingQueue.js`, `DeckValidator.js`, and `TurnRollOffManager.js`. Verified all 17 acceptance vectors and 13 full suites (100% pass). |
 
 
 ---
@@ -261,4 +263,32 @@
   4. Added UI controls in `index.html` (`[ 🤖 Play vs Perkins ]` header button, `[ 🎓 Coach: ON/OFF ]` badge).
   5. Authored exhaustive 12-vector acceptance test suite `test/test_perkins_ai.js` (12/12 passed, 0.021ms/eval).
   6. Independent Verificator Pro Audit completed: CERTIFIED 100% COMPLIANT.
+
+---
+
+### DEC-019 — Unified Decoupled Platform, Lobby & Matchmaking, Oracle Deckbuilder & Bilingual Interaction
+- **Context & Problem**: User feedback during live manual testing revealed that the interface was functioning as an abstract test harness: Player 1 was initialized with empty hands, dice controls were hidden, there was no top-level navigation to separate deckbuilding from gameplay, and typing Spanish vernacular commands (*"bajo pantano"*, *"roll dice"*) did not directly execute actions. The platform needed a decoupled view architecture (`ARENA`, `DECKBUILDER`, `LOBBY`, `PROFILE`, `LEADERBOARD`), a strict tab lockout rule during active matches, a multiplayer lobby & matchmaking subsystem, Scryfall Oracle 4-of validation, pre-game d20 roll-off turn sorting, and responsive 1-tap hand card interactions.
+- **Options Evaluated**:
+  - *Option A*: Retain monolithic harness view and add more floating modals for deckbuilding and lobby. Rejected due to layout congestion, lack of view decoupling, and accidental navigation during matches.
+  - *Option B (Recommended)*: **Decoupled Top-Level Router + Strict Invariants + Bilingual Spanish Interaction**:
+    1. **Decoupled Navigation & Tab Lockout Invariant (`INV-LOCKOUT-1`)**: Clean top-level header tabs (`🏟️ Arena`, `📚 Deckbuilder`, `🔍 Lobby & Matchmaking`, `👤 Profile`, `🏆 Leaderboard`). During active Arena matches, non-battle tabs are locked with padlocks (`🔒`). Clicking them surfaces an accessible Concede confirmation modal; spectators are strictly exempt.
+    2. **Multiplayer Lobby & Capacity Scaling (`INV-LOBBY-2`)**: 1 to 6 player slots. Private 2-player rooms require mutual confirmation; 3+ player pods require mutual confirmation; full capacity (6/6) auto-starts immediately.
+    3. **Dynamic Arrival Invalidation (`INV-LOBBY-1`)**: Joining or leaving a seated slot resets all mutual confirmations to unconfirmed (`isReady <- false`), preventing stealth start exploits.
+    4. **Pre-Game 20s Disconnect Grace (`INV-LOBBY-3`)**: Disconnected lobby players retain their seat for 20 seconds before forfeiture.
+    5. **1v1 FIFO Matchmaking & 45s Perkins Watchdog (`INV-QUEUE-1`)**: Queue pairs tickets atomically from FIFO head. Tickets waiting $\ge 45\text{s}$ surface a prompt offering an instant match vs. Perkins AI.
+    6. **Scryfall Oracle 4-Of Override (`INV-DECK-1`)**: Regex `/a deck can contain (?:any number|up to \w+) of cards named/i` exempts *Relentless Rats*, *Persistent Petitioners*, *Dragon's Approach*, etc. Ranked Construct strictly validates the Modern banlist.
+    7. **Milestone Deck Slot Progression (`INV-AUDIO-6`)**: Unlocks slots 1 to 5 monotonically based on lifetime wins and perk triggers.
+    8. **Random Perk Upkeep Dormancy HUD (`INV-PERK-UI-1`)**: Displays `"🔮 Perk: Dormant until Turn 4"` in 1v1 and `"Turn 2"` in pods, triggering 2 d10 roll animation on valid upkeep.
+    9. **Pre-Game d20 Roll-Off Engine (`INV-TURNSORT-1`)**: Players roll d20 ($1 \le r \le 20$); tied subsets iteratively re-roll until a strict total order is established; highest roller is assigned P1 for Turn 1.
+    10. **Bilingual Spanish Vernacular ActionLexer (Sub-2ms SLA)**: Parses Spanish lands (*"bajo pantano"*, *"tierra roja"*, *"pongo bosque"*), dice rolls (*"roll dice"*, *"tiro dado"*), and passes (*"paso"*) with execution at 0.0026ms/parse (>700x faster than SLA).
+    11. **Tabletop Card Interaction**: Deals 7 cards on match start; renders floating 1-tap contextual popover (`[ 🏔️ Play Land ]`, `[ ⚡ Cast to Stack ]`, `[ 🔍 Inspect ]`); renders dedicated player battlefield strips for Lands and Creatures.
+- **User Decision**: **Option B (Recommended)**.
+- **Impact & Implementation**:
+  1. Authored `specs/FEATURE_14_UNIFIED_PLATFORM_SPEC.md` (`SPEC-RPM-PLATFORM-014`, 530+ lines).
+  2. Implemented `src/view/TabRouter.js`, `src/LobbyManager.js`, `src/MatchmakingQueue.js`, `src/DeckValidator.js`, and `src/TurnRollOffManager.js`.
+  3. Updated `src/relay.js`, `src/ActionLexer.js`, `src/app.js`, `index.html`, and `src/view/tabletop.css`.
+  4. Authored 17-vector acceptance test suite `test/test_unified_platform.js` (17/17 passed).
+  5. Resolved browser Node.js built-in import issues and verified live in Google Chrome via Chrome DevTools MCP with 0 console errors.
+  6. Independent Verificator Pro Audit completed: CERTIFIED 100% COMPLIANT.
+
 

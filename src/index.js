@@ -174,6 +174,40 @@ export {
   PERKINS_COACH_DIALOGUES
 } from './PerkinsAgent.js';
 
+export {
+  DeckValidator,
+  VALIDATION_ERRORS,
+  ORACLE_UNLIMITED_CARDS,
+  MODERN_BANLIST,
+  BASIC_LANDS
+} from './DeckValidator.js';
+
+export {
+  LobbyManager,
+  LOBBY_STATUS
+} from './LobbyManager.js';
+
+export {
+  MatchmakingQueue,
+  WATCHDOG_THRESHOLD_SECONDS
+} from './MatchmakingQueue.js';
+
+export {
+  TabRouter,
+  TABS,
+  LOCKED_TABS_DURING_MATCH
+} from './view/TabRouter.js';
+
+export {
+  TurnRollOffManager,
+  generateAuthoritativeD20
+} from './TurnRollOffManager.js';
+
+export {
+  SPANISH_COLOR_LAND_MAP,
+  REGEX_ROLL_DICE_BILINGUAL
+} from './ActionLexer.js';
+
 import { RPMAppController, AppController } from './app.js';
 import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
 import { parseDecklist, REGEX_DECK_COMPREHENSIVE, REGEX_DECK_SIMPLE } from './DeckParser.js';
@@ -278,6 +312,31 @@ import {
   DEFAULT_WATCHDOG_TIMEOUT_MS
 } from './VictoryFanfare.js';
 
+import {
+  DeckValidator,
+  VALIDATION_ERRORS,
+  ORACLE_UNLIMITED_CARDS,
+  MODERN_BANLIST,
+  BASIC_LANDS
+} from './DeckValidator.js';
+import {
+  LobbyManager,
+  LOBBY_STATUS
+} from './LobbyManager.js';
+import {
+  MatchmakingQueue,
+  WATCHDOG_THRESHOLD_SECONDS
+} from './MatchmakingQueue.js';
+import {
+  TabRouter,
+  TABS,
+  LOCKED_TABS_DURING_MATCH
+} from './view/TabRouter.js';
+import {
+  TurnRollOffManager,
+  generateAuthoritativeD20
+} from './TurnRollOffManager.js';
+
 export default {
   ProfileManager,
   UserProfileManager,
@@ -378,6 +437,11 @@ export default {
   AppController,
   PerkinsAgent,
   PERKINS_DEFAULT_CONFIG,
-  PERKINS_COACH_DIALOGUES
+  PERKINS_COACH_DIALOGUES,
+  DeckValidator,
+  LobbyManager,
+  MatchmakingQueue,
+  TabRouter,
+  TurnRollOffManager
 };
 

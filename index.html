@@ -26,6 +26,14 @@
         <h1 class="brand-title">RPM TABLETOP</h1>
       </div>
 
+      <nav class="header-nav-tabs" role="tablist" aria-label="Main Navigation">
+        <button id="tab-btn-arena" class="nav-tab active" data-tab="ARENA" role="tab" aria-selected="true">🏟️ Arena</button>
+        <button id="tab-btn-deckbuilder" class="nav-tab" data-tab="DECKBUILDER" role="tab" aria-selected="false">📚 Deckbuilder</button>
+        <button id="tab-btn-lobby" class="nav-tab" data-tab="LOBBY" role="tab" aria-selected="false">🔍 Lobby</button>
+        <button id="tab-btn-profile" class="nav-tab" data-tab="PROFILE" role="tab" aria-selected="false">👤 Profile</button>
+        <button id="tab-btn-leaderboard" class="nav-tab" data-tab="LEADERBOARD" role="tab" aria-selected="false">🏆 Leaderboard</button>
+      </nav>
+
       <div class="header-room-controls">
         <label for="room-code-input" class="sr-only">Room Code</label>
         <input type="text" id="room-code-input" class="room-input" placeholder="ROOM CODE" maxlength="8" spellcheck="false" autocomplete="off">
@@ -57,72 +65,103 @@
       </div>
     </header>
 
-    <!-- Main Tabletop Arena Grid -->
-    <main id="tabletop-arena" class="rpm-tabletop-arena" role="main">
+    <!-- Top-Level Decoupled View Host Container -->
+    <div id="view-host" class="rpm-view-host">
 
-      <!-- 2. Opponents Multi-Player Container (#opponents-container) -->
-      <section id="opponents-container" class="opponents-bar" aria-label="Opponent Player Zones">
-        <!-- Dynamically populated with 1 to 5 Opponent Boards via TabletopUI / AppController -->
-      </section>
+      <!-- View 1: Tabletop Arena -->
+      <div id="view-arena" class="view-pane active">
+        <!-- Main Tabletop Arena Grid -->
+        <main id="tabletop-arena" class="rpm-tabletop-arena" role="main">
 
-      <!-- 3. Center Battlefield & Stack Arena (#center-arena) -->
-      <section id="center-arena" class="center-battlefield-arena" aria-label="Battlefield and Priority Stack">
+          <!-- 2. Opponents Multi-Player Container (#opponents-container) -->
+          <section id="opponents-container" class="opponents-bar" aria-label="Opponent Player Zones">
+            <!-- Dynamically populated with 1 to 5 Opponent Boards via TabletopUI / AppController -->
+          </section>
 
-        <!-- 15-Second Stack Alarm Visual Banner -->
-        <div id="stack-alarm-container" class="stack-alarm-wrapper" style="display: none;" aria-live="assertive">
-          <div class="alarm-header">
-            <span class="alarm-title">⚡ PRIORITY COUNTDOWN</span>
-            <span id="alarm-timer-label" class="alarm-countdown">15.0s</span>
-          </div>
-          <div class="alarm-progress-track">
-            <div id="stack-alarm-progress-bar" class="alarm-progress-fill alarm-state-green" style="width: 100%;"></div>
-          </div>
-        </div>
+          <!-- 3. Center Battlefield & Stack Arena (#center-arena) -->
+          <section id="center-arena" class="center-battlefield-arena" aria-label="Battlefield and Priority Stack">
 
-        <!-- MTG LIFO Stack Visualizer -->
-        <div id="stack-visualizer-container" class="stack-container" aria-label="Active LIFO Priority Stack">
-          <div class="stack-header">
-            <h2 class="stack-title">THE STACK <span id="stack-count-badge" class="badge-counter">(0)</span></h2>
-            <div class="stack-controls">
-              <button id="btn-pass-priority" class="btn btn-pass" title="Pass Priority (Hotkey: Space or P)">Pass Priority [Space]</button>
-              <button id="btn-hold-respond" class="btn btn-hold" title="Hold Alarm & Respond (Hotkey: H)">Hold & Respond [H]</button>
+            <!-- 15-Second Stack Alarm Visual Banner -->
+            <div id="stack-alarm-container" class="stack-alarm-wrapper" style="display: none;" aria-live="assertive">
+              <div class="alarm-header">
+                <span class="alarm-title">⚡ PRIORITY COUNTDOWN</span>
+                <span id="alarm-timer-label" class="alarm-countdown">15.0s</span>
+              </div>
+              <div class="alarm-progress-track">
+                <div id="stack-alarm-progress-bar" class="alarm-progress-fill alarm-state-green" style="width: 100%;"></div>
+              </div>
             </div>
-          </div>
-          <ul id="stack-item-list" class="stack-list" role="list">
-            <!-- Dynamically populated with Stack Items in LIFO Order -->
-          </ul>
-        </div>
 
-        <!-- Random Perk 2 d10 Dice & Upkeep Emblem Overlay -->
-        <div id="perk-dice-container" class="perk-display-wrapper" style="display: none;">
-          <div class="perk-dice-row">
-            <div id="dice-tens" class="dice-box dice-tens" title="Tens Die (Violet d10)">
-              <span class="dice-label">10s</span>
-              <span class="dice-value">0</span>
+            <!-- MTG LIFO Stack Visualizer -->
+            <div id="stack-visualizer-container" class="stack-container" aria-label="Active LIFO Priority Stack">
+              <div class="stack-header">
+                <h2 class="stack-title">THE STACK <span id="stack-count-badge" class="badge-counter">(0)</span></h2>
+                <div class="stack-controls">
+                  <button id="btn-pass-priority" class="btn btn-pass" title="Pass Priority (Hotkey: Space or P)">Pass Priority [Space]</button>
+                  <button id="btn-hold-respond" class="btn btn-hold" title="Hold Alarm & Respond (Hotkey: H)">Hold & Respond [H]</button>
+                </div>
+              </div>
+              <ul id="stack-item-list" class="stack-list" role="list">
+                <!-- Dynamically populated with Stack Items in LIFO Order -->
+              </ul>
             </div>
-            <div id="dice-ones" class="dice-box dice-ones" title="Ones Die (Aquamarine d10)">
-              <span class="dice-label">1s</span>
-              <span class="dice-value">0</span>
-            </div>
-            <div class="perk-roll-summary">
-              <span id="perk-roll-key" class="perk-key-badge">ROLL --</span>
-              <span id="perk-effect-description" class="perk-desc">Awaiting upkeep trigger...</span>
-            </div>
-          </div>
-        </div>
-      </section>
 
-      <!-- 4. Bottom Active Player Dashboard (#player-dashboard) -->
-      <section id="player-dashboard" class="player-dashboard-panel" aria-label="Active Player Dashboard">
-        <!-- Life, Counters, Mana Pool, Interactive Hand, and Command Zone Emblem -->
-      </section>
-    </main>
+            <!-- Pre-Game d20 Roll-Off Overlay -->
+            <div id="roll-off-overlay" class="roll-off-overlay" style="display: none;" aria-live="assertive">
+              <div class="roll-off-box">
+                <h2 class="roll-off-title">🎲 Pre-Game d20 Roll-Off</h2>
+                <p id="roll-off-status-text" class="roll-off-status">Roll d20 to determine turn order (Highest goes first).</p>
+                <div id="roll-off-results-list" class="roll-off-results"></div>
+                <div class="roll-off-actions">
+                  <button id="btn-roll-d20" class="btn btn-primary btn-roll-d20">🎲 Roll d20 for Turn Order</button>
+                </div>
+              </div>
+            </div>
 
-    <!-- 5. Floating Dual-Channel Chat Bar (#chat-drawer) -->
-    <aside id="chat-drawer" class="rpm-chat-drawer" aria-label="Chat and Turn Commands">
-      <!-- Chit-Chat vs Turn Command Tabs, Input, and Staged Action Chips -->
-      <button id="btn-toggle-coach" class="btn-badge" title="Toggle Perkins Coach Tips">🎓 Coach: ON</button>
-    </aside>
+            <!-- Random Perk 2 d10 Dice & Upkeep Emblem Overlay -->
+            <div id="perk-dice-container" class="perk-display-wrapper" style="display: none;">
+              <div class="perk-dice-row">
+                <div id="dice-tens" class="dice-box dice-tens" title="Tens Die (Violet d10)">
+                  <span class="dice-label">10s</span>
+                  <span class="dice-value">0</span>
+                </div>
+                <div id="dice-ones" class="dice-box dice-ones" title="Ones Die (Aquamarine d10)">
+                  <span class="dice-label">1s</span>
+                  <span class="dice-value">0</span>
+                </div>
+                <div class="perk-roll-summary">
+                  <span id="perk-roll-key" class="perk-key-badge">ROLL --</span>
+                  <span id="perk-effect-description" class="perk-desc">Awaiting upkeep trigger...</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- 4. Bottom Active Player Dashboard (#player-dashboard) -->
+          <section id="player-dashboard" class="player-dashboard-panel" aria-label="Active Player Dashboard">
+            <!-- Life, Counters, Mana Pool, Interactive Hand, and Command Zone Emblem -->
+          </section>
+        </main>
+
+        <!-- 5. Floating Dual-Channel Chat Bar (#chat-drawer) -->
+        <aside id="chat-drawer" class="rpm-chat-drawer" aria-label="Chat and Turn Commands">
+          <!-- Chit-Chat vs Turn Command Tabs, Input, and Staged Action Chips -->
+          <button id="btn-toggle-coach" class="btn-badge" title="Toggle Perkins Coach Tips">🎓 Coach: ON</button>
+        </aside>
+      </div>
+
+      <!-- View 2: Deckbuilder -->
+      <div id="view-deckbuilder" class="view-pane" style="display: none;"></div>
+
+      <!-- View 3: Lobby -->
+      <div id="view-lobby" class="view-pane" style="display: none;"></div>
+
+      <!-- View 4: Profile -->
+      <div id="view-profile" class="view-pane" style="display: none;"></div>
+
+      <!-- View 5: Leaderboard -->
+      <div id="view-leaderboard" class="view-pane" style="display: none;"></div>
+    </div>
 
     <!-- 6. Central Modal & Overlay Host Layer (#modal-root) -->
     <div id="modal-root" class="rpm-modal-host" aria-hidden="true">

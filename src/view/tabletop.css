@@ -1175,3 +1175,287 @@
     gap: 8px;
   }
 }
+
+/* ==========================================================================
+   Feature 14: Unified Platform, Nav Tabs, Views & Popovers
+   ========================================================================== */
+
+/* Top-Level Header Nav Tabs */
+.header-nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 12px;
+}
+
+.nav-tab {
+  background: var(--bg-surface);
+  color: #94a3b8;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nav-tab:hover:not(.tab-locked) {
+  background: var(--bg-surface-elevated);
+  color: #f8fafc;
+  border-color: var(--border-focus);
+}
+
+.nav-tab.active {
+  background: #1e293b;
+  color: #38bdf8;
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+}
+
+.nav-tab.tab-locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+  border-color: #ef4444;
+  color: #f87171;
+}
+
+/* View Host & Panes */
+.rpm-view-host {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  width: 100%;
+}
+
+.view-pane {
+  width: 100%;
+  height: 100%;
+}
+
+/* Hand Floating Popover (INV-1-TAP) */
+.player-hand-grid {
+  padding-top: 38px !important;
+}
+
+.hand-card-chip {
+  position: relative;
+}
+
+.hand-card-popover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #0f172a;
+  border: 1px solid #38bdf8;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6), 0 0 10px rgba(56, 189, 248, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: var(--z-staged-chip);
+  white-space: nowrap;
+}
+
+.btn-popover-action {
+  background: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-popover-action:hover {
+  background: #1d4ed8;
+}
+
+.btn-popover-inspect {
+  background: #334155;
+  color: #f8fafc;
+  border: none;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.btn-popover-close {
+  background: transparent;
+  color: #94a3b8;
+  border: none;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.btn-popover-close:hover {
+  color: #ef4444;
+}
+
+/* Battlefield Strips */
+.player-battlefield-strips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.battlefield-strip {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.strip-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.strip-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.battlefield-card-chip {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 0.78rem;
+  color: #f1f5f9;
+}
+
+.battlefield-card-chip.tapped {
+  opacity: 0.6;
+  transform: rotate(5deg);
+}
+
+/* Perk Upkeep Dormancy (INV-PERK-UI-1) */
+.command-emblem-badge.dormant {
+  background: #334155;
+  color: #94a3b8;
+  border: 1px dashed #64748b;
+}
+
+.command-emblem-badge.active {
+  background: rgba(168, 85, 247, 0.2);
+  color: #c084fc;
+  border: 1px solid #a855f7;
+  box-shadow: 0 0 10px rgba(168, 85, 247, 0.3);
+}
+
+/* Pre-Game d20 Roll-Off Overlay (INV-TURNSORT-1) */
+.roll-off-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-staged-chip);
+}
+
+.roll-off-box {
+  background: #1e293b;
+  border: 2px solid #38bdf8;
+  border-radius: var(--radius-md);
+  padding: 24px;
+  max-width: 480px;
+  width: 90%;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+.roll-off-title {
+  margin: 0 0 8px 0;
+  font-size: 1.3rem;
+  color: #38bdf8;
+}
+
+.roll-off-status {
+  font-size: 0.95rem;
+  color: #cbd5e1;
+  margin-bottom: 16px;
+}
+
+.roll-off-results {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.roll-result-chip {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.roll-player {
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.roll-val {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: #facc15;
+}
+
+/* Concede Confirmation Modal (INV-LOCKOUT-1) */
+.concede-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal-backdrop);
+}
+
+/* Seating Grid (INV-LOBBY-2) */
+.lobby-seating-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 16px 0;
+}
+
+.lobby-seat-pod {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: var(--radius-md);
+  padding: 14px;
+  text-align: center;
+}
+
+.lobby-seat-pod.ready {
+  border-color: #22c55e;
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+.lobby-seat-pod.empty {
+  border-style: dashed;
+}
+

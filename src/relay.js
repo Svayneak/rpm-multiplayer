@@ -24,6 +24,9 @@ import { EventEmitter } from 'node:events';
 import { TabletopStateManager, projectState } from './TabletopStateManager.js';
 import { PriorityStateMachine, PriorityViolationError } from './PriorityStateMachine.js';
 import { StackAlarmManager } from './StackAlarmManager.js';
+import { LobbyManager, LOBBY_STATUS } from './LobbyManager.js';
+import { MatchmakingQueue } from './MatchmakingQueue.js';
+import { TurnRollOffManager } from './TurnRollOffManager.js';
 
 /**
  * Crockford Base32 31-symbol alphabet for room codes.
@@ -283,6 +286,8 @@ export class RoomSession {
     this.roomCode = roomCode;
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.maxPlayers = Math.min(6, Math.max(2, options.maxPlayers || 4));
+    this.roomType = options.roomType || (this.maxPlayers === 2 ? 'DUEL_1V1' : 'POD_MULTIPLAYER');
+    this.lifecycleStatus = options.lifecycleStatus || LOBBY_STATUS.LOBBY_WAITING;
     this.startingLife = options.startingLife || 20;
     this.alarmDurationSeconds = options.alarmDurationSeconds || 15;
     this.disconnectBankTotalMs = options.disconnectBankTotalMs || 90000;
@@ -296,6 +301,30 @@ export class RoomSession {
     /** @type {Array<Object>} */
     this.actionLog = [];
     this.isClosed = false;
+
+    // Feature 14 Lobby & Roll-Off Managers
+    this.lobbyManager = new LobbyManager({
+      roomCode: this.roomCode,
+      maxPlayers: this.maxPlayers,
+      roomType: this.roomType,
+      minPlayersToStart: options.minPlayersToStart
+    });
+    this.turnRollOffManager = null;
+
+    this.lobbyManager.on('readiness_reset', (evt) => {
+      this.broadcast({
+        type: 'LOBBY_READY_RESET',
+        ...evt
+      });
+    });
+
+    this.lobbyManager.on('match_ready', () => {
+      this.transitionToRollOff();
+    });
+
+    this.lobbyManager.on('auto_start', () => {
+      this.transitionToRollOff();
+    });
 
     // Subsystem instances
     this.tabletopStateManager = new TabletopStateManager({
@@ -326,6 +355,85 @@ export class RoomSession {
     if (this.disconnectTimer && typeof this.disconnectTimer.unref === 'function') {
       this.disconnectTimer.unref();
     }
+  }
+
+  /**
+   * Transitions room to pre-game d20 roll-off phase (INV-TURNSORT-1).
+   */
+  transitionToRollOff() {
+    this.lifecycleStatus = LOBBY_STATUS.ROLL_OFF_PHASE;
+    const seatedPlayerIds = Array.from(this.slots.values()).map(s => s.playerId);
+    this.turnRollOffManager = new TurnRollOffManager(seatedPlayerIds.length > 0 ? seatedPlayerIds : ['player_1']);
+
+    this.broadcast({
+      type: 'ROOM_LIFECYCLE_CHANGE',
+      roomCode: this.roomCode,
+      status: LOBBY_STATUS.ROLL_OFF_PHASE,
+      seatedPlayers: seatedPlayerIds,
+      timestamp: Date.now()
+    });
+  }
+
+  /**
+   * Submits a d20 roll from a player and evaluates tie-breakers or establishes strict turn order (INV-TURNSORT-1).
+   * 
+   * @param {string} playerId 
+   * @param {number} [forcedValue] 
+   * @returns {number} The roll value
+   */
+  handleD20Roll(playerId, forcedValue = null) {
+    if (!this.turnRollOffManager) {
+      this.transitionToRollOff();
+    }
+
+    const roll = this.turnRollOffManager.submitRoll(playerId, forcedValue);
+
+    this.broadcast({
+      type: 'D20_ROLL_SUBMITTED',
+      playerId,
+      roll,
+      round: this.turnRollOffManager.round,
+      timestamp: Date.now()
+    });
+
+    if (this.turnRollOffManager.isRoundComplete()) {
+      const result = this.turnRollOffManager.evaluateRound();
+      if (result.isComplete) {
+        this.lifecycleStatus = LOBBY_STATUS.MATCH_ACTIVE;
+        this.priorityStateMachine.players = result.sortedPlayers;
+        this.priorityStateMachine.activePlayerId = result.sortedPlayers[0];
+        this.priorityStateMachine.priorityPlayerId = result.sortedPlayers[0];
+
+        this.broadcast({
+          type: 'TURN_ORDER_RESOLVED',
+          sortedPlayers: result.sortedPlayers,
+          activePlayerId: result.sortedPlayers[0],
+          rankings: result.sortedPlayers.map((pid, idx) => ({
+            rank: idx + 1,
+            playerId: pid,
+            playerName: this.getSlotByPlayerId(pid)?.playerName || pid
+          })),
+          timestamp: Date.now()
+        });
+
+        this.broadcast({
+          type: 'ROOM_LIFECYCLE_CHANGE',
+          roomCode: this.roomCode,
+          status: LOBBY_STATUS.MATCH_ACTIVE,
+          activePlayerId: result.sortedPlayers[0],
+          timestamp: Date.now()
+        });
+      } else {
+        this.broadcast({
+          type: 'TIE_BREAKER_ROUND',
+          round: result.round,
+          tiedPlayerIds: result.tiedPlayerIds,
+          timestamp: Date.now()
+        });
+      }
+    }
+
+    return roll;
   }
 
   /**
@@ -466,6 +574,10 @@ export class RoomSession {
     const elapsed = typeof deltaMs === 'number' ? deltaMs : (Date.now() - this.lastTickTime);
     this.lastTickTime = Date.now();
 
+    if (this.lobbyManager && (this.lifecycleStatus === LOBBY_STATUS.LOBBY_WAITING || this.lifecycleStatus === LOBBY_STATUS.READY_CHECK)) {
+      this.lobbyManager.tickGrace(elapsed);
+    }
+
     for (const slot of this.slots.values()) {
       if (slot.connectionStatus === 'DISCONNECTED' && !slot.isEliminated) {
         slot.disconnectBankMsRemaining = Math.max(0, slot.disconnectBankMsRemaining - elapsed);
@@ -596,7 +708,9 @@ export class RoomSession {
       stack: (this.priorityStateMachine.stack || []).map(item => ({ ...item })),
       remainingAlarmMs,
       disconnectBankRemainingMs,
-      activeSlots
+      activeSlots,
+      lifecycleStatus: this.lifecycleStatus,
+      lobbyState: this.lobbyManager ? this.lobbyManager.getState() : null
     };
 
     if (seatToken) {
@@ -670,6 +784,14 @@ export class RoomSession {
     this.slots.set(slotId, slot);
     ws.roomCode = this.roomCode;
     ws.slotId = slotId;
+
+    try {
+      this.lobbyManager.claimSeat(slotId, {
+        playerId,
+        playerName,
+        seatToken
+      });
+    } catch (e) {}
 
     // Register in engines
     this.tabletopStateManager.registerPlayer(playerId, playerName);
@@ -910,6 +1032,7 @@ export class RoomSession {
 export function createRelayServer(options = {}) {
   const rooms = new Map();
   const rawSockets = new Set();
+  const matchmakingQueue = new MatchmakingQueue(options);
 
   const server = options.server || http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -950,10 +1073,10 @@ export function createRelayServer(options = {}) {
     if (head && head.length > 0) {
       ws._onData(head);
     }
-    _setupWebSocketRouting(ws, rooms, options);
+    _setupWebSocketRouting(ws, rooms, matchmakingQueue, options);
   });
 
-  function _setupWebSocketRouting(ws, roomsMap, serverOptions) {
+  function _setupWebSocketRouting(ws, roomsMap, queue, serverOptions) {
     ws.on('message', (text) => {
       let msg;
       try {
@@ -964,6 +1087,78 @@ export function createRelayServer(options = {}) {
       }
 
       const msgType = msg.type;
+
+      if (msgType === 'QUEUE_JOIN') {
+        const ticket = queue.enqueue({
+          playerId: msg.playerId || crypto.randomUUID(),
+          playerName: msg.playerName,
+          format: msg.format || 'MODERN',
+          deckId: msg.deckId,
+          socket: ws
+        });
+        ws.ticketId = ticket.ticketId;
+        ws.send({
+          type: 'QUEUE_JOINED',
+          ticketId: ticket.ticketId,
+          playerId: ticket.playerId,
+          format: ticket.format,
+          waitTimeMs: 0
+        });
+
+        const match = queue.findMatch(msg.format, roomsMap);
+        if (match) {
+          const room = new RoomSession(match.roomCode, {
+            ...serverOptions,
+            maxPlayers: 2,
+            roomType: 'DUEL_1V1'
+          });
+          roomsMap.set(match.roomCode, room);
+
+          const p1Join = room.handleJoin(match.player1.socket, {
+            playerId: match.player1.playerId,
+            playerName: match.player1.playerName,
+            seatPreference: 1
+          });
+          match.player1.socket?.send?.({
+            type: 'MATCH_FOUND',
+            roomCode: match.roomCode,
+            slotId: p1Join.slotId,
+            seatToken: p1Join.seatToken,
+            opponentName: match.player2.playerName
+          });
+
+          const p2Join = room.handleJoin(match.player2.socket, {
+            playerId: match.player2.playerId,
+            playerName: match.player2.playerName,
+            seatPreference: 2
+          });
+          match.player2.socket?.send?.({
+            type: 'MATCH_FOUND',
+            roomCode: match.roomCode,
+            slotId: p2Join.slotId,
+            seatToken: p2Join.seatToken,
+            opponentName: match.player1.playerName
+          });
+        }
+        return;
+      }
+
+      if (msgType === 'QUEUE_LEAVE') {
+        const ticketId = msg.ticketId || ws.ticketId || msg.playerId;
+        queue.removeTicket(ticketId);
+        ws.send({ type: 'QUEUE_LEFT', ticketId });
+        return;
+      }
+
+      if (msgType === 'QUEUE_CHECK_WATCHDOG') {
+        const ticketId = msg.ticketId || ws.ticketId || msg.playerId;
+        const watchdog = queue.checkWatchdog(ticketId, msg.thresholdSeconds || 45);
+        ws.send({
+          type: 'QUEUE_WATCHDOG_STATUS',
+          ...watchdog
+        });
+        return;
+      }
 
       if (msgType === 'CREATE_ROOM') {
         const roomCode = generateRoomCode(roomsMap);
@@ -1025,6 +1220,28 @@ export function createRelayServer(options = {}) {
       const room = roomsMap.get(ws.roomCode);
       if (!room) {
         ws.send({ type: 'ERROR', code: 4404, message: 'Not connected to a room' });
+        return;
+      }
+
+      if (msgType === 'LOBBY_TOGGLE_READY') {
+        if (ws.slotId && room.lobbyManager) {
+          const res = room.lobbyManager.setPlayerReady(ws.slotId, msg.isReady);
+          room.broadcast({
+            type: 'LOBBY_READY_TOGGLED',
+            slotId: ws.slotId,
+            isReady: res.slot.isReady,
+            allReady: res.allReady,
+            canStart: res.canStart
+          });
+        }
+        return;
+      }
+
+      if (msgType === 'SUBMIT_D20_ROLL') {
+        const slot = room.getSlot(ws.slotId);
+        if (slot) {
+          room.handleD20Roll(slot.playerId, msg.value);
+        }
         return;
       }
 
@@ -1092,6 +1309,10 @@ export function createRelayServer(options = {}) {
     });
 
     ws.on('close', () => {
+      if (ws.ticketId) {
+        queue.removeTicket(ws.ticketId);
+      }
+
       if (!ws.roomCode) return;
       const room = roomsMap.get(ws.roomCode);
       if (!room) return;
@@ -1102,6 +1323,9 @@ export function createRelayServer(options = {}) {
           slot.connectionStatus = 'DISCONNECTED';
           slot.socket = null;
           slot.disconnectedAt = Date.now();
+          if (room.lobbyManager && (room.lifecycleStatus === LOBBY_STATUS.LOBBY_WAITING || room.lifecycleStatus === LOBBY_STATUS.READY_CHECK)) {
+            room.lobbyManager.handleDisconnect(slot.slotId);
+          }
           room.broadcast({
             type: 'PLAYER_DISCONNECTED',
             slotId: slot.slotId,
@@ -1125,6 +1349,7 @@ export function createRelayServer(options = {}) {
       room.close();
     }
     rooms.clear();
+    matchmakingQueue.clear();
 
     for (const sock of rawSockets) {
       try {
@@ -1147,6 +1372,7 @@ export function createRelayServer(options = {}) {
   return {
     server,
     rooms,
+    matchmakingQueue,
     listen,
     close,
     getRoom

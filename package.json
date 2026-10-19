@@ -26,11 +26,16 @@
     "./DeckbuilderAI": "./src/DeckbuilderAI.js",
     "./VictoryFanfare": "./src/VictoryFanfare.js",
     "./PerkinsAgent": "./src/PerkinsAgent.js",
+    "./DeckValidator": "./src/DeckValidator.js",
+    "./MatchmakingQueue": "./src/MatchmakingQueue.js",
+    "./LobbyManager": "./src/LobbyManager.js",
+    "./TurnRollOffManager": "./src/TurnRollOffManager.js",
+    "./TabRouter": "./src/view/TabRouter.js",
     "./app": "./src/app.js"
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run_tests.js && node test/test_zone_state.js && node test/test_priority_stack.js && node test/test_dual_chat_action.js && node test/test_tabletop_ui.js && node test/test_relay_sync.js && node test/test_random_perk.js && node test/test_deckbuilder_ai.js && node test/test_victory_fanfare.js && node test/test_browser_harness.js && node test/test_multi_client_sync.js && node test/test_perkins_ai.js",
+    "test": "node test/run_tests.js && node test/test_zone_state.js && node test/test_priority_stack.js && node test/test_dual_chat_action.js && node test/test_tabletop_ui.js && node test/test_relay_sync.js && node test/test_random_perk.js && node test/test_deckbuilder_ai.js && node test/test_victory_fanfare.js && node test/test_browser_harness.js && node test/test_multi_client_sync.js && node test/test_perkins_ai.js && node test/test_unified_platform.js",
     "test:ingest": "node test/run_tests.js",
     "test:zone": "node test/test_zone_state.js",
     "test:priority": "node test/test_priority_stack.js",
@@ -43,6 +48,7 @@
     "test:harness": "node test/test_browser_harness.js",
     "test:multisync": "node test/test_multi_client_sync.js",
     "test:perkins": "node test/test_perkins_ai.js",
+    "test:platform": "node test/test_unified_platform.js",
     "test:live": "node test/live_scryfall_test.js"
   }
 }
