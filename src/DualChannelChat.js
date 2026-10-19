@@ -177,6 +177,34 @@ export class DualChannelChat {
   }
 
   /**
+   * Dispatches a Chit-Chat message directly (SPEC-RPM-PERKINS-013 Section 3.5.2).
+   * 
+   * @param {string} text
+   * @param {string} [senderId]
+   * @param {string} [senderName]
+   * @returns {Object}
+   */
+  sendChitChat(text, senderId = this.myPlayerId, senderName = senderId) {
+    return this.sendChatMessage('CHIT_CHAT', text, { senderId, senderName });
+  }
+
+  /**
+   * Returns social Chit-Chat message feed.
+   * @returns {Array<Object>}
+   */
+  get chitChatFeed() {
+    return this.chitChatMessages;
+  }
+
+  /**
+   * Returns priority-gated Turn Command message feed.
+   * @returns {Array<Object>}
+   */
+  get turnCommandFeed() {
+    return this.turnCommandMessages;
+  }
+
+  /**
    * Submits a turn command for local player (convenience shorthand).
    * 
    * @param {string} text

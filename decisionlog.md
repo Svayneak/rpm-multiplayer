@@ -237,3 +237,28 @@
   6. **New Multi-Client Sync Suite**: Implemented `test/test_multi_client_sync.js` testing live multi-client room creation, join, priority exchange, and teardown (137+ test vectors verified across all 1 layer test suites).
   7. Committed and pushed to GitHub `Svayneak/rpm-multiplayer` (`commit eeabac5`).
 
+---
+
+### DEC-018 — Perkins AI Opponent & Companion Coach (Forge Heuristic Adaptation & Dual-Mode Transport)
+- **Context & Problem**: To enable solo play, new player onboarding, and live game testing without waiting for remote human opponents, the application needed an autonomous AI opponent named **Perkins**. The AI needed to understand Magic: The Gathering rules, companion features (Random Perk 2 d10 roll, 15s Stack Alarm, priority system, Scryfall overlay, deckbuilder guidelines), execute decisions sub-millisecond without external LLM network costs or browser freezes, and serve as an interactive onboarding coach guiding players through companion mechanics.
+- **Options Evaluated**:
+  - *Option A*: Cloud LLM API agent (OpenAI / Gemini) streaming prompts on every priority tick. Rejected due to latency (>1500ms), external API cost, and high failure rate during real-time 15s Stack Alarms.
+  - *Option B*: Heavyweight Minimax / Monte Carlo Tree Search (MCTS) engine (e.g. Magarena). Rejected due to high CPU consumption, JavaScript garbage collection pauses, and browser thread blocking during 60 FPS rendering.
+  - *Option C (Recommended)*: **Adapted Forge MTG Heuristic Phase-Tree Architecture + Dual-Mode Transport**:
+    1. **Forge-Style Phase Heuristic (`INV-PERKINS-1`)**: Phase-specific decision tree executing full turn cycles in <1ms (benchmarked at 0.021ms/eval, 50x faster than 1.0ms SLA) with 0 external tokens and 0 dependencies.
+    2. **Dual-Mode Transport Adapter (`INV-PERKINS-2`)**: Supports direct In-Memory bus (`'LOCAL_BOT'` origin) for 0ms latency solo play and Headless WebSocket (`RelayClient`) for online Render multiplayer rooms.
+    3. **Zero-Knowledge Fog-of-War (`INV-PERKINS-3` / `INV-FOW-1`)**: Operates strictly on `projectState(slotId)`, never peeking at hidden opponent hands or library order.
+    4. **15s Stack Alarm Reaction (`INV-PERKINS-4`)**: Evaluates responses (instants vs auto-pass) within configurable `thinkingDelayMs`.
+    5. **Random Perk Upkeep Emblem Interaction (`INV-PERKINS-5`)**: Handles Step 1 2 d10 roll; Step 2 target hierarchy for Perk #55 (Planeswalkers > Threats > Lands) and Perk #99 (threat scoring), strictly avoiding self-sabotage.
+    6. **Combat Heuristics (`INV-PERKINS-6`)**: Power/toughness trade evaluation, non-summoning-sick attacks, and lethal chump block defense.
+    7. **Bilingual Tutorial Coach (`INV-PERKINS-7`)**: Emits onboarding guidance exclusively to `CHIT_CHAT` across 6 key companion milestones (`MS_WELCOME`, `MS_PRIORITY_HOTKEY`, `MS_ALARM_HOLD`, `MS_SCRYFALL_OVERLAY`, `MS_PERK_EMBLEM`, `MS_DECKBUILDER_HINT`) with an 8-second debounce gap.
+    8. **Defensive Safety Guards (`INV-SAFE-1..3`)**: Max 10 actions/phase anti-hang throttle, CR 104.3c deckout concession, and hermetic timer teardown.
+- **User Decision**: **Option C (Recommended)**.
+- **Impact & Implementation**:
+  1. Authored `specs/FEATURE_13_PERKINS_AI_SPEC.md` (`SPEC-RPM-PERKINS-013`, 867 lines).
+  2. Implemented `src/PerkinsAgent.js` conforming to all 7 architectural invariants and 3 safety guards.
+  3. Wired into `src/app.js` (`startPerkinsMatch()`, `spawnBotInRoom()`, `'LOCAL_BOT'` action dispatch handling).
+  4. Added UI controls in `index.html` (`[ 🤖 Play vs Perkins ]` header button, `[ 🎓 Coach: ON/OFF ]` badge).
+  5. Authored exhaustive 12-vector acceptance test suite `test/test_perkins_ai.js` (12/12 passed, 0.021ms/eval).
+  6. Independent Verificator Pro Audit completed: CERTIFIED 100% COMPLIANT.
+

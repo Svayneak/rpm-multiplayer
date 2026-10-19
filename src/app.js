@@ -45,6 +45,8 @@ import {
   renderFallbackBanner,
   createDefaultProfile
 } from './VictoryFanfare.js';
+import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
+import { generateInstanceId } from './ZoneModel.js';
 
 /**
  * Standard MTG Zone Drawers
@@ -109,6 +111,7 @@ export class RPMAppController {
     this._boundKeyDown = this._handleGlobalKeyDown.bind(this);
     this._lastRoll = null;
     this._lastAlarmState = null;
+    this.perkinsAgent = null;
 
     // 1. Storage & Profiles
     this.storageAdapter = options.storageAdapter || new StorageAdapter(options);
@@ -311,6 +314,10 @@ export class RPMAppController {
         this.relayClient.removeAllListeners();
       } catch (_) {}
     }
+    if (this.perkinsAgent && typeof this.perkinsAgent.destroy === 'function') {
+      try { this.perkinsAgent.destroy(); } catch (_) {}
+      this.perkinsAgent = null;
+    }
 
     // 5. Clear container DOM
     if (this.container) {
@@ -354,6 +361,7 @@ export class RPMAppController {
           <input type="text" id="room-code-input" class="room-input" placeholder="ROOM CODE" maxlength="8" spellcheck="false" autocomplete="off" />
           <button id="btn-join-room" class="btn btn-secondary">Join</button>
           <button id="btn-create-room" class="btn btn-primary">Create Room</button>
+          <button id="btn-play-perkins" class="btn btn-special btn-perkins" title="Start Solo Match vs Perkins AI">🤖 Play vs Perkins</button>
         </div>
         <div class="header-status-group">
           <div id="connection-status-pill" class="status-pill status-offline" aria-live="polite">
@@ -631,6 +639,16 @@ export class RPMAppController {
       this._domListeners.push(() => btnMute.removeEventListener('click', handler));
     }
 
+    // Play vs Perkins Button
+    const btnPlayPerkins = this.container.querySelector('#btn-play-perkins');
+    if (btnPlayPerkins) {
+      const handler = async () => {
+        await this.startPerkinsMatch();
+      };
+      btnPlayPerkins.addEventListener('click', handler);
+      this._domListeners.push(() => btnPlayPerkins.removeEventListener('click', handler));
+    }
+
     // Open Deckbuilder Modal
     const btnDeckbuilder = this.container.querySelector('#btn-open-deckbuilder');
     if (btnDeckbuilder) {
@@ -657,6 +675,162 @@ export class RPMAppController {
   }
 
   // ==========================================================================
+  // Perkins AI Autonomous Opponent & Coach (SPEC-RPM-PERKINS-013)
+  // ==========================================================================
+
+  /**
+   * Initiates an instant solo match against Perkins AI (INV-PERKINS-2).
+   * 
+   * @param {string|Object} [deckIdOrOptions={}]
+   * @param {Object} [maybeOptions={}]
+   * @returns {Promise<PerkinsAgent>} Instantiated Perkins agent
+   */
+  async startPerkinsMatch(deckIdOrOptions = {}, maybeOptions = {}) {
+    let deckId = null;
+    let options = {};
+    if (typeof deckIdOrOptions === 'string') {
+      deckId = deckIdOrOptions;
+      options = maybeOptions || {};
+    } else {
+      options = deckIdOrOptions || {};
+      deckId = options.deckId || options.starterDeckId || 'R';
+    }
+
+    // 1. Teardown any existing active bot (INV-SAFE-3)
+    if (this.perkinsAgent) {
+      try { this.perkinsAgent.destroy(); } catch (_) {}
+      this.perkinsAgent = null;
+    }
+
+    // 2. Configure 2-player seating: [this.myPlayerId, botSeatId]
+    const botSeatId = options.slotId || 'p2_perkins';
+    this.playerIds = [this.myPlayerId, botSeatId];
+
+    if (!this.drawerState[botSeatId]) {
+      this.drawerState[botSeatId] = {};
+    }
+
+    // Ensure bot registered in TabletopStateManager
+    if (this.tabletopState) {
+      if (typeof this.tabletopState.registerPlayer === 'function') {
+        try {
+          this.tabletopState.registerPlayer(botSeatId, options.name || 'Perkins AI (Bot)');
+        } catch (_) {}
+      }
+      if (!this.tabletopState.players[botSeatId]) {
+        this.tabletopState.players[botSeatId] = {
+          id: botSeatId,
+          playerId: botSeatId,
+          name: options.name || 'Perkins AI (Bot)',
+          resources: { life: 20, poison: 0, energy: 0, manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 } },
+          zones: { hand: [], library: [], graveyard: [], exile: [], battlefield: [] },
+          battlefield: { lands: [], creatures: [], noncreatures: [], planeswalkers: [] },
+          hand: [],
+          library: [],
+          graveyard: [],
+          exile: [],
+          isEliminated: false
+        };
+      }
+    }
+
+    // Configure PriorityStateMachine players
+    if (this.priorityMachine) {
+      this.priorityMachine.players = [this.myPlayerId, botSeatId];
+      if (!this.priorityMachine.activePlayerId) {
+        this.priorityMachine.activePlayerId = this.myPlayerId;
+      }
+      if (!this.priorityMachine.priorityPlayerId) {
+        this.priorityMachine.priorityPlayerId = this.myPlayerId;
+      }
+    }
+
+    // 3. Initialize starter deck for Perkins
+    const starter = options.starterDeck || (deckId && BEGINNER_DECKS[deckId]) || BEGINNER_DECKS.R;
+    const botPlayer = this.tabletopState?.players?.[botSeatId];
+    if (botPlayer) {
+      const mainboard = starter.mainboard || [];
+      const libCards = mainboard.flatMap(c => {
+        const count = c.count || 1;
+        return Array.from({ length: count }, () => ({
+          instanceId: generateInstanceId(),
+          ownerId: botSeatId,
+          controllerId: botSeatId,
+          name: c.name,
+          typeLine: c.type || 'Creature',
+          manaCost: c.manaCost || (c.cmc === 0 ? '' : '{R}'),
+          cmc: c.cmc ?? 1,
+          power: c.power ?? 2,
+          toughness: c.toughness ?? 2,
+          isTapped: false,
+          isSummoningSick: false
+        }));
+      });
+      botPlayer.library = libCards;
+      botPlayer.zones = botPlayer.zones || {};
+      botPlayer.zones.library = [...libCards];
+    }
+
+    // 4. Instantiate PerkinsAgent
+    const agent = new PerkinsAgent({
+      slotId: botSeatId,
+      name: options.name || 'Perkins AI (Bot)',
+      mode: 'LOCAL',
+      thinkingDelayMs: options.thinkingDelayMs !== undefined ? options.thinkingDelayMs : 1200,
+      coachEnabled: options.coachEnabled !== false,
+      language: options.language || 'es',
+      starterDeck: starter,
+      ...options
+    });
+
+    // 5. Attach to app controller
+    agent.attach(this);
+    this.perkinsAgent = agent;
+
+    this.reconcileDOM();
+    return agent;
+  }
+
+  /**
+   * Spawns a headless Perkins bot inside an online multiplayer room.
+   * 
+   * @param {string} roomCode - Target room code
+   * @param {string|Object} [optionsOrSeatId={}] - Target player seat or options
+   * @returns {Promise<PerkinsAgent>}
+   */
+  async spawnBotInRoom(roomCode, optionsOrSeatId = {}) {
+    const options = typeof optionsOrSeatId === 'string' ? { slotId: optionsOrSeatId } : (optionsOrSeatId || {});
+    const botSeatId = options.slotId || 'p2';
+
+    const defaultRelayUrl = (typeof window !== 'undefined' && window.location && window.location.host)
+      ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+      : (this.options?.relayUrl || 'ws://localhost:3000');
+
+    const relayClient = options.relayClient || new RelayClient({
+      url: options.relayUrl || defaultRelayUrl
+    });
+
+    const agent = new PerkinsAgent({
+      slotId: botSeatId,
+      name: options.name || 'Perkins AI (Bot)',
+      mode: 'REMOTE',
+      thinkingDelayMs: options.thinkingDelayMs !== undefined ? options.thinkingDelayMs : 1200,
+      coachEnabled: false,
+      language: options.language || 'es',
+      ...options
+    });
+
+    agent.attachRelay(relayClient);
+    if (roomCode && typeof relayClient.joinRoom === 'function') {
+      try {
+        await relayClient.connect();
+        await relayClient.joinRoom(roomCode, botSeatId);
+      } catch (_) {}
+    }
+    return agent;
+  }
+
+  // ==========================================================================
   // Unidirectional Action Dispatcher (INV-HARNESS-2)
   // ==========================================================================
 
@@ -664,7 +838,7 @@ export class RPMAppController {
    * Central Unidirectional Action Dispatcher.
    * Strictly enforces INV-HARNESS-2:
    * When origin === 'LOCAL', transmits action over WebSocket.
-   * When origin === 'REMOTE', updates local state WITHOUT re-broadcasting.
+   * When origin === 'REMOTE' or 'LOCAL_BOT', updates local state WITHOUT re-broadcasting.
    * 
    * @param {Object} action
    * @param {Object} [context={ origin: 'LOCAL' }]
@@ -677,7 +851,7 @@ export class RPMAppController {
     const actionType = action.type === 'ACTION_SEQUENCED' ? action.actionType : (action.actionType || action.type);
     const payload = action.payload || {};
 
-    // Invariant INV-HARNESS-2: Circular loop suppression
+    // Invariant INV-HARNESS-2 & INV-PERKINS-2: Circular loop suppression
     if (origin === 'LOCAL') {
       if (this.relayClient && typeof this.relayClient.sendAction === 'function') {
         this.relayClient.sendAction(action);
@@ -719,6 +893,42 @@ export class RPMAppController {
         }
         break;
 
+      case 'PLAY_LAND': {
+        const targetId = payload.playerId || action.playerId || this.myPlayerId;
+        const card = payload.card || action.card;
+        if (this.tabletopState?.players?.[targetId] && card) {
+          const p = this.tabletopState.players[targetId];
+          if (Array.isArray(p.hand)) {
+            p.hand = p.hand.filter(c => c.instanceId !== card.instanceId && c.name !== card.name);
+          }
+          if (Array.isArray(p.zones?.hand)) {
+            p.zones.hand = p.zones.hand.filter(c => c.instanceId !== card.instanceId && c.name !== card.name);
+          }
+          p.battlefield = p.battlefield || {};
+          p.battlefield.lands = p.battlefield.lands || [];
+          p.battlefield.lands.push({ ...card, isTapped: false });
+        }
+        break;
+      }
+
+      case 'DECLARE_ATTACKERS': {
+        const targetId = payload.playerId || action.playerId || this.myPlayerId;
+        const attackerIds = payload.attackers || action.attackers || [];
+        if (this.tabletopState?.players?.[targetId]) {
+          const p = this.tabletopState.players[targetId];
+          const creatures = p.battlefield?.creatures || [];
+          for (const c of creatures) {
+            if (attackerIds.includes(c.instanceId)) {
+              c.isTapped = true;
+            }
+          }
+        }
+        break;
+      }
+
+      case 'DECLARE_BLOCKERS':
+        break;
+
       case 'SEND_CHIT_CHAT':
         if (this.dualChat) {
           this.dualChat.sendChitChat(
@@ -737,8 +947,9 @@ export class RPMAppController {
         }
         break;
 
+      case 'PLAYER_CONCEDED':
       case 'PLAYER_ELIMINATED':
-        this.handlePlayerElimination(payload.playerId || payload.player || action.playerId);
+        this.handlePlayerElimination(payload.playerId || payload.player || action.playerId, payload.reason || action.reason);
         break;
 
       case 'MATCH_VICTORY':
@@ -1383,6 +1594,9 @@ export class RPMAppController {
         <button class="chat-tab-btn tab-chit-chat ${!isTurnTab ? 'active' : ''}">
           Chit-Chat
         </button>
+        <button id="btn-toggle-coach" class="btn-badge btn-coach-toggle ${this.perkinsAgent?.coachEnabled !== false ? 'active' : ''}" title="Toggle Perkins Coach Tips">
+          ${this.perkinsAgent?.coachEnabled === false ? '🎓 Coach: OFF' : '🎓 Coach: ON'}
+        </button>
       </div>
       <div id="chat-messages" class="chat-feed"></div>
       <div id="chat-staged-chips" class="staged-chips-container" style="${isTurnTab && holdsPriority ? '' : 'display: none;'}">
@@ -1412,6 +1626,18 @@ export class RPMAppController {
       btnChitTab.addEventListener('click', () => {
         this.activeChatTab = 'CHIT_CHAT';
         this._reconcileChat();
+      });
+    }
+
+    // Coach toggle
+    const btnToggleCoach = chatDrawer.querySelector('#btn-toggle-coach');
+    if (btnToggleCoach) {
+      btnToggleCoach.addEventListener('click', () => {
+        if (this.perkinsAgent) {
+          this.perkinsAgent.coachEnabled = !this.perkinsAgent.coachEnabled;
+          btnToggleCoach.textContent = this.perkinsAgent.coachEnabled ? '🎓 Coach: ON' : '🎓 Coach: OFF';
+          btnToggleCoach.classList.toggle('active', this.perkinsAgent.coachEnabled);
+        }
       });
     }
 

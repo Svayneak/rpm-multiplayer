@@ -168,7 +168,14 @@ export {
   AppController
 } from './app.js';
 
+export {
+  PerkinsAgent,
+  PERKINS_DEFAULT_CONFIG,
+  PERKINS_COACH_DIALOGUES
+} from './PerkinsAgent.js';
+
 import { RPMAppController, AppController } from './app.js';
+import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
 import { parseDecklist, REGEX_DECK_COMPREHENSIVE, REGEX_DECK_SIMPLE } from './DeckParser.js';
 import { ScryfallService, MemoryCacheAdapter, LocalStorageCacheAdapter } from './ScryfallService.js';
 import {
@@ -368,6 +375,9 @@ export default {
   RelayClient,
   EventEmitter,
   RPMAppController,
-  AppController
+  AppController,
+  PerkinsAgent,
+  PERKINS_DEFAULT_CONFIG,
+  PERKINS_COACH_DIALOGUES
 };
 
