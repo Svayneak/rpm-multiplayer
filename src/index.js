@@ -230,6 +230,17 @@ export {
   TELEMETRY_STORAGE_KEY
 } from './AuthManager.js';
 
+export {
+  DiceCanvas,
+  diceCanvas,
+  is3DSupported
+} from './view/DiceCanvas.js';
+
+export {
+  DiceShaker,
+  diceShaker
+} from './view/DiceShaker.js';
+
 import {
   AuthManager,
   STARTER_ARCHETYPES,
@@ -242,6 +253,8 @@ import {
   AUTH_STORAGE_KEY,
   TELEMETRY_STORAGE_KEY
 } from './AuthManager.js';
+import { DiceCanvas, diceCanvas, is3DSupported } from './view/DiceCanvas.js';
+import { DiceShaker, diceShaker } from './view/DiceShaker.js';
 import { RPMAppController, AppController } from './app.js';
 import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
 import { parseDecklist, REGEX_DECK_COMPREHENSIVE, REGEX_DECK_SIMPLE } from './DeckParser.js';
@@ -486,6 +499,11 @@ export default {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
   AUTH_STORAGE_KEY,
-  TELEMETRY_STORAGE_KEY
+  TELEMETRY_STORAGE_KEY,
+  DiceCanvas,
+  diceCanvas,
+  is3DSupported,
+  DiceShaker,
+  diceShaker
 };
 

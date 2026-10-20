@@ -2167,5 +2167,122 @@
   }
 }
 
+/* 3D Dice Canvas Viewport Overlay (INV-DICE-3D-1) */
+#dice-canvas {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: transparent;
+  opacity: 1;
+  transition: opacity 0.4s ease-out;
+}
+
+#dice-canvas.is-fading {
+  opacity: 0;
+}
+
+#dice-canvas canvas,
+#dice-canvas .dice-box-canvas {
+  background: transparent;
+  width: 100%;
+  height: 100%;
+}
+
+/* Interactive Dice Shaker HUD (Touch-Hold & Shake) */
+.dice-shaker-hud {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  overflow: hidden;
+  user-select: none;
+}
+
+.shaker-aura {
+  position: absolute;
+  width: 120px;
+  height: 120px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(124, 58, 237, 0.45) 0%, rgba(30, 27, 75, 0.75) 60%, rgba(15, 23, 42, 0) 100%);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 30px rgba(139, 92, 246, 0.6), inset 0 0 20px rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  will-change: transform, left, top;
+  transition: opacity 0.15s ease;
+}
+
+.shaker-aura.shaker-burst {
+  animation: shaker-burst-anim 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes shaker-burst-anim {
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
+}
+
+.shaker-dice-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 60px;
+  position: relative;
+}
+
+.shaker-die {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 1.1rem;
+  color: white;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6), inset 0 1px 2px rgba(255, 255, 255, 0.4);
+  will-change: transform;
+  transition: transform 0.08s ease-out;
+}
+
+.shaker-die.die-tens {
+  background: linear-gradient(135deg, #8b5cf6, #581c87);
+  border: 2px solid #fbbf24;
+  color: #fef08a;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.shaker-die.die-ones {
+  background: linear-gradient(135deg, #06b6d4, #0e7490);
+  border: 2px solid #f87171;
+  color: #fef2f2;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.6);
+}
+
+.shaker-die.die-d20 {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f59e0b, #b45309);
+  border: 2px solid #fef3c7;
+  color: #ffffff;
+  font-size: 1.25rem;
+}
+
+.shaker-hint {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  margin-top: 4px;
+}
+
 
 

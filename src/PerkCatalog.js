@@ -690,7 +690,28 @@ const CANONICAL_PERKS = Object.freeze({
  * @returns {Object|null}
  */
 export function getPerkDefinition(perkKey, lang = 'en') {
-  const perk = CANONICAL_PERKS[perkKey];
+  let key = perkKey;
+  if (key === 0 || key === '0' || key === 100 || key === '100' || key === '00') {
+    key = '00';
+  } else if (typeof key === 'number') {
+    if (key >= 1 && key <= 9) {
+      key = `${key}${key}`;
+    } else {
+      key = key < 10 ? `0${key}` : `${key}`;
+    }
+  } else if (typeof key === 'string') {
+    key = key.trim();
+    if (key === '0' || key === '100') {
+      key = '00';
+    } else if (key.length === 1 && key >= '1' && key <= '9') {
+      key = `${key}${key}`;
+    }
+  }
+
+  let perk = CANONICAL_PERKS[key];
+  if (!perk && typeof key === 'string' && key.length === 1) {
+    perk = CANONICAL_PERKS[`0${key}`] || CANONICAL_PERKS[`${key}${key}`];
+  }
   if (!perk) return null;
   return {
     ...perk,

@@ -60,6 +60,7 @@ import {
   getStarterDeck,
   calculateAge
 } from './AuthManager.js';
+import { diceCanvas } from './view/DiceCanvas.js';
 
 /**
  * Standard MTG Zone Drawers
@@ -426,6 +427,7 @@ export class RPMAppController {
   startMatch(matchOptions = {}) {
     this._hasMatchStarted = true;
     this.isMatchActiveFlag = true;
+    this.isRollOffActive = false;
 
     // Purge and sanitize TabletopStateManager (INV-LOBBY-6, Screenshot 1 Bug Fix)
     const seatedSlots = this.lobbyManager ? this.lobbyManager.getSeatedSlots() : [];
@@ -1064,15 +1066,39 @@ export class RPMAppController {
     this.reconcileDOM();
   }
 
-  triggerDiceRoll(diceType = 'dice') {
+  async triggerDiceRoll(diceType = 'dice') {
     if (diceType === 'd20' || this.isRollOffActive) {
-      this.submitRollOff();
+      return await this.submitRollOff();
     } else {
-      const roll = executeAuthoritativeRoll();
+      let rollDigits = null;
+      if (typeof diceCanvas !== 'undefined' && typeof diceCanvas.rollPercentile === 'function') {
+        try {
+          rollDigits = await diceCanvas.rollPercentile();
+        } catch (_) {}
+      }
+
+      let roll;
+      if (Array.isArray(rollDigits) && rollDigits.length === 2) {
+        const tens = rollDigits[0];
+        const ones = rollDigits[1];
+        roll = {
+          tens,
+          ones,
+          total: tens * 10 + ones,
+          rollString: `${tens}${ones}`
+        };
+      } else {
+        roll = executeAuthoritativeRoll();
+      }
+
+      const birthday = this.authManager?.getBirthdayRoll?.() || '69';
+      const resolved = resolveRoll(roll.tens, roll.ones, birthday);
+
       this.handlePerkRolled({
         ...roll,
-        isMiss: roll.perkId === null
+        ...resolved
       });
+      return roll;
     }
   }
 
@@ -1096,7 +1122,12 @@ export class RPMAppController {
     this.reconcileDOM();
   }
 
-  submitRollOff(forcedValue = null) {
+  async submitRollOff(forcedValue = null) {
+    if (typeof diceCanvas !== 'undefined' && typeof diceCanvas.rollD20 === 'function') {
+      try {
+        await diceCanvas.rollD20(this.myPlayerId);
+      } catch (_) {}
+    }
     return this.submitRollOffForPlayer(this.myPlayerId, forcedValue);
   }
 
@@ -1271,6 +1302,13 @@ export class RPMAppController {
         await this.relayClient.connect();
       } catch (_) {}
     }
+
+    // 6. Initialize 3D Dice Canvas (INV-DICE-3D-1)
+    if (typeof diceCanvas !== 'undefined' && typeof diceCanvas.init === 'function') {
+      diceCanvas.init().catch(err => {
+        console.warn('[app] diceCanvas init error:', err);
+      });
+    }
   }
 
   /**
@@ -1326,6 +1364,9 @@ export class RPMAppController {
     if (this.perkinsAgent && typeof this.perkinsAgent.destroy === 'function') {
       try { this.perkinsAgent.destroy(); } catch (_) {}
       this.perkinsAgent = null;
+    }
+    if (typeof diceCanvas !== 'undefined' && typeof diceCanvas.clear === 'function') {
+      try { diceCanvas.clear(); } catch (_) {}
     }
     if (this.queueSearchInterval) {
       clearInterval(this.queueSearchInterval);
@@ -1770,7 +1811,8 @@ export class RPMAppController {
       };
       const onMiss = (data) => {
         if (this.isDestroyed) return;
-        this.handlePerkRolled({ ...data, isMiss: true });
+        const rollPayload = data?.roll ? { ...data.roll, ...data, isMiss: true } : { ...data, isMiss: true };
+        this.handlePerkRolled(rollPayload);
       };
       this.randomPerk.on('PERK_ROLLED', onRolled);
       this.randomPerk.on('PERK_ROLL_MISS', onMiss);
@@ -2152,7 +2194,9 @@ export class RPMAppController {
     // Invariant INV-HARNESS-2 & INV-PERKINS-2: Circular loop suppression
     if (origin === 'LOCAL') {
       if (this.relayClient && typeof this.relayClient.sendAction === 'function') {
-        this.relayClient.sendAction(action);
+        try {
+          this.relayClient.sendAction(action);
+        } catch (_) {}
       }
     }
 
@@ -2184,25 +2228,57 @@ export class RPMAppController {
         break;
       }
 
-      case 'CAST_SPELL':
+      case 'CAST_SPELL': {
+        const cardObj = payload.card || action.card || payload;
+        const controllerId = payload.controllerId || action.controllerId || payload.playerId || action.playerId || cardObj.controllerId;
+        const sourcePlayerId = payload.playerId || action.playerId || payload.controllerId || action.controllerId || cardObj.sourcePlayerId;
+        const controllerName = payload.controllerName || action.controllerName || cardObj.controllerName;
+        const cardName = payload.cardName || action.cardName || cardObj.name || cardObj.cardName;
+
+        // 1. Hand Zone Card Splicing (INV-BOT-CAST-1)
+        if (this.tabletopState?.players?.[controllerId]) {
+          const p = this.tabletopState.players[controllerId];
+          const handList = Array.isArray(p.zones?.hand) ? p.zones.hand : (Array.isArray(p.hand) ? p.hand : []);
+          const idx = handList.findIndex(c => {
+            if (!c) return false;
+            if (cardObj.instanceId && c.instanceId === cardObj.instanceId) return true;
+            const cName = c.name || c.cardName || c;
+            return cName === cardName;
+          });
+
+          if (idx !== -1) {
+            handList.splice(idx, 1);
+            if (p.zones) p.zones.hand = handList;
+            p.hand = handList;
+          }
+        }
+
+        // 2. Auto-Tap Mana Pool Deduction & Land Tapping (INV-BOT-CAST-1)
+        const manaCost = cardObj.manaCost || payload.manaCost;
+        if (this.tabletopState && manaCost && typeof this.tabletopState.autoTapForMana === 'function') {
+          try {
+            this.tabletopState.autoTapForMana(controllerId, manaCost);
+          } catch (err) {
+            console.warn(`[app] autoTapForMana warning for player ${controllerId}:`, err.message);
+          }
+        }
+
+        // 3. Stack Placement & Priority Forwarding
         if (this.priorityMachine) {
-          const cardObj = payload.card || action.card || payload;
-          const controllerId = payload.controllerId || payload.playerId || action.playerId || cardObj.controllerId;
-          const sourcePlayerId = payload.playerId || action.playerId || payload.controllerId || cardObj.sourcePlayerId;
-          const controllerName = payload.controllerName || action.controllerName || cardObj.controllerName;
           const item = {
             ...cardObj,
             card: cardObj,
             controllerId,
             sourcePlayerId,
             controllerName,
-            cardName: payload.cardName || action.cardName || cardObj.name || cardObj.cardName,
+            cardName,
             targetId: payload.targetId || action.targetId || payload.targets || action.targets,
             targets: payload.targets || action.targets || payload.targetId || action.targetId
           };
           this.priorityMachine.pushStack(item);
         }
         break;
+      }
 
       case 'PLAY_LAND': {
         const targetId = payload.playerId || action.playerId || this.myPlayerId;

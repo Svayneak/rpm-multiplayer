@@ -32,7 +32,8 @@ const MIME_TYPES = {
   '.woff2': 'font/woff2',
   '.ttf': 'font/ttf',
   '.ogg': 'audio/ogg',
-  '.mp3': 'audio/mpeg'
+  '.mp3': 'audio/mpeg',
+  '.wasm': 'application/wasm'
 };
 
 // Root HTTP server for static files

@@ -32,11 +32,14 @@
     "./TurnRollOffManager": "./src/TurnRollOffManager.js",
     "./TabRouter": "./src/view/TabRouter.js",
     "./AuthManager": "./src/AuthManager.js",
+    "./DiceCanvas": "./src/view/DiceCanvas.js",
+    "./DiceShaker": "./src/view/DiceShaker.js",
     "./app": "./src/app.js"
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run_tests.js && node test/test_zone_state.js && node test/test_priority_stack.js && node test/test_dual_chat_action.js && node test/test_tabletop_ui.js && node test/test_relay_sync.js && node test/test_random_perk.js && node test/test_deckbuilder_ai.js && node test/test_victory_fanfare.js && node test/test_browser_harness.js && node test/test_multi_client_sync.js && node test/test_perkins_ai.js && node test/test_unified_platform.js && node test/test_onboarding_lobby.js && node test/test_battle_spectator.js && node test/test_battle_stability.js",
+    "test": "node test/run_tests.js && node test/test_zone_state.js && node test/test_priority_stack.js && node test/test_dual_chat_action.js && node test/test_tabletop_ui.js && node test/test_relay_sync.js && node test/test_random_perk.js && node test/test_deckbuilder_ai.js && node test/test_victory_fanfare.js && node test/test_browser_harness.js && node test/test_multi_client_sync.js && node test/test_perkins_ai.js && node test/test_unified_platform.js && node test/test_onboarding_lobby.js && node test/test_battle_spectator.js && node test/test_battle_stability.js && node test/test_3d_dice_and_integrity.js",
+    "test:dice": "node test/test_3d_dice_and_integrity.js",
     "test:stability": "node test/test_battle_stability.js",
     "test:battle": "node test/test_battle_spectator.js",
     "test:onboard": "node test/test_onboarding_lobby.js",

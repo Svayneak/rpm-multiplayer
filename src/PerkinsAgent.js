@@ -97,6 +97,9 @@ export class PerkinsAgent {
     this._lastCoachTimestamp = 0;
     this._completedMilestones = new Set();
     this._hasPlayedLandThisTurn = false;
+    this._alarmActionCount = 0;
+    this._isEvaluating = false;
+    this._currentEvaluationPromise = null;
 
     if (options.app) {
       this.attach(options.app);
@@ -173,7 +176,10 @@ export class PerkinsAgent {
         if (this.isDestroyed) return;
         if (event && event.type === 'STACK_ALARM_START') {
           if (event.targetPlayerId === this.slotId) {
-            this.onStackAlarm(event);
+            const hasStackItem = (this.app?.priorityMachine?.stack?.length > 0) || Boolean(event.stackItemId && !event.stackItemId.startsWith('stack_alarm_'));
+            if (hasStackItem) {
+              this.onStackAlarm(event);
+            }
           } else if (event.targetPlayerId === this.app.myPlayerId) {
             this.triggerMilestone('MS_ALARM_HOLD');
           }
@@ -200,8 +206,11 @@ export class PerkinsAgent {
             const top = typeof this.app.priorityMachine.peekStack === 'function'
               ? this.app.priorityMachine.peekStack()
               : (this.app.priorityMachine.stack?.[this.app.priorityMachine.stack.length - 1]);
-            this.onStackAlarm({ targetPlayerId: this.slotId, stackItemId: top?.id });
+            if (!this.app.alarmManager) {
+              this.onStackAlarm({ targetPlayerId: this.slotId, stackItemId: top?.id });
+            }
           } else {
+            this._handleStackEmpty();
             this.evaluateTurnPhase(this.app.priorityMachine.currentPhaseStep);
           }
         } else if (event?.priorityPlayerId === this.app.myPlayerId) {
@@ -213,6 +222,7 @@ export class PerkinsAgent {
 
       const onPhaseStepChange = (event) => {
         if (this.isDestroyed) return;
+        this._handleStackEmpty();
         const currentPhase = event?.currentPhaseStep || event?.phaseStep;
         if (event?.priorityPlayerId === this.slotId || this.app.priorityMachine.priorityPlayerId === this.slotId) {
           this.evaluateTurnPhase(currentPhase);
@@ -220,6 +230,22 @@ export class PerkinsAgent {
       };
       this.app.priorityMachine.on('PHASE_STEP_CHANGED', onPhaseStepChange);
       this._unsubscribers.push(() => this.app.priorityMachine.off('PHASE_STEP_CHANGED', onPhaseStepChange));
+
+      const onStackResolve = (event) => {
+        if (this.isDestroyed) return;
+        if (event?.remainingStackSize === 0 || this.app?.priorityMachine?.stack?.length === 0) {
+          this._handleStackEmpty();
+        }
+      };
+      this.app.priorityMachine.on('STACK_RESOLVE', onStackResolve);
+      this._unsubscribers.push(() => this.app.priorityMachine.off('STACK_RESOLVE', onStackResolve));
+
+      const onStackCleared = () => {
+        if (this.isDestroyed) return;
+        this._handleStackEmpty();
+      };
+      this.app.priorityMachine.on('STACK_CLEARED', onStackCleared);
+      this._unsubscribers.push(() => this.app.priorityMachine.off('STACK_CLEARED', onStackCleared));
     }
 
     // 3. RandomPerkEngine listening
@@ -313,6 +339,11 @@ export class PerkinsAgent {
     return true;
   }
 
+  _handleStackEmpty() {
+    this._alarmActionCount = 0;
+    this._currentEvaluationPromise = null;
+  }
+
   /**
    * Evaluates stack alarm reaction within thinkingDelayMs (INV-PERKINS-4).
    * Evaluates whether to respond with instant or pass priority.
@@ -324,201 +355,234 @@ export class PerkinsAgent {
     if (this.isDestroyed) return;
     if (alarmState?.targetPlayerId && alarmState.targetPlayerId !== this.slotId) return;
 
-    const executeAlarmReaction = async () => {
-      if (this.isDestroyed) return;
-      const state = this.getProjectedState();
-      const myPlayer = state?.players?.[this.slotId];
-      if (!myPlayer) {
-        const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
-        await this.dispatchAction(passAction);
-        return passAction;
-      }
+    // Await an already running evaluation if one is in flight
+    if (this._currentEvaluationPromise) {
+      return await this._currentEvaluationPromise;
+    }
 
-      const handCards = Array.isArray(myPlayer.hand?.cards) ? myPlayer.hand.cards : (
-        Array.isArray(myPlayer.hand) ? myPlayer.hand : []
-      );
-      const lands = myPlayer.battlefield?.lands || [];
-      const untappedLands = lands.filter(l => !l.isTapped);
-      const manaPool = myPlayer.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    // 1. Concurrency Lock: Prevent parallel re-entrant executions (INV-BOT-THROTTLE-1)
+    if (this._isEvaluating) {
+      return;
+    }
 
-      const topItem = state?.stack?.[state.stack.length - 1] || this.app?.priorityMachine?.peekStack() || null;
+    // 2. Throttle Guard: Maximum 1 instant reaction per stack event chain (INV-BOT-THROTTLE-1)
+    if (this._alarmActionCount >= 1) {
+      const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
+      await this.dispatchAction(passAction);
+      return passAction;
+    }
 
-      // 1. Counterspell check: Top stack item is opponent spell & bot has Counterspell + {U}{U}
-      const hasUU = (manaPool.U >= 2) || (untappedLands.length >= 2);
-      const counterCard = handCards.find(c => c && !c.isHidden && /counterspell/i.test(c.name || ''));
-      const isOpponentStackItem = topItem && (
-        (topItem.sourcePlayerId && topItem.sourcePlayerId !== this.slotId) ||
-        (topItem.controllerId && topItem.controllerId !== this.slotId) ||
-        (topItem.ownerId && topItem.ownerId !== this.slotId)
-      );
+    this._isEvaluating = true;
+    this._currentEvaluationPromise = (async () => {
+      try {
+        const executeAlarmReaction = async () => {
+          if (this.isDestroyed) return;
+          const state = this.getProjectedState();
+          const myPlayer = state?.players?.[this.slotId];
+          if (!myPlayer) {
+            const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
+            await this.dispatchAction(passAction);
+            return passAction;
+          }
 
-      if (counterCard && hasUU && isOpponentStackItem) {
-        if ((manaPool.U || 0) < 2) {
-          const neededU = 2 - (manaPool.U || 0);
-          const landsToTap = untappedLands.slice(0, neededU);
-          for (const land of landsToTap) {
-            land.isTapped = true;
-            await this.dispatchAction({
-              type: 'TAP_PERMANENT',
+          const handCards = Array.isArray(myPlayer.hand?.cards) ? myPlayer.hand.cards : (
+            Array.isArray(myPlayer.hand) ? myPlayer.hand : []
+          );
+          const lands = myPlayer.battlefield?.lands || [];
+          const untappedLands = lands.filter(l => !l.isTapped);
+          const manaPool = myPlayer.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+
+          const topItem = state?.stack?.[state.stack.length - 1] || this.app?.priorityMachine?.peekStack() || null;
+          if (!topItem) {
+            return null;
+          }
+
+          // 1. Counterspell check: Top stack item is opponent spell & bot has Counterspell + {U}{U}
+          const hasUU = (manaPool.U >= 2) || (untappedLands.length >= 2);
+          const counterCard = handCards.find(c => c && !c.isHidden && /counterspell/i.test(c.name || ''));
+          const isOpponentStackItem = topItem && (
+            (topItem.sourcePlayerId && topItem.sourcePlayerId !== this.slotId) ||
+            (topItem.controllerId && topItem.controllerId !== this.slotId) ||
+            (topItem.ownerId && topItem.ownerId !== this.slotId)
+          );
+
+          if (counterCard && hasUU && isOpponentStackItem) {
+            if ((manaPool.U || 0) < 2) {
+              const neededU = 2 - (manaPool.U || 0);
+              const landsToTap = untappedLands.slice(0, neededU);
+              for (const land of landsToTap) {
+                land.isTapped = true;
+                await this.dispatchAction({
+                  type: 'TAP_PERMANENT',
+                  playerId: this.slotId,
+                  instanceId: land.instanceId || land.id,
+                  payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
+                });
+                if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+                  try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+                }
+              }
+            }
+
+            this._alarmActionCount++;
+            const castAction = {
+              type: 'CAST_SPELL',
               playerId: this.slotId,
-              instanceId: land.instanceId || land.id,
-              payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
-            });
-            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-              try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+              controllerId: this.slotId,
+              controllerName: this.playerName || 'Perkins AI (Bot)',
+              card: counterCard,
+              cardName: counterCard.name,
+              targetId: topItem.id || topItem.instanceId || alarmState?.stackItemId,
+              payload: {
+                playerId: this.slotId,
+                controllerId: this.slotId,
+                controllerName: this.playerName || 'Perkins AI (Bot)',
+                card: counterCard,
+                cardName: counterCard.name,
+                targetId: topItem.id || topItem.instanceId || alarmState?.stackItemId
+              }
+            };
+            await this.dispatchAction(castAction);
+            return castAction;
+          }
+
+        // 2. Lightning Bolt check: {R} available & opponent life <= 3 or creature toughness <= 3
+        const hasR = (manaPool.R >= 1) || (untappedLands.length >= 1);
+        const boltCard = handCards.find(c => c && !c.isHidden && /lightning bolt/i.test(c.name || ''));
+
+        if (boltCard && hasR) {
+          let boltTargetId = null;
+          for (const [pId, p] of Object.entries(state.players || {})) {
+            if (pId === this.slotId || p.isEliminated) continue;
+            if ((p.resources?.life ?? 20) <= 3) {
+              boltTargetId = pId;
+              break;
+            }
+            const creatures = p.battlefield?.creatures || [];
+            const killableCreature = creatures.find(c => (Number(c.toughness) || 0) <= 3);
+            if (killableCreature) {
+              boltTargetId = killableCreature.instanceId;
+              break;
             }
           }
-        }
 
-        const castAction = {
-          type: 'CAST_SPELL',
-          playerId: this.slotId,
-          controllerId: this.slotId,
-          controllerName: this.playerName || 'Perkins AI (Bot)',
-          card: counterCard,
-          cardName: counterCard.name,
-          targetId: topItem.id || topItem.instanceId || alarmState?.stackItemId,
-          payload: {
-            playerId: this.slotId,
-            controllerId: this.slotId,
-            controllerName: this.playerName || 'Perkins AI (Bot)',
-            card: counterCard,
-            cardName: counterCard.name,
-            targetId: topItem.id || topItem.instanceId || alarmState?.stackItemId
-          }
-        };
-        await this.dispatchAction(castAction);
-        return castAction;
-      }
-
-      // 2. Lightning Bolt check: {R} available & opponent life <= 3 or creature toughness <= 3
-      const hasR = (manaPool.R >= 1) || (untappedLands.length >= 1);
-      const boltCard = handCards.find(c => c && !c.isHidden && /lightning bolt/i.test(c.name || ''));
-
-      if (boltCard && hasR) {
-        let boltTargetId = null;
-        for (const [pId, p] of Object.entries(state.players || {})) {
-          if (pId === this.slotId || p.isEliminated) continue;
-          if ((p.resources?.life ?? 20) <= 3) {
-            boltTargetId = pId;
-            break;
-          }
-          const creatures = p.battlefield?.creatures || [];
-          const killableCreature = creatures.find(c => (Number(c.toughness) || 0) <= 3);
-          if (killableCreature) {
-            boltTargetId = killableCreature.instanceId;
-            break;
-          }
-        }
-
-        if (boltTargetId) {
-          if ((manaPool.R || 0) < 1 && untappedLands.length > 0) {
-            const land = untappedLands[0];
-            land.isTapped = true;
-            await this.dispatchAction({
-              type: 'TAP_PERMANENT',
-              playerId: this.slotId,
-              instanceId: land.instanceId || land.id,
-              payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
-            });
-            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-              try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+          if (boltTargetId) {
+            if ((manaPool.R || 0) < 1 && untappedLands.length > 0) {
+              const land = untappedLands[0];
+              land.isTapped = true;
+              await this.dispatchAction({
+                type: 'TAP_PERMANENT',
+                playerId: this.slotId,
+                instanceId: land.instanceId || land.id,
+                payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
+              });
+              if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+                try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+              }
             }
-          }
 
-          const castAction = {
-            type: 'CAST_SPELL',
-            playerId: this.slotId,
-            controllerId: this.slotId,
-            controllerName: this.playerName || 'Perkins AI (Bot)',
-            card: boltCard,
-            cardName: boltCard.name,
-            targetId: boltTargetId,
-            payload: {
+            this._alarmActionCount++;
+            const castAction = {
+              type: 'CAST_SPELL',
               playerId: this.slotId,
               controllerId: this.slotId,
               controllerName: this.playerName || 'Perkins AI (Bot)',
               card: boltCard,
               cardName: boltCard.name,
-              targetId: boltTargetId
-            }
-          };
-          await this.dispatchAction(castAction);
-          return castAction;
-        }
-      }
-
-      // 3. Fatal Push check: {B} available & opponent creature CMC <= 2
-      const hasB = (manaPool.B >= 1) || (untappedLands.length >= 1);
-      const pushCard = handCards.find(c => c && !c.isHidden && /fatal push/i.test(c.name || ''));
-
-      if (pushCard && hasB) {
-        let pushTargetId = null;
-        for (const [pId, p] of Object.entries(state.players || {})) {
-          if (pId === this.slotId || p.isEliminated) continue;
-          const creatures = p.battlefield?.creatures || [];
-          const pushable = creatures.find(c => (Number(c.cmc ?? this._parseCmc(c.manaCost)) || 0) <= 2);
-          if (pushable) {
-            pushTargetId = pushable.instanceId;
-            break;
+              targetId: boltTargetId,
+              payload: {
+                playerId: this.slotId,
+                controllerId: this.slotId,
+                controllerName: this.playerName || 'Perkins AI (Bot)',
+                card: boltCard,
+                cardName: boltCard.name,
+                targetId: boltTargetId
+              }
+            };
+            await this.dispatchAction(castAction);
+            return castAction;
           }
         }
 
-        if (pushTargetId) {
-          if ((manaPool.B || 0) < 1 && untappedLands.length > 0) {
-            const land = untappedLands[0];
-            land.isTapped = true;
-            await this.dispatchAction({
-              type: 'TAP_PERMANENT',
-              playerId: this.slotId,
-              instanceId: land.instanceId || land.id,
-              payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
-            });
-            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-              try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+        // 3. Fatal Push check: {B} available & opponent creature CMC <= 2
+        const hasB = (manaPool.B >= 1) || (untappedLands.length >= 1);
+        const pushCard = handCards.find(c => c && !c.isHidden && /fatal push/i.test(c.name || ''));
+
+        if (pushCard && hasB) {
+          let pushTargetId = null;
+          for (const [pId, p] of Object.entries(state.players || {})) {
+            if (pId === this.slotId || p.isEliminated) continue;
+            const creatures = p.battlefield?.creatures || [];
+            const pushable = creatures.find(c => (Number(c.cmc ?? this._parseCmc(c.manaCost)) || 0) <= 2);
+            if (pushable) {
+              pushTargetId = pushable.instanceId;
+              break;
             }
           }
 
-          const castAction = {
-            type: 'CAST_SPELL',
-            playerId: this.slotId,
-            controllerId: this.slotId,
-            controllerName: this.playerName || 'Perkins AI (Bot)',
-            card: pushCard,
-            cardName: pushCard.name,
-            targetId: pushTargetId,
-            payload: {
+          if (pushTargetId) {
+            if ((manaPool.B || 0) < 1 && untappedLands.length > 0) {
+              const land = untappedLands[0];
+              land.isTapped = true;
+              await this.dispatchAction({
+                type: 'TAP_PERMANENT',
+                playerId: this.slotId,
+                instanceId: land.instanceId || land.id,
+                payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
+              });
+              if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+                try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+              }
+            }
+
+            this._alarmActionCount++;
+            const castAction = {
+              type: 'CAST_SPELL',
               playerId: this.slotId,
               controllerId: this.slotId,
               controllerName: this.playerName || 'Perkins AI (Bot)',
               card: pushCard,
               cardName: pushCard.name,
-              targetId: pushTargetId
-            }
-          };
-          await this.dispatchAction(castAction);
-          return castAction;
+              targetId: pushTargetId,
+              payload: {
+                playerId: this.slotId,
+                controllerId: this.slotId,
+                controllerName: this.playerName || 'Perkins AI (Bot)',
+                card: pushCard,
+                cardName: pushCard.name,
+                targetId: pushTargetId
+              }
+            };
+            await this.dispatchAction(castAction);
+            return castAction;
+          }
         }
+
+        // 4. Default Clean Pass
+        const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
+        await this.dispatchAction(passAction);
+        return passAction;
+      };
+
+      if (this.thinkingDelayMs > 0) {
+        return await new Promise((resolve) => {
+          const timerId = setTimeout(async () => {
+            this._activeTimers.delete(timerId);
+            const res = await executeAlarmReaction();
+            resolve(res);
+          }, this.thinkingDelayMs);
+          this._activeTimers.add(timerId);
+        });
+      } else {
+        return await executeAlarmReaction();
       }
-
-      // 4. Default Clean Pass
-      const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
-      await this.dispatchAction(passAction);
-      return passAction;
-    };
-
-    if (this.thinkingDelayMs > 0) {
-      return new Promise((resolve) => {
-        const timerId = setTimeout(async () => {
-          this._activeTimers.delete(timerId);
-          const res = await executeAlarmReaction();
-          resolve(res);
-        }, this.thinkingDelayMs);
-        this._activeTimers.add(timerId);
-      });
-    } else {
-      return executeAlarmReaction();
+    } finally {
+      this._isEvaluating = false;
+      this._currentEvaluationPromise = null;
     }
+    })();
+
+    return await this._currentEvaluationPromise;
   }
 
   /**
@@ -531,9 +595,11 @@ export class PerkinsAgent {
    */
   async evaluateTurnPhase(phaseStep, injectedState = null) {
     if (this.isDestroyed) return null;
-
-    // Handle injected TabletopStateManager instance
-    let state = injectedState;
+    if (this._isEvaluating) return null;
+    this._isEvaluating = true;
+    try {
+      // Handle injected TabletopStateManager instance
+      let state = injectedState;
     if (state instanceof TabletopStateManager || (state && typeof state.projectState === 'function')) {
       state = state.projectState(this.slotId);
     } else if (!state) {
@@ -782,6 +848,9 @@ export class PerkinsAgent {
     const defaultPass = { type: 'PASS_PRIORITY', playerId: this.slotId };
     await this.dispatchAction(defaultPass);
     return defaultPass;
+    } finally {
+      this._isEvaluating = false;
+    }
   }
 
   async _executePrecombatMainPhase(state = null) {
