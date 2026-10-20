@@ -52,6 +52,10 @@ export class StackAlarmManager {
    * @param {number} [durationSeconds=this.defaultDurationSeconds]
    */
   start(targetPlayerId, stackItemId, durationSeconds = this.defaultDurationSeconds) {
+    if (typeof stackItemId === 'number' && (durationSeconds === undefined || durationSeconds === this.defaultDurationSeconds)) {
+      durationSeconds = stackItemId;
+      stackItemId = `stack_alarm_${Date.now()}`;
+    }
     this.cancel(); // Clear any existing active timer
 
     this.status = 'RUNNING';

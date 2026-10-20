@@ -221,13 +221,75 @@ export class ScryfallService {
       id: card.id,
       name: card.name,
       manaCost,
+      cmc: card.cmc ?? (card.mana_value !== undefined ? card.mana_value : 0),
       typeLine,
       oracleText,
       imageUri,
+      power: card.power ?? card.card_faces?.[0]?.power,
+      toughness: card.toughness ?? card.card_faces?.[0]?.toughness,
+      loyalty: card.loyalty ?? card.card_faces?.[0]?.loyalty,
       colors,
       modernLegal,
       raw: card
     };
+  }
+
+  /**
+   * Fetches single card by exact name with caching and fallback (INV-INSPECT-1).
+   * 
+   * @param {string} cardName
+   * @returns {Promise<Object>}
+   */
+  async fetchCardByName(cardName) {
+    if (!cardName || typeof cardName !== 'string') {
+      throw new Error('cardName is required for fetchCardByName');
+    }
+
+    const normalized = cardName.trim().toLowerCase();
+    const cacheKey = `name:${normalized}`;
+
+    // 1. Check local cache
+    const cached = await this.cache.getItem(cacheKey);
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch (_) {}
+    }
+
+    // 2. Network fetch via Scryfall named exact endpoint
+    if (this.fetchFn) {
+      const url = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName.trim())}`;
+      try {
+        const response = await this.fetchFn(url, {
+          headers: {
+            'User-Agent': 'RPM-Multiplayer/1.0',
+            'Accept': 'application/json'
+          }
+        });
+
+        if (response && response.ok) {
+          const rawCard = await response.json();
+          const entity = this._transformScryfallCard(rawCard);
+          await this.cache.setItem(cacheKey, JSON.stringify(entity));
+          return entity;
+        }
+      } catch (err) {
+        // Fallback on network failure
+      }
+    }
+
+    // 3. Fallback stub
+    const stub = {
+      id: `card_${normalized}`,
+      name: cardName,
+      manaCost: '',
+      typeLine: 'Card',
+      oracleText: '',
+      imageUri: '',
+      modernLegal: true
+    };
+    await this.cache.setItem(cacheKey, JSON.stringify(stub));
+    return stub;
   }
 
   /**

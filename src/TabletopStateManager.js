@@ -459,6 +459,22 @@ export class TabletopStateManager extends EventEmitter {
     const { playerId, count = 1 } = payload;
     const player = this.getPlayer(playerId);
     const n = Math.max(0, count);
+
+    // CR 104.3c: If a player is required to draw from an empty library, they lose the game
+    if (player.library.length === 0 && n > 0) {
+      player.isEliminated = true;
+      this.emit('EMPTY_LIBRARY_DRAW', { playerId, rule: 'CR 104.3c: Drawing from empty library results in game loss' });
+      this.emit('PLAYER_LOST', { playerId, reason: 'EMPTY_LIBRARY', rule: 'CR 104.3c' });
+      return {
+        drawn: [],
+        drawnCount: 0,
+        libraryCount: 0,
+        handCount: player.hand.length,
+        playerLost: true,
+        reason: 'CR 104.3c'
+      };
+    }
+
     const available = Math.min(n, player.library.length);
     const drawn = player.library.splice(0, available);
 
@@ -466,6 +482,19 @@ export class TabletopStateManager extends EventEmitter {
       card.zone = 'hand';
       card.subzone = null;
       player.hand.push(card);
+    }
+
+    if (player.zones) {
+      player.zones.hand = player.hand;
+      if (Array.isArray(player.zones.library)) {
+        player.zones.library = player.library;
+      }
+    }
+
+    if (drawn.length < n) {
+      player.isEliminated = true;
+      this.emit('EMPTY_LIBRARY_DRAW', { playerId, rule: 'CR 104.3c: Drawing from empty library results in game loss' });
+      this.emit('PLAYER_LOST', { playerId, reason: 'EMPTY_LIBRARY', rule: 'CR 104.3c' });
     }
 
     return {
@@ -564,8 +593,13 @@ export class TabletopStateManager extends EventEmitter {
       throw new CardNotFoundError(`Card with instanceId ${instanceId} not found in ${sourceZone}`);
     }
 
-    // Verify sufficient mana before deducting
-    if (manaCostPaid && typeof manaCostPaid === 'object') {
+    // Auto-tap or verify sufficient mana before deducting
+    if (payload.autoTap || (payload.manaCost && !manaCostPaid)) {
+      const costToPay = payload.manaCost || sourceArray[cardIdx]?.manaCost;
+      if (costToPay) {
+        this.autoTapForMana(playerId, costToPay);
+      }
+    } else if (manaCostPaid && typeof manaCostPaid === 'object') {
       for (const [color, amt] of Object.entries(manaCostPaid)) {
         const required = Number(amt) || 0;
         if (required > 0) {
@@ -783,44 +817,322 @@ export class TabletopStateManager extends EventEmitter {
     return this.dispatch('DRAW_CARD', { playerId, count });
   }
 
+  drawCardForTurn(playerId, context = {}) {
+    return this.drawCard(playerId, 1);
+  }
+
   canPlayLand(playerId = this.activePlayerId) {
     const player = this.getPlayer(playerId);
-    if (!player) return false;
-
-    // Must be active player
-    const activePid = this.priorityMachine?.activePlayerId || this.activePlayerId;
-    if (activePid && activePid !== playerId) {
-      return false;
+    if (!player) {
+      const res = { allowed: false, reason: 'NOT_ACTIVE_PLAYER', message: '⚠️ Player not found' };
+      res.valueOf = () => false;
+      return res;
     }
 
-    // Must be main phase (PRECOMBAT_MAIN or POSTCOMBAT_MAIN or MAIN 1 or MAIN 2)
+    // 1. Check Active Player
+    const activePid = this.priorityMachine?.activePlayerId || this.activePlayerId;
+    if (activePid && activePid !== playerId) {
+      const res = { allowed: false, reason: 'NOT_ACTIVE_PLAYER', message: '⚠️ It is not your turn' };
+      res.valueOf = () => false;
+      return res;
+    }
+
+    // 2. Check Phase Timing (Main Phase Only)
     const currentPhase = this.priorityMachine?.currentPhaseStep;
     if (currentPhase) {
       const normalizedPhase = currentPhase.toUpperCase();
       const isMain = normalizedPhase.includes('MAIN') || normalizedPhase === 'PRECOMBAT_MAIN' || normalizedPhase === 'POSTCOMBAT_MAIN';
-      if (!isMain) return false;
+      if (!isMain) {
+        const res = { allowed: false, reason: 'WRONG_PHASE', message: '⚠️ Lands can only be played during Main phase' };
+        res.valueOf = () => false;
+        return res;
+      }
     }
 
-    // Stack must be empty
+    // 3. Check Stack Depth (Must be empty)
     const stackDepth = this.priorityMachine?.getStackDepth?.() ?? this.stack.length;
     if (stackDepth > 0) {
-      return false;
+      const res = { allowed: false, reason: 'STACK_NOT_EMPTY', message: '⚠️ Lands can only be played when the stack is empty' };
+      res.valueOf = () => false;
+      return res;
     }
 
-    // Must hold priority
+    // 4. Check Priority
     const priorityPid = this.priorityMachine?.priorityPlayerId;
     if (priorityPid && priorityPid !== playerId) {
-      return false;
+      const res = { allowed: false, reason: 'NOT_ACTIVE_PLAYER', message: '⚠️ You do not hold priority' };
+      res.valueOf = () => false;
+      return res;
     }
 
-    // Limit check
+    // 5. Check Land Drop Limit (CR 305.1)
     const played = player.landsPlayedThisTurn ?? player.resources?.landsPlayedThisTurn ?? 0;
     const limit = player.maxLandsPerTurn ?? player.landsPerTurnLimit ?? player.resources?.maxLandsPerTurn ?? 1;
     if (played >= limit) {
-      return false;
+      const res = { allowed: false, reason: 'LAND_LIMIT_REACHED', message: `⚠️ You have already played a land this turn (${played}/${limit})` };
+      res.valueOf = () => false;
+      return res;
     }
 
-    return true;
+    const res = { allowed: true };
+    res.valueOf = () => true;
+    return res;
+  }
+
+  /**
+   * Directly taps a land on the battlefield to float 1 mana into mana pool (INV-MANA-1).
+   * 
+   * @param {string} playerId
+   * @param {string} instanceId
+   * @param {string} [chosenColor]
+   * @returns {{ card: Object, manaAdded: Record<string, number> }}
+   */
+  tapLandForMana(playerId, instanceId, chosenColor = null) {
+    const player = this.getPlayer(playerId);
+    const lands = player.battlefield?.lands || [];
+    const foundLand = lands.find(l => l && (l.instanceId === instanceId || l.id === instanceId));
+
+    if (!foundLand) {
+      const foundAnywhere = ZoneModel.findCard(player, instanceId);
+      if (!foundAnywhere) {
+        throw new CardNotFoundError(`Land with instanceId '${instanceId}' not found on battlefield.`);
+      }
+      if (foundAnywhere.zone !== 'battlefield') {
+        throw new InvalidZoneError(`Cannot tap land in zone '${foundAnywhere.zone}'. Land must be on the battlefield.`);
+      }
+      if (!/land/i.test(foundAnywhere.card.typeLine || foundAnywhere.card.type || '')) {
+        throw new InvalidCardTypeError(`Card '${foundAnywhere.card.name}' is not a land.`);
+      }
+    }
+
+    const land = foundLand || ZoneModel.findCard(player, instanceId).card;
+
+    if (land.isTapped) {
+      throw new PermanentAlreadyTappedError(`Permanent "${land.name}" (${instanceId}) is already tapped`);
+    }
+
+    const color = chosenColor || this._resolveLandManaColor(land);
+    land.isTapped = true;
+
+    player.resources.manaPool = player.resources.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    player.resources.manaPool[color] = (player.resources.manaPool[color] || 0) + 1;
+
+    const manaAdded = { [color]: 1 };
+
+    this.emit('PERMANENT_TAPPED', { playerId, instanceId: land.instanceId || instanceId, card: land });
+    this.emit('LAND_TAPPED', { playerId, instanceId: land.instanceId || instanceId, card: land, manaAdded });
+    this.emit('MANA_POOL_UPDATED', { playerId, manaPool: { ...player.resources.manaPool } });
+
+    return { card: land, manaAdded };
+  }
+
+  /**
+   * Helper to determine primary mana color produced by a land.
+   * 
+   * @param {Object} land
+   * @returns {string}
+   */
+  _resolveLandManaColor(land) {
+    const name = String(land.name || '').toLowerCase();
+    const typeLine = String(land.typeLine || land.type || '').toLowerCase();
+
+    if (name.includes('mountain') || typeLine.includes('mountain')) return 'R';
+    if (name.includes('island') || typeLine.includes('island')) return 'U';
+    if (name.includes('swamp') || typeLine.includes('swamp')) return 'B';
+    if (name.includes('plains') || typeLine.includes('plains')) return 'W';
+    if (name.includes('forest') || typeLine.includes('forest')) return 'G';
+    if (name.includes('wastes') || name.includes("urza's")) return 'C';
+    if (name.includes('steam vents') || name.includes('spirebluff')) return 'R';
+    if (name.includes('overgrown tomb') || name.includes('twilight mire')) return 'B';
+    if (name.includes('breeding pool')) return 'U';
+    if (name.includes('stomping ground')) return 'R';
+
+    if (Array.isArray(land.colors) && land.colors.length > 0) return land.colors[0];
+    if (Array.isArray(land.colorIdentity) && land.colorIdentity.length > 0) return land.colorIdentity[0];
+    return 'C';
+  }
+
+  /**
+   * MTG Arena Greedy Auto-Tap Engine (INV-MANA-1).
+   * Parses mana cost string, evaluates floating mana, taps matching untapped lands to cover
+   * deficit atomically, and returns AutoTapResult.
+   * 
+   * @param {string} playerId
+   * @param {string} manaCostString
+   * @returns {{ success: boolean, tappedLands: Array, tappedLandIds: string[], manaPaid: Record<string, number>, remainingPool: Record<string, number> }}
+   */
+  autoTapForMana(playerId, manaCostString) {
+    const player = this.getPlayer(playerId);
+    player.resources.manaPool = player.resources.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+
+    const parsedCost = this._parseManaCostString(manaCostString);
+    const pool = { ...player.resources.manaPool };
+
+    // 1. Evaluate colored requirements vs pool
+    const coloredDeficits = {};
+    const manaDeducted = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+
+    for (const [col, req] of Object.entries(parsedCost.colored)) {
+      const avail = pool[col] || 0;
+      if (avail >= req) {
+        pool[col] -= req;
+        manaDeducted[col] += req;
+      } else {
+        manaDeducted[col] += avail;
+        coloredDeficits[col] = req - avail;
+        pool[col] = 0;
+      }
+    }
+
+    // 2. Evaluate generic requirement vs remaining pool
+    let genericDeficit = parsedCost.generic;
+    const poolColors = ['C', 'W', 'U', 'B', 'R', 'G'];
+    for (const col of poolColors) {
+      if (genericDeficit <= 0) break;
+      const avail = pool[col] || 0;
+      const take = Math.min(avail, genericDeficit);
+      if (take > 0) {
+        pool[col] -= take;
+        manaDeducted[col] += take;
+        genericDeficit -= take;
+      }
+    }
+
+    // If no deficit remains, floating mana covers entire cost
+    if (Object.keys(coloredDeficits).length === 0 && genericDeficit <= 0) {
+      player.resources.manaPool = pool;
+      this.emit('MANA_POOL_UPDATED', { playerId, manaPool: { ...player.resources.manaPool } });
+      return {
+        success: true,
+        tappedLands: [],
+        tappedLandIds: [],
+        manaPaid: manaDeducted,
+        remainingPool: { ...player.resources.manaPool }
+      };
+    }
+
+    // 3. Scan untapped lands to satisfy deficits
+    const untappedLands = (player.battlefield?.lands || []).filter(l => l && !l.isTapped);
+    const landsToTap = [];
+    const simulatedTaps = new Set();
+
+    // Satisfy colored deficits first
+    for (const [col, defCount] of Object.entries(coloredDeficits)) {
+      let needed = defCount;
+      for (const land of untappedLands) {
+        if (needed <= 0) break;
+        if (simulatedTaps.has(land.instanceId || land)) continue;
+
+        const produced = this._resolveLandManaColor(land);
+        const name = String(land.name || '').toLowerCase();
+        const canProduce = produced === col ||
+          (col === 'R' && (name.includes('steam vents') || name.includes('spirebluff') || name.includes('stomping'))) ||
+          (col === 'U' && (name.includes('steam vents') || name.includes('breeding'))) ||
+          (col === 'B' && (name.includes('overgrown tomb') || name.includes('twilight mire'))) ||
+          (col === 'G' && (name.includes('overgrown tomb') || name.includes('twilight mire') || name.includes('breeding') || name.includes('stomping')));
+
+        if (canProduce) {
+          landsToTap.push({ land, color: col });
+          simulatedTaps.add(land.instanceId || land);
+          needed--;
+        }
+      }
+
+      if (needed > 0) {
+        // Atomic abort: insufficient colored mana
+        throw new InsufficientManaError(`Insufficient ${col} mana: needed ${defCount}, available ${defCount - needed}`);
+      }
+    }
+
+    // Satisfy generic deficit with remaining untapped lands
+    let genNeeded = genericDeficit;
+    for (const land of untappedLands) {
+      if (genNeeded <= 0) break;
+      if (simulatedTaps.has(land.instanceId || land)) continue;
+
+      const col = this._resolveLandManaColor(land);
+      landsToTap.push({ land, color: col });
+      simulatedTaps.add(land.instanceId || land);
+      genNeeded--;
+    }
+
+    if (genNeeded > 0) {
+      // Atomic abort: insufficient lands for generic mana
+      throw new InsufficientManaError(`Insufficient mana: needed ${parsedCost.totalCmc}, could not satisfy cost.`);
+    }
+
+    // Commit: tap all selected lands and deduct floating pool
+    for (const { land, color } of landsToTap) {
+      land.isTapped = true;
+      manaDeducted[color] = (manaDeducted[color] || 0) + 1;
+      this.emit('PERMANENT_TAPPED', { playerId, instanceId: land.instanceId, card: land });
+      this.emit('LAND_TAPPED', { playerId, instanceId: land.instanceId, card: land, manaAdded: { [color]: 1 } });
+    }
+
+    player.resources.manaPool = pool;
+    this.emit('MANA_POOL_UPDATED', { playerId, manaPool: { ...player.resources.manaPool } });
+
+    const tappedCards = landsToTap.map(item => item.land);
+    return {
+      success: true,
+      tappedLands: tappedCards,
+      tappedLandIds: tappedCards.map(l => l.instanceId || l.id),
+      manaPaid: manaDeducted,
+      remainingPool: { ...player.resources.manaPool }
+    };
+  }
+
+  /**
+   * Parses mana cost string into colored and generic requirements.
+   * Examples: "{R}" -> { colored: { R: 1 }, generic: 0 }
+   *           "{1}{R}" -> { colored: { R: 1 }, generic: 1 }
+   *           "{R}{R}" -> { colored: { R: 2 }, generic: 0 }
+   *           "{5}{U}{U}" -> { colored: { U: 2 }, generic: 5 }
+   * 
+   * @param {string} costStr
+   * @returns {{ colored: Record<string, number>, generic: number, totalCmc: number }}
+   */
+  _parseManaCostString(costStr) {
+    const colored = {};
+    let generic = 0;
+    let totalCmc = 0;
+
+    if (!costStr || typeof costStr !== 'string') {
+      return { colored, generic, totalCmc };
+    }
+
+    const matches = costStr.match(/\{([^}]+)\}/g) || [];
+    if (matches.length === 0) {
+      // Shorthand e.g. "1R", "RR", "2G"
+      const numMatch = costStr.match(/^(\d+)/);
+      if (numMatch) {
+        generic = parseInt(numMatch[1], 10);
+      }
+      const letters = costStr.replace(/[0-9]/g, '').toUpperCase().split('');
+      for (const char of letters) {
+        if (['W', 'U', 'B', 'R', 'G', 'C'].includes(char)) {
+          colored[char] = (colored[char] || 0) + 1;
+        }
+      }
+      totalCmc = generic + Object.values(colored).reduce((a, b) => a + b, 0);
+      return { colored, generic, totalCmc };
+    }
+
+    for (const rawToken of matches) {
+      const sym = rawToken.replace(/[{}]/g, '').toUpperCase().trim();
+      const num = parseInt(sym, 10);
+      if (!isNaN(num)) {
+        generic += num;
+        totalCmc += num;
+      } else if (['W', 'U', 'B', 'R', 'G', 'C'].includes(sym)) {
+        colored[sym] = (colored[sym] || 0) + 1;
+        totalCmc += 1;
+      } else if (sym === 'X') {
+        // X = 0 by default unless declared
+      }
+    }
+
+    return { colored, generic, totalCmc };
   }
 
   resetTurnQuotas(playerId) {

@@ -36,7 +36,7 @@ import { DualChannelChat } from './DualChannelChat.js';
 import { ActionLexer } from './ActionLexer.js';
 import { CardOverlayModal, formatManaSymbols } from './view/CardOverlayModal.js';
 import { RelayClient } from './RelayClient.js';
-import { DeckbuilderAI, BEGINNER_DECKS, formatDeckForExport, resolveActiveGuidelines } from './DeckbuilderAI.js';
+import { DeckbuilderAI, BEGINNER_DECKS, formatDeckForExport, resolveActiveGuidelines, getHydratedCardMetadata } from './DeckbuilderAI.js';
 import { StorageAdapter, calculatePayloadBytes } from './StorageAdapter.js';
 import {
   VictoryFanfareEngine,
@@ -186,6 +186,9 @@ export class RPMAppController {
       activePlayerId: this.playerIds[0] || 'p1',
       ...options
     });
+    if (this.tabletopState) {
+      this.tabletopState.priorityMachine = this.priorityMachine;
+    }
     if (this.priorityMachine && typeof this.priorityMachine.passPriority !== 'function') {
       this.priorityMachine.passPriority = (pid) => {
         return this.priorityMachine.dispatch('PASS_PRIORITY', { playerId: pid });
@@ -472,6 +475,9 @@ export class RPMAppController {
       }
       if (!this.priorityMachine.players.includes(this.priorityMachine.priorityPlayerId)) {
         this.priorityMachine.priorityPlayerId = this.playerIds[0];
+      }
+      if (this.tabletopState) {
+        this.tabletopState.priorityMachine = this.priorityMachine;
       }
     }
 
@@ -767,6 +773,7 @@ export class RPMAppController {
   }
 
   showWarningBanner(message) {
+    this.lastWarning = message;
     let banner = this.container?.querySelector('#arena-warning-banner');
     if (!banner && this.container) {
       banner = document.createElement('div');
@@ -775,19 +782,76 @@ export class RPMAppController {
       const center = this.container.querySelector('#center-arena') || this.container.querySelector('#tabletop-arena') || this.container;
       center.prepend(banner);
     }
-    if (!banner) return;
-    banner.textContent = message;
-    banner.style.display = 'block';
-    if (this._warningBannerTimer) {
-      clearTimeout(this._warningBannerTimer);
-    }
-    this._warningBannerTimer = setTimeout(() => {
-      if (banner) {
-        banner.style.display = 'none';
-        banner.textContent = '';
+    if (banner) {
+      banner.textContent = message;
+      banner.style.display = 'block';
+      if (this._warningBannerTimer) {
+        clearTimeout(this._warningBannerTimer);
       }
-      this._warningBannerTimer = null;
+      this._warningBannerTimer = setTimeout(() => {
+        if (banner) {
+          banner.style.display = 'none';
+          banner.textContent = '';
+        }
+        this._warningBannerTimer = null;
+      }, 3500);
+    }
+    this.showToast(message);
+  }
+
+  showToast(message) {
+    this.lastToast = message;
+    let toast = this.container?.querySelector('#arena-toast-notification');
+    if (!toast && this.container) {
+      toast = document.createElement('div');
+      toast.id = 'arena-toast-notification';
+      toast.className = 'arena-toast-notification toast-active';
+      const center = this.container.querySelector('#center-arena') || this.container.querySelector('#tabletop-arena') || this.container;
+      center.appendChild(toast);
+    }
+    if (!toast) return;
+    toast.textContent = message;
+    toast.style.display = 'block';
+    if (this._toastTimer) {
+      clearTimeout(this._toastTimer);
+    }
+    this._toastTimer = setTimeout(() => {
+      if (toast) {
+        toast.style.display = 'none';
+        toast.textContent = '';
+      }
+      this._toastTimer = null;
     }, 3500);
+  }
+
+  _isRawUuid(str) {
+    if (typeof str !== 'string') return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+  }
+
+  _getLandPipInfo(land) {
+    if (!land) return { colorKey: 'c', glyph: 'ms-c' };
+    const name = (land.name || '').toLowerCase();
+    const colors = Array.isArray(land.colors) ? land.colors.map(c => String(c).toLowerCase()) : [];
+    if (name.includes('steam vents') || (colors.includes('u') && colors.includes('r'))) {
+      return { colorKey: 'ur', glyph: 'ms-u ms-r' };
+    }
+    if (name.includes('mountain') || colors.includes('r')) {
+      return { colorKey: 'r', glyph: 'ms-r' };
+    }
+    if (name.includes('forest') || colors.includes('g')) {
+      return { colorKey: 'g', glyph: 'ms-g' };
+    }
+    if (name.includes('island') || colors.includes('u')) {
+      return { colorKey: 'u', glyph: 'ms-u' };
+    }
+    if (name.includes('swamp') || colors.includes('b')) {
+      return { colorKey: 'b', glyph: 'ms-b' };
+    }
+    if (name.includes('plains') || colors.includes('w')) {
+      return { colorKey: 'w', glyph: 'ms-w' };
+    }
+    return { colorKey: 'c', glyph: 'ms-c' };
   }
 
   dealStartingHands() {
@@ -801,14 +865,28 @@ export class RPMAppController {
           p.zones = { hand: [], library: [], graveyard: [], exile: [], battlefield: [] };
         }
         if (!p.zones.hand || p.zones.hand.length === 0) {
-          p.zones.hand = starterCardNames.map((name, idx) => ({
-            instanceId: `card_${pid}_${idx}_${Date.now()}`,
-            name,
-            typeLine: name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature'),
-            manaCost: name.includes('Bolt') || name.includes('Spike') || name.includes('Guide') || name.includes('Swiftspear') ? '{R}' : '',
-            owner: pid,
-            zone: 'HAND'
-          }));
+          p.zones.hand = starterCardNames.map((name, idx) => {
+            const meta = getHydratedCardMetadata(name);
+            return {
+              instanceId: `card_${pid}_${idx}_${Date.now()}`,
+              name: meta?.name || name,
+              typeLine: meta?.typeLine || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
+              type: meta?.type || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
+              manaCost: meta?.manaCost !== undefined ? meta.manaCost : (name.includes('Bolt') || name.includes('Spike') || name.includes('Guide') || name.includes('Swiftspear') ? '{R}' : ''),
+              cmc: meta?.cmc ?? 1,
+              oracleText: meta?.oracleText || '',
+              imageUri: meta?.imageUri || '',
+              power: meta?.power,
+              toughness: meta?.toughness,
+              loyalty: meta?.loyalty,
+              colors: meta?.colors || [],
+              owner: pid,
+              ownerId: pid,
+              controllerId: pid,
+              zone: 'HAND',
+              isTapped: false
+            };
+          });
           p.hand = p.zones.hand;
         }
       }
@@ -820,8 +898,11 @@ export class RPMAppController {
     if (!p) return;
 
     if (this.tabletopState && typeof this.tabletopState.canPlayLand === 'function') {
-      if (!this.tabletopState.canPlayLand(this.myPlayerId)) {
-        this.showWarningBanner("⚠️ You have already played a land this turn (1/1)");
+      const check = this.tabletopState.canPlayLand(this.myPlayerId);
+      const isAllowed = typeof check === 'boolean' ? check : Boolean(check && check.allowed);
+      if (!isAllowed) {
+        const msg = (typeof check === 'object' && check.message) ? check.message : "⚠️ Cannot play land";
+        this.showWarningBanner(msg);
         return;
       }
     }
@@ -860,13 +941,29 @@ export class RPMAppController {
 
   castSpellToStack(card) {
     const p = this.tabletopState?.players?.[this.myPlayerId];
+    if (card && card.manaCost && this.tabletopState && typeof this.tabletopState.autoTapForMana === 'function') {
+      try {
+        this.tabletopState.autoTapForMana(this.myPlayerId, card.manaCost);
+      } catch (err) {
+        this.showWarningBanner(`⚠️ ${err.message || 'Insufficient mana'}`);
+        return;
+      }
+    }
     if (p) {
       p.zones.hand = (p.zones.hand || []).filter(c => (c.instanceId || c.id || c.name) !== (card.instanceId || card.id || card.name));
+      p.hand = p.zones.hand;
     }
     this.selectedHandCardId = null;
     this.dispatchAction({
       type: 'CAST_SPELL',
-      payload: { playerId: this.myPlayerId, cardName: card.name, cardInstanceId: card.instanceId }
+      payload: {
+        playerId: this.myPlayerId,
+        controllerId: this.myPlayerId,
+        controllerName: this.username || 'You',
+        card,
+        cardName: card.name,
+        cardInstanceId: card.instanceId
+      }
     }, { origin: 'LOCAL' });
     this.reconcileDOM();
   }
@@ -876,8 +973,11 @@ export class RPMAppController {
     if (!p) return;
 
     if (this.tabletopState && typeof this.tabletopState.canPlayLand === 'function') {
-      if (!this.tabletopState.canPlayLand(this.myPlayerId)) {
-        this.showWarningBanner("⚠️ You have already played a land this turn (1/1)");
+      const check = this.tabletopState.canPlayLand(this.myPlayerId);
+      const isAllowed = typeof check === 'boolean' ? check : Boolean(check && check.allowed);
+      if (!isAllowed) {
+        const msg = (typeof check === 'object' && check.message) ? check.message : "⚠️ Cannot play land";
+        this.showWarningBanner(msg);
         return;
       }
     }
@@ -931,16 +1031,30 @@ export class RPMAppController {
 
   castSpellByName(spellName, targets = null) {
     const p = this.tabletopState?.players?.[this.myPlayerId];
+    let card = null;
     if (p && Array.isArray(p.zones?.hand)) {
       const idx = p.zones.hand.findIndex(c => c.name.toLowerCase() === spellName.toLowerCase());
       if (idx !== -1) {
+        card = p.zones.hand[idx];
+        if (card && card.manaCost && this.tabletopState && typeof this.tabletopState.autoTapForMana === 'function') {
+          try {
+            this.tabletopState.autoTapForMana(this.myPlayerId, card.manaCost);
+          } catch (err) {
+            this.showWarningBanner(`⚠️ ${err.message || 'Insufficient mana'}`);
+            return;
+          }
+        }
         p.zones.hand.splice(idx, 1);
+        p.hand = p.zones.hand;
       }
     }
     if (this.priorityMachine) {
       try {
         this.priorityMachine.dispatch('CAST_SPELL', {
           playerId: this.myPlayerId,
+          controllerId: this.myPlayerId,
+          controllerName: this.username || 'You',
+          card: card || { name: spellName },
           cardName: spellName,
           targets
         });
@@ -1581,9 +1695,49 @@ export class RPMAppController {
         }
         this.reconcileDOM();
       };
+      const onDrawStep = (evt) => {
+        if (this.isDestroyed || !evt) return;
+        if (evt.shouldSkipDraw) {
+          this.showToast(evt.reason || 'CR 103.7a: Starting player in 1v1 skips first turn draw step');
+        } else {
+          if (this.tabletopState && typeof this.tabletopState.drawCard === 'function') {
+            try {
+              this.tabletopState.drawCard(evt.activePlayerId, 1);
+            } catch (_) {}
+          }
+        }
+        this.reconcileDOM();
+      };
+      let isAlarmStarting = false;
+      const onSpellCastPriorityRotated = (evt) => {
+        if (this.isDestroyed || !evt || isAlarmStarting) return;
+        const nextId = evt.nextPriorityPlayerId;
+        if (this.alarmManager && typeof this.alarmManager.start === 'function') {
+          isAlarmStarting = true;
+          try {
+            this.alarmManager.start(nextId, 15);
+          } finally {
+            isAlarmStarting = false;
+          }
+        }
+        let oppName = evt.controllerName || nextId;
+        if (nextId === this.myPlayerId) {
+          oppName = 'You';
+        } else if (nextId && nextId.toLowerCase().includes('perkins')) {
+          oppName = 'Perkins AI (Bot)';
+        } else {
+          const p = this.tabletopState?.players?.[nextId];
+          oppName = (p && p.name && !this._isRawUuid(p.name)) ? p.name : (nextId || 'Opponent');
+        }
+        this.showToast(`Spell cast! Priority passed to ${oppName}`);
+        this.reconcileDOM();
+      };
+
       this.priorityMachine.on('STACK_RESOLVE', onStackResolve);
       this.priorityMachine.on('TURN_ADVANCED', onTurnChange);
       this.priorityMachine.on('TURN_ROTATED', onTurnChange);
+      this.priorityMachine.on('DRAW_STEP', onDrawStep);
+      this.priorityMachine.on('SPELL_CAST_PRIORITY_ROTATED', onSpellCastPriorityRotated);
       this.priorityMachine.on('PHASE_STEP_CHANGED', () => {
         if (!this.isDestroyed) this.reconcileDOM();
       });
@@ -1591,6 +1745,10 @@ export class RPMAppController {
         this.priorityMachine.off('STACK_RESOLVE', onStackResolve);
         this.priorityMachine.off('TURN_ADVANCED', onTurnChange);
         this.priorityMachine.off('TURN_ROTATED', onTurnChange);
+        if (typeof this.priorityMachine.off === 'function') {
+          this.priorityMachine.off('DRAW_STEP', onDrawStep);
+          this.priorityMachine.off('SPELL_CAST_PRIORITY_ROTATED', onSpellCastPriorityRotated);
+        }
       });
     }
 
@@ -1806,6 +1964,18 @@ export class RPMAppController {
       deckId = options.deckId || options.starterDeckId || 'R';
     }
 
+    // Intercept with contextual auth / deck modals if requireAuth is active (INV-AUTH-GATE-2)
+    if (this.requireAuth && this.authManager) {
+      if (!this.authManager.isAuthenticated()) {
+        this.showAuthModal(() => this.startPerkinsMatch(deckIdOrOptions, maybeOptions));
+        return null;
+      }
+      if (!this.authManager.isOnboarded()) {
+        this.showDeckModal(() => this.startPerkinsMatch(deckIdOrOptions, maybeOptions));
+        return null;
+      }
+    }
+
     // 1. Teardown any existing active bot (INV-SAFE-3)
     if (this.perkinsAgent) {
       try { this.perkinsAgent.destroy(); } catch (_) {}
@@ -2016,7 +2186,20 @@ export class RPMAppController {
 
       case 'CAST_SPELL':
         if (this.priorityMachine) {
-          const item = payload.card || payload;
+          const cardObj = payload.card || action.card || payload;
+          const controllerId = payload.controllerId || payload.playerId || action.playerId || cardObj.controllerId;
+          const sourcePlayerId = payload.playerId || action.playerId || payload.controllerId || cardObj.sourcePlayerId;
+          const controllerName = payload.controllerName || action.controllerName || cardObj.controllerName;
+          const item = {
+            ...cardObj,
+            card: cardObj,
+            controllerId,
+            sourcePlayerId,
+            controllerName,
+            cardName: payload.cardName || action.cardName || cardObj.name || cardObj.cardName,
+            targetId: payload.targetId || action.targetId || payload.targets || action.targets,
+            targets: payload.targets || action.targets || payload.targetId || action.targetId
+          };
           this.priorityMachine.pushStack(item);
         }
         break;
@@ -2705,8 +2888,24 @@ export class RPMAppController {
         const playerTurn = typeof this.priorityMachine.getPlayerTurnCount === 'function'
           ? this.priorityMachine.getPlayerTurnCount(activeId)
           : (this.priorityMachine.turnNumber || 1);
-        const pLabel = activeId.toUpperCase();
-        activePlayerName.textContent = `Round ${roundNum} • ${pLabel} (Turn ${playerTurn})`;
+
+        let displayName;
+        if (activeId === this.myPlayerId) {
+          const idSuffix = (this.myPlayerId && !this._isRawUuid(this.myPlayerId)) ? ` (${this.myPlayerId.toUpperCase()})` : '';
+          displayName = `Your Turn (You)${idSuffix}`;
+        } else {
+          const pState = this.tabletopState?.players?.[activeId];
+          if (pState && pState.name && !this._isRawUuid(pState.name)) {
+            displayName = pState.name;
+          } else if (activeId.toLowerCase().includes('perkins')) {
+            displayName = 'Perkins AI (Bot)';
+          } else {
+            const slot = this.lobbyManager?.getSeatedSlots?.()?.find(s => s.playerId === activeId);
+            displayName = slot?.username || `Opponent (${activeId.substring(0, 6).toUpperCase()})`;
+          }
+        }
+
+        activePlayerName.textContent = `Round ${roundNum} • Turn: ${displayName} (Turn ${playerTurn})`;
       } else {
         activePlayerName.textContent = `${this.username} (You)`;
       }
@@ -2847,11 +3046,46 @@ export class RPMAppController {
         oppCard.appendChild(content);
       }
 
+      // Dedicated Opponent Lands Strip (INV-OPP-LAND-1)
+      const bLands = Array.isArray(oppData?.battlefield?.lands) ? oppData.battlefield.lands : [];
+      const zLands = Array.isArray(oppData?.zones?.battlefield)
+        ? oppData.zones.battlefield.filter(c => (c.type_line || c.typeLine || c.type || '').toLowerCase().includes('land') || c.subzone === 'lands')
+        : [];
+      const oppLands = bLands.length >= zLands.length ? bLands : zLands;
+      const availableMana = oppLands.filter(l => !l.isTapped).length;
+
+      const landsHtml = oppLands.map(land => {
+        const isTapped = Boolean(land.isTapped);
+        const pip = this._getLandPipInfo(land);
+        const name = land.name || 'Land';
+        const instId = land.instanceId || land.id || '';
+        return `
+          <div class="opponent-land-card ${isTapped ? 'is-tapped card-tapped' : ''}"
+               data-instance-id="${instId}"
+               data-tapped="${isTapped ? 'true' : 'false'}"
+               style="${isTapped ? 'transform: rotate(90deg); opacity: 0.58;' : ''}"
+               title="${name} (${isTapped ? 'Tapped' : 'Untapped'}) - Click to inspect">
+            <span class="land-pip mana-${pip.colorKey}"><i class="ms ${pip.glyph} ms-cost"></i></span>
+            <span class="land-name">${name}</span>
+            ${isTapped ? '<span class="tap-badge">↺</span>' : ''}
+          </div>
+        `;
+      }).join('');
+
       content.innerHTML = `
         <div class="opponent-header">
           <span class="opponent-name">${oppData?.name || `Opponent (${oppId.toUpperCase()})`}</span>
           <span class="opponent-life badge">Life: ${life}</span>
           <span class="opponent-poison">P: ${poison}</span>
+        </div>
+        <div class="opponent-lands-container">
+          <div class="opponent-lands-header">
+            <span class="lands-title">Lands (<span class="lands-count">${oppLands.length}</span>)</span>
+            <span class="mana-avail-summary">Available: ${availableMana} / ${oppLands.length}</span>
+          </div>
+          <div class="opponent-lands-strip" data-player-id="${oppId}">
+            ${landsHtml}
+          </div>
         </div>
         <div class="opponent-drawers-row">
           <button class="btn btn-drawer-hand" ${isEliminated ? 'disabled' : ''}>Hand (${handCount})</button>
@@ -2860,6 +3094,21 @@ export class RPMAppController {
           <button class="btn btn-drawer-exile">Exile (${exileCount})</button>
         </div>
       `;
+
+      // Bind click on opponent lands to inspect card
+      const landCards = oppCard.querySelectorAll('.opponent-land-card');
+      landCards.forEach((el, idx) => {
+        const land = oppLands[idx];
+        if (!land) return;
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (this.cardModal && typeof this.cardModal.show === 'function') {
+            this.cardModal.show(land);
+          } else if (typeof this.openModal === 'function') {
+            this.openModal('CARD_OVERLAY', land);
+          }
+        });
+      });
     }
 
     // Remove any extra cards if players changed
@@ -2926,11 +3175,18 @@ export class RPMAppController {
       reversed.forEach((item, idx) => {
         const li = document.createElement('li');
         li.className = 'stack-item';
+        const sourceName = item.controllerName
+          || (this.tabletopState?.players?.[item.sourcePlayerId]?.name)
+          || (item.sourcePlayerId === this.myPlayerId ? 'You' : null)
+          || (item.sourcePlayerId && item.sourcePlayerId.toLowerCase().includes('perkins') ? 'Perkins AI (Bot)' : null)
+          || item.sourcePlayerId
+          || 'P1';
+        const cardName = item.cardName || item.name || item.card?.name || 'Spell/Ability';
         li.innerHTML = `
           <div class="stack-item-info">
             <span class="stack-index">#${stackItems.length - idx}</span>
-            <span class="stack-source">${item.sourcePlayerId || 'P1'}:</span>
-            <span class="stack-name">${item.name || 'Spell/Ability'}</span>
+            <span class="stack-source">${sourceName}:</span>
+            <span class="stack-name">${cardName}</span>
           </div>
         `;
         stackList.appendChild(li);
@@ -3051,7 +3307,7 @@ export class RPMAppController {
       <div id="battlefield-strips" class="player-battlefield-strips">
         <div id="battlefield-lands" class="battlefield-strip battlefield-lands">
           <div class="strip-label">Lands (<span class="lands-count">${lands.length}</span>)</div>
-          <div class="strip-cards">${lands.map(c => `<span class="battlefield-card-chip land-chip ${c.isTapped ? 'tapped' : ''}">${c.name}</span>`).join('')}</div>
+          <div class="strip-cards">${lands.map(c => `<span class="battlefield-card-chip land-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" style="${c.isTapped ? 'transform: rotate(90deg); opacity: 0.58;' : ''}" title="${c.name} (${c.isTapped ? 'Tapped' : 'Untapped - Click to tap for mana'})">${c.name}</span>`).join('')}</div>
         </div>
         <div id="battlefield-creatures" class="battlefield-strip battlefield-creatures">
           <div class="strip-label">Creatures (<span class="creatures-count">${creatures.length}</span>)</div>
@@ -3159,6 +3415,26 @@ export class RPMAppController {
         handGrid.appendChild(chip);
       });
       }
+    }
+
+    // Bind click to tap land on battlefield (INV-MANA-1)
+    if (!this.isSpectator()) {
+      const landChips = dashboard.querySelectorAll('#battlefield-lands .land-chip');
+      landChips.forEach((chip, idx) => {
+        const land = lands[idx];
+        if (!land) return;
+        chip.addEventListener('click', (e) => {
+          e.stopPropagation();
+          try {
+            if (this.tabletopState && typeof this.tabletopState.tapLandForMana === 'function') {
+              this.tabletopState.tapLandForMana(this.myPlayerId, land.instanceId);
+              this.reconcileDOM();
+            }
+          } catch (err) {
+            this.showToast(err.message || 'Cannot tap land');
+          }
+        });
+      });
     }
   }
 

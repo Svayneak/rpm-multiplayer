@@ -431,11 +431,32 @@ export class PriorityStateMachine {
 
   /**
    * Pushes an item onto the top of the stack.
+   * Enforces INV-PRIORITY-AUTO-1: preserves controller metadata and rotates
+   * priority immediately to next opponent per APNAP CR 117.3b.
    * 
    * @param {Object} item
    * @returns {Object} Pushed item
    */
   pushStack(item) {
+    if (item) {
+      item.controllerId = item.controllerId || item.sourcePlayerId || this.activePlayerId;
+      item.sourcePlayerId = item.sourcePlayerId || item.controllerId;
+      item.cardName = item.cardName || item.name || item.card?.name || 'Spell';
+      item.name = item.name || item.cardName;
+      item.controllerName = item.controllerName || item.playerName || item.sourcePlayerName || (item.controllerId?.toLowerCase().includes('perkins') ? 'Perkins AI (Bot)' : item.controllerId);
+
+      const casterId = item.sourcePlayerId || item.controllerId || this.activePlayerId;
+      const nextPriorityPlayerId = this.nextPlayer(casterId);
+      this.priorityPlayerId = nextPriorityPlayerId;
+      this.consecutivePassCount = 0;
+
+      this.emit('SPELL_CAST_PRIORITY_ROTATED', {
+        nextPriorityPlayerId,
+        casterId,
+        spellName: item.cardName,
+        controllerName: item.controllerName
+      });
+    }
     this.stack.push(item);
     return item;
   }
@@ -500,6 +521,8 @@ export class PriorityStateMachine {
       activePlayerId: this.activePlayerId,
       priorityPlayerId: this.priorityPlayerId
     });
+
+    this._evaluateDrawStep();
   }
 
   /**
@@ -566,7 +589,44 @@ export class PriorityStateMachine {
       priorityPlayerId: this.priorityPlayerId
     });
 
+    this._evaluateDrawStep();
+
     return this.currentPhaseStep;
+  }
+
+  /**
+   * Enforces MTG CR 103.7a & CR 504.1 Draw Step rules (INV-DRAW-1).
+   * @private
+   */
+  _evaluateDrawStep() {
+    if (this.currentPhaseStep === 'DRAW') {
+      const is1v1 = (this.players.length === 2);
+      const isFirstTurnOfStartingPlayer = (this.roundNumber === 1 && this.activePlayerId === this.startingPlayerId);
+      const shouldSkipDraw = is1v1 && isFirstTurnOfStartingPlayer;
+
+      if (shouldSkipDraw) {
+        this.emit('DRAW_STEP_SKIPPED', {
+          activePlayerId: this.activePlayerId,
+          roundNumber: this.roundNumber,
+          rule: 'CR 103.7a: Starting player in 1v1 skips first turn draw step'
+        });
+      } else {
+        this.emit('MANDATORY_DRAW_TRIGGERED', {
+          activePlayerId: this.activePlayerId,
+          roundNumber: this.roundNumber,
+          rule: 'CR 504.1: Normal turn draw'
+        });
+      }
+
+      this.emit('DRAW_STEP', {
+        activePlayerId: this.activePlayerId,
+        roundNumber: this.roundNumber,
+        shouldSkipDraw,
+        reason: shouldSkipDraw
+          ? 'CR 103.7a: Starting player in 1v1 skips first turn draw step'
+          : 'CR 504.1: Normal turn draw'
+      });
+    }
   }
 
   /**
@@ -703,6 +763,14 @@ export class PriorityStateMachine {
     const card = resolvedItem.card || resolvedItem;
     const controllerId = resolvedItem.sourcePlayerId || resolvedItem.controllerId || card.controllerId || card.ownerId || this.activePlayerId;
 
+    if (this.tabletopState && typeof this.tabletopState.handleStackResolution === 'function') {
+      try {
+        this.tabletopState.handleStackResolution(resolvedItem);
+      } catch (err) {
+        console.warn('Error in tabletopState.handleStackResolution:', err);
+      }
+    }
+
     this.emit('STACK_RESOLVE', {
       resolvedItem,
       card,
@@ -741,10 +809,19 @@ export class PriorityStateMachine {
         // Capture snapshot before stack mutation
         this.checkpointJournal.captureSnapshot('CAST_SPELL', this);
 
+        const cardObj = payload.card || {};
+        const cardName = payload.cardName || payload.name || cardObj.name || 'Spell';
+        const controllerId = payload.controllerId || playerId;
+        const controllerName = payload.controllerName || (controllerId?.toLowerCase().includes('perkins') ? 'Perkins AI (Bot)' : controllerId);
+
         const stackItem = {
           id: payload.id || generateStackItemId(),
           sourcePlayerId: playerId,
-          card: payload.card || {},
+          controllerId,
+          controllerName,
+          card: cardObj,
+          cardName,
+          name: cardName,
           type: payload.type || 'SPELL',
           targets: payload.targets || [],
           manaCostPaid: payload.manaCostPaid || {},
@@ -921,6 +998,18 @@ export class PriorityStateMachine {
       default:
         throw new Error(`Unsupported actionType: ${actionType}`);
     }
+  }
+
+  /**
+   * Dispatches spell casting with automatic priority pass per CR 117.3b.
+   * 
+   * @param {string} playerId
+   * @param {Object} card
+   * @param {Object} [options={}]
+   * @returns {Object} StackItem
+   */
+  castSpell(playerId, card, options = {}) {
+    return this.dispatch('CAST_SPELL', { playerId, card, ...options });
   }
 
   /**

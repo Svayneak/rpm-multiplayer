@@ -345,3 +345,36 @@
   2. Defined and fully implemented 16-vector acceptance test matrix (`TC-BATTLE-01` through `TC-BATTLE-16`) in `test/test_battle_spectator.js`.
   3. Implemented invariants across `TabletopStateManager.js`, `PriorityStateMachine.js`, `LobbyManager.js`, `TabRouter.js`, `DualChannelChat.js`, `index.html`, `tabletop.css`, and `app.js`.
   4. Verified full regression test suite: all 15 test suites pass 100% (216+ total assertions, 0 failures).
+
+---
+
+### DEC-022 — Battle Stability, Opponent Land Field, Auto-Tap Mana Engine, Stack Resolution & Card Inspection
+- **Context & Problem**: Integration testing and user interviews revealed seven critical tabletop stability, UX, and MTG rules defects:
+  1. *Decision A1 (Invisible Opponent Lands)*: Opponent boards rendered only a text button drawer; zero visual land cards, tapped states, or mana pips existed on the tabletop.
+  2. *Decision A2 (Missing Mana Auto-Tap & Manual Tap)*: Spell casting failed unless mana was artificially injected; lands on the battlefield could not be clicked to float mana, and Perkins AI never tapped lands when casting.
+  3. *Decision A3 (Stack Priority Stall & Fallback Name)*: Spells stayed on the caster's priority; stack items displayed `#1 P1: Goblin Guide`; 15s timer timeouts vanished spells instead of resolving them to the battlefield.
+  4. *Decision A4 (MTG CR 103.7a Draw Step Violation)*: The starting player in 1v1 drew on Turn 1 (violating CR 103.7a); turns lacked automatic CR 504.1 draw execution.
+  5. *Decision A5 (Blank Card Inspection)*: Starter archetype cards were defined as bare stubs lacking artwork and oracle text, causing inspection modals to render blank.
+  6. *Decision A6 (Cryptic UUID Header)*: Top header turn indicator displayed raw Supabase UUIDs rather than friendly usernames.
+  7. *Land Quota Defect*: Unsynchronized `priorityMachine` reference caused false "already played a land" warning banners on opponent turns or wrong phases.
+- **Options Evaluated**:
+  - *Option A*: Ad-hoc DOM fixes in `app.js` without formal state engine invariants.
+  - *Option B (Recommended)*: **Comprehensive Formal Specification & Unified Invariant Hierarchy (`SPEC-RPM-STABILITY-017`)**:
+    1. **Dedicated Opponent Land Strip (`INV-OPP-LAND-1`)**: Horizontal strip on opponent boards displaying card name, mana identity pip, tapped/untapped visual state (90° rotation and opacity), and click inspection.
+    2. **MTG Arena Auto-Tap & Direct Land Tapping (`INV-MANA-1`)**: Greedy auto-tap engine matching colored and generic costs from untapped lands; direct land click to float mana; Perkins AI deterministic land tapping.
+    3. **Spell Cast Priority Rotation & Alarm Trigger (`INV-PRIORITY-AUTO-1`)**: Automatic priority hand-off to opponent (APNAP CR 117.3b), 15s Stack Alarm, friendly controller name retention, and timeout resolution to battlefield (CR 608.2).
+    4. **Strict MTG CR 103.7a & CR 504.1 Draw Step Enforcement (`INV-DRAW-1`)**: Skip draw for starting player on Turn 1 in 1v1; automatic 1-card draw for P2 and subsequent turns; all players draw in 3+ multiplayer pods.
+    5. **Hybrid Pre-Hydrated & Live Scryfall Card Inspection (`INV-INSPECT-1`)**: Pre-hydrate all 5 Starter Archetypes in `DeckbuilderAI.js` with complete Scryfall metadata; `CardOverlayModal.js` skeleton loader and dynamic fetch fallback cached in `StorageAdapter`.
+    6. **Friendly Player Name Header Resolution (`INV-HEADER-1`)**: Contextual display resolving local player to "Your Turn (You)" and opponents to their friendly names (e.g. "Perkins AI (Bot)" or "Alice").
+    7. **Granular Land Play Validation & Quota Isolation (`INV-LAND-QUOTA-2`)**: Synchronized `tabletopState.priorityMachine`; granular rejection reasons (`NOT_ACTIVE_PLAYER`, `WRONG_PHASE`, `STACK_NOT_EMPTY`, `LAND_LIMIT_REACHED`); quota reset on UNTAP.
+- **User Decision**: **Option B (Recommended)**.
+- **Impact & Implementation**:
+  1. Authored `specs/FEATURE_17_BATTLE_STABILITY_SPEC.md` (`SPEC-RPM-STABILITY-017`, 880+ lines).
+  2. Implemented MTG Arena greedy auto-tap engine, direct land tapping, and granular land validation in `TabletopStateManager.js`.
+  3. Integrated spell cast priority rotation (APNAP CR 117.3b), draw step rules (CR 103.7a & CR 504.1), and CR 608.2 permanent resolution in `PriorityStateMachine.js`.
+  4. Added explicit land tapping before spell casts in `PerkinsAgent.js`.
+  5. Pre-hydrated 5 Starter Archetypes in `DeckbuilderAI.js` with full Scryfall metadata.
+  6. Implemented skeleton loader and dynamic Scryfall fetch fallback in `CardOverlayModal.js` and `ScryfallService.js`.
+  7. Constructed opponent land strip, friendly name header, interactive land tap bindings, and synchronized priorityMachine in `app.js` and `tabletop.css`.
+  8. Created exhaustive 16-vector acceptance test suite `test/test_battle_stability.js` (`TC-STABILITY-01` through `TC-STABILITY-16`).
+  9. Executed full project test suite (`npm test`): all 16 test files passed at 100% (256+ tests, zero regressions).

@@ -12,6 +12,9 @@
  * @module CardOverlayModal
  */
 
+import { ScryfallService } from '../ScryfallService.js';
+import { getHydratedCardMetadata } from '../DeckbuilderAI.js';
+
 /**
  * Formats a Scryfall/MTG mana cost string into andrewgioia/mana vector glyph HTML tags.
  * Example: "{2}{U}{U}" -> '<i class="ms ms-2 ms-cost"></i><i class="ms ms-u ms-cost"></i><i class="ms ms-u ms-cost"></i>'
@@ -46,6 +49,7 @@ export class CardOverlayModal {
   constructor(options = {}) {
     this.container = options.container || null;
     this.onClose = options.onClose || null;
+    this.scryfallService = options.scryfallService || new ScryfallService({ cacheAdapter: options.storageAdapter });
     this.element = null;
     this.isOpen = false;
     this._previouslyFocusedElement = null;
@@ -157,84 +161,121 @@ export class CardOverlayModal {
       this._previouslyFocusedElement = document.activeElement;
     }
 
-    // Populate Card Name
-    const nameEl = this.element.querySelector('.modal-card-name');
-    if (nameEl) {
-      nameEl.textContent = cardData.name || 'Unknown Card';
-    }
+    const dialog = this.element.querySelector('.modal-card-dialog');
+    const spinner = this.element.querySelector('.modal-image-spinner');
 
-    // Populate Mana Cost Glyphs
-    const manaCostEl = this.element.querySelector('.modal-mana-cost');
-    if (manaCostEl) {
-      if (cardData.manaCost) {
-        manaCostEl.innerHTML = formatManaSymbols(cardData.manaCost);
-        manaCostEl.style.display = '';
-      } else {
-        manaCostEl.innerHTML = '';
-        manaCostEl.style.display = 'none';
+    const renderData = (data) => {
+      if (!this.element) return;
+      // Populate Card Name
+      const nameEl = this.element.querySelector('.modal-card-name');
+      if (nameEl) {
+        nameEl.textContent = data.name || 'Unknown Card';
       }
-    }
 
-    // Populate Typeline
-    const typelineEl = this.element.querySelector('.modal-typeline');
-    if (typelineEl) {
-      typelineEl.textContent = cardData.typeLine || '';
-    }
-
-    // Populate Oracle Rules Text
-    const oracleEl = this.element.querySelector('.modal-oracle-text');
-    if (oracleEl) {
-      oracleEl.textContent = cardData.oracleText || '';
-    }
-
-    // Populate High-Res Card Art
-    const imgEl = this.element.querySelector('.modal-card-image');
-    if (imgEl) {
-      if (cardData.imageUri) {
-        imgEl.src = cardData.imageUri;
-        imgEl.alt = cardData.name || 'Card art';
-        imgEl.style.display = '';
-      } else {
-        imgEl.src = '';
-        imgEl.alt = '';
-        imgEl.style.display = 'none';
+      // Populate Mana Cost Glyphs
+      const manaCostEl = this.element.querySelector('.modal-mana-cost');
+      if (manaCostEl) {
+        if (data.manaCost) {
+          manaCostEl.innerHTML = formatManaSymbols(data.manaCost);
+          manaCostEl.style.display = '';
+        } else {
+          manaCostEl.innerHTML = '';
+          manaCostEl.style.display = 'none';
+        }
       }
-    }
 
-    // Populate Stats Row (P/T or Loyalty)
-    const statsRow = this.element.querySelector('.modal-stats-row');
-    const ptLoyaltyEl = this.element.querySelector('.modal-pt-loyalty');
-    if (statsRow && ptLoyaltyEl) {
-      if (cardData.power !== undefined && cardData.toughness !== undefined) {
-        ptLoyaltyEl.textContent = `${cardData.power} / ${cardData.toughness}`;
-        statsRow.style.display = '';
-      } else if (cardData.loyalty !== undefined && cardData.loyalty !== null) {
-        ptLoyaltyEl.textContent = `Loyalty: ${cardData.loyalty}`;
-        statsRow.style.display = '';
-      } else {
-        ptLoyaltyEl.textContent = '';
-        statsRow.style.display = 'none';
+      // Populate Typeline
+      const typelineEl = this.element.querySelector('.modal-typeline');
+      if (typelineEl) {
+        typelineEl.textContent = data.typeLine || '';
       }
-    }
 
-    // Populate Modern Legal Badge
-    const legalBadge = this.element.querySelector('.badge-modern-legal');
-    if (legalBadge) {
-      if (cardData.modernLegal !== false) {
-        legalBadge.style.display = '';
-      } else {
-        legalBadge.style.display = 'none';
+      // Populate Oracle Rules Text
+      const oracleEl = this.element.querySelector('.modal-oracle-text');
+      if (oracleEl) {
+        oracleEl.textContent = data.oracleText || '';
       }
-    }
 
-    // Populate Set & Collector Info
-    const setInfoEl = this.element.querySelector('.modal-set-info');
-    if (setInfoEl) {
-      const parts = [];
-      if (cardData.set) parts.push(cardData.set.toUpperCase());
-      if (cardData.collectorNumber) parts.push(`#${cardData.collectorNumber}`);
-      if (cardData.rarity) parts.push(cardData.rarity.charAt(0).toUpperCase() + cardData.rarity.slice(1));
-      setInfoEl.textContent = parts.join(' · ');
+      // Populate High-Res Card Art
+      const imgEl = this.element.querySelector('.modal-card-image');
+      if (imgEl) {
+        if (data.imageUri) {
+          imgEl.src = data.imageUri;
+          imgEl.alt = data.name || 'Card art';
+          imgEl.style.display = '';
+        } else {
+          imgEl.src = '';
+          imgEl.alt = '';
+          imgEl.style.display = 'none';
+        }
+      }
+
+      // Populate Stats Row (P/T or Loyalty)
+      const statsRow = this.element.querySelector('.modal-stats-row');
+      const ptLoyaltyEl = this.element.querySelector('.modal-pt-loyalty');
+      if (statsRow && ptLoyaltyEl) {
+        if (data.power !== undefined && data.toughness !== undefined) {
+          ptLoyaltyEl.textContent = `${data.power} / ${data.toughness}`;
+          statsRow.style.display = '';
+        } else if (data.loyalty !== undefined && data.loyalty !== null) {
+          ptLoyaltyEl.textContent = `Loyalty: ${data.loyalty}`;
+          statsRow.style.display = '';
+        } else {
+          ptLoyaltyEl.textContent = '';
+          statsRow.style.display = 'none';
+        }
+      }
+
+      // Populate Modern Legal Badge
+      const legalBadge = this.element.querySelector('.badge-modern-legal');
+      if (legalBadge) {
+        if (data.modernLegal !== false) {
+          legalBadge.style.display = '';
+        } else {
+          legalBadge.style.display = 'none';
+        }
+      }
+
+      // Populate Set & Collector Info
+      const setInfoEl = this.element.querySelector('.modal-set-info');
+      if (setInfoEl) {
+        const parts = [];
+        if (data.set) parts.push(data.set.toUpperCase());
+        if (data.collectorNumber) parts.push(`#${data.collectorNumber}`);
+        if (data.rarity) parts.push(data.rarity.charAt(0).toUpperCase() + data.rarity.slice(1));
+        setInfoEl.textContent = parts.join(' · ');
+      }
+    };
+
+    // First render with provided data
+    renderData(cardData);
+
+    const hasRichArt = Boolean(cardData.imageUri && cardData.oracleText);
+
+    if (hasRichArt) {
+      if (dialog) dialog.classList.remove('card-modal-skeleton-shimmer');
+      if (spinner) spinner.classList.add('hidden');
+    } else {
+      // Show skeleton loader (INV-INSPECT-1)
+      if (dialog) dialog.classList.add('card-modal-skeleton-shimmer');
+      if (spinner) spinner.classList.remove('hidden');
+
+      if (cardData.name && this.scryfallService && typeof this.scryfallService.fetchCardByName === 'function') {
+        this.fetchPromise = this.scryfallService.fetchCardByName(cardData.name)
+          .then((fetched) => {
+            if (fetched) {
+              Object.assign(cardData, fetched);
+              renderData(cardData);
+            }
+          })
+          .catch((err) => {
+            console.warn('[CardOverlayModal] Failed to fetch card metadata:', err);
+          })
+          .finally(() => {
+            if (dialog) dialog.classList.remove('card-modal-skeleton-shimmer');
+            if (spinner) spinner.classList.add('hidden');
+          });
+      }
     }
 
     // Make modal visible
@@ -252,6 +293,8 @@ export class CardOverlayModal {
     if (closeBtn && typeof closeBtn.focus === 'function') {
       closeBtn.focus();
     }
+
+    return this.fetchPromise || Promise.resolve();
   }
 
   /**

@@ -97,6 +97,10 @@ export class PerkinsAgent {
     this._lastCoachTimestamp = 0;
     this._completedMilestones = new Set();
     this._hasPlayedLandThisTurn = false;
+
+    if (options.app) {
+      this.attach(options.app);
+    }
   }
 
   /**
@@ -349,14 +353,37 @@ export class PerkinsAgent {
       );
 
       if (counterCard && hasUU && isOpponentStackItem) {
+        if ((manaPool.U || 0) < 2) {
+          const neededU = 2 - (manaPool.U || 0);
+          const landsToTap = untappedLands.slice(0, neededU);
+          for (const land of landsToTap) {
+            land.isTapped = true;
+            await this.dispatchAction({
+              type: 'TAP_PERMANENT',
+              playerId: this.slotId,
+              instanceId: land.instanceId || land.id,
+              payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
+            });
+            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+              try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+            }
+          }
+        }
+
         const castAction = {
           type: 'CAST_SPELL',
           playerId: this.slotId,
+          controllerId: this.slotId,
+          controllerName: this.playerName || 'Perkins AI (Bot)',
           card: counterCard,
+          cardName: counterCard.name,
           targetId: topItem.id || topItem.instanceId || alarmState?.stackItemId,
           payload: {
             playerId: this.slotId,
+            controllerId: this.slotId,
+            controllerName: this.playerName || 'Perkins AI (Bot)',
             card: counterCard,
+            cardName: counterCard.name,
             targetId: topItem.id || topItem.instanceId || alarmState?.stackItemId
           }
         };
@@ -385,14 +412,34 @@ export class PerkinsAgent {
         }
 
         if (boltTargetId) {
+          if ((manaPool.R || 0) < 1 && untappedLands.length > 0) {
+            const land = untappedLands[0];
+            land.isTapped = true;
+            await this.dispatchAction({
+              type: 'TAP_PERMANENT',
+              playerId: this.slotId,
+              instanceId: land.instanceId || land.id,
+              payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
+            });
+            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+              try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+            }
+          }
+
           const castAction = {
             type: 'CAST_SPELL',
             playerId: this.slotId,
+            controllerId: this.slotId,
+            controllerName: this.playerName || 'Perkins AI (Bot)',
             card: boltCard,
+            cardName: boltCard.name,
             targetId: boltTargetId,
             payload: {
               playerId: this.slotId,
+              controllerId: this.slotId,
+              controllerName: this.playerName || 'Perkins AI (Bot)',
               card: boltCard,
+              cardName: boltCard.name,
               targetId: boltTargetId
             }
           };
@@ -418,14 +465,34 @@ export class PerkinsAgent {
         }
 
         if (pushTargetId) {
+          if ((manaPool.B || 0) < 1 && untappedLands.length > 0) {
+            const land = untappedLands[0];
+            land.isTapped = true;
+            await this.dispatchAction({
+              type: 'TAP_PERMANENT',
+              playerId: this.slotId,
+              instanceId: land.instanceId || land.id,
+              payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
+            });
+            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+              try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+            }
+          }
+
           const castAction = {
             type: 'CAST_SPELL',
             playerId: this.slotId,
+            controllerId: this.slotId,
+            controllerName: this.playerName || 'Perkins AI (Bot)',
             card: pushCard,
+            cardName: pushCard.name,
             targetId: pushTargetId,
             payload: {
               playerId: this.slotId,
+              controllerId: this.slotId,
+              controllerName: this.playerName || 'Perkins AI (Bot)',
               card: pushCard,
+              cardName: pushCard.name,
               targetId: pushTargetId
             }
           };
@@ -582,13 +649,13 @@ export class PerkinsAgent {
       // 2. Cast Creatures / Sorceries if affordable
       const manaPool = myState?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
       const lands = myState?.battlefield?.lands || [];
-      const untappedLandsCount = lands.filter(l => !l.isTapped).length;
-      const totalAvailableMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0) + untappedLandsCount;
+      const untappedLands = lands.filter(l => !l.isTapped);
+      const totalAvailableMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0) + untappedLands.length;
 
       const castableCreatures = handCards.filter(c => {
         if (!c || c.isHidden) return false;
         const type = String(c.typeLine || c.type || '');
-        if (!/creature/i.test(type)) return false;
+        if (!/creature|sorcery/i.test(type)) return false;
         const cmc = c.cmc ?? c.manaValue ?? this._parseCmc(c.manaCost);
         return cmc <= totalAvailableMana;
       });
@@ -600,13 +667,40 @@ export class PerkinsAgent {
           return cmcB - cmcA;
         });
         const cardToCast = castableCreatures[0];
+
+        // Explicitly tap matching lands before casting (INV-MANA-1)
+        const cmc = cardToCast.cmc ?? this._parseCmc(cardToCast.manaCost);
+        const landsNeeded = Math.min(cmc, untappedLands.length);
+        for (let i = 0; i < landsNeeded; i++) {
+          const landToTap = untappedLands[i];
+          landToTap.isTapped = true;
+          await this.dispatchAction({
+            type: 'TAP_PERMANENT',
+            playerId: this.slotId,
+            instanceId: landToTap.instanceId || landToTap.id,
+            payload: {
+              playerId: this.slotId,
+              instanceId: landToTap.instanceId || landToTap.id
+            }
+          });
+          if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+            try { this.app.tabletopState.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
+          }
+        }
+
         const castAction = {
           type: 'CAST_SPELL',
           playerId: this.slotId,
+          controllerId: this.slotId,
+          controllerName: this.playerName || 'Perkins AI (Bot)',
           card: cardToCast,
+          cardName: cardToCast.name,
           payload: {
             playerId: this.slotId,
+            controllerId: this.slotId,
+            controllerName: this.playerName || 'Perkins AI (Bot)',
             card: cardToCast,
+            cardName: cardToCast.name,
             instanceId: cardToCast.instanceId
           }
         };
@@ -688,6 +782,14 @@ export class PerkinsAgent {
     const defaultPass = { type: 'PASS_PRIORITY', playerId: this.slotId };
     await this.dispatchAction(defaultPass);
     return defaultPass;
+  }
+
+  async _executePrecombatMainPhase(state = null) {
+    return this.evaluateTurnPhase('PRECOMBAT_MAIN', state);
+  }
+
+  async _executePostcombatMainPhase(state = null) {
+    return this.evaluateTurnPhase('POSTCOMBAT_MAIN', state);
   }
 
   /**
