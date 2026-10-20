@@ -771,8 +771,10 @@ export class TabletopStateManager extends EventEmitter {
     let count = 0;
     for (const sub of subzones) {
       for (const card of (player.battlefield[sub] || [])) {
-        card.isTapped = false;
-        count++;
+        if (!card.doesNotUntap && !card.doesNotUntapDuringUntapStep) {
+          card.isTapped = false;
+          count++;
+        }
       }
     }
     return { untappedCount: count };

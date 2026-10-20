@@ -241,6 +241,58 @@ export {
   diceShaker
 } from './view/DiceShaker.js';
 
+export {
+  MulliganEngine,
+  shuffleLibrary,
+  evaluatePerkinsMulligan,
+  selectPerkinsBottomCards,
+  MulliganTracker
+} from './MulliganEngine.js';
+
+export {
+  CostModificationEngine,
+  parseManaCost,
+  formatManaCost
+} from './CostModificationEngine.js';
+
+export {
+  AbilityEngine,
+  CONTINUOUS_LAYERS
+} from './AbilityEngine.js';
+
+export {
+  ZoneTransitionMatrix,
+  ZONES
+} from './ZoneTransitionMatrix.js';
+
+export {
+  CombatDamageEngine
+} from './CombatDamageEngine.js';
+
+export {
+  StateBasedActionsEngine
+} from './StateBasedActionsEngine.js';
+
+export {
+  MulliganModal
+} from './view/MulliganModal.js';
+
+export {
+  SearchSelectGridModal
+} from './view/SearchSelectGridModal.js';
+
+export {
+  TargetSelectorModal
+} from './view/TargetSelectorModal.js';
+
+export {
+  PermanentActionDrawer
+} from './view/PermanentActionDrawer.js';
+
+export {
+  DamageAssignmentModal
+} from './view/DamageAssignmentModal.js';
+
 import {
   AuthManager,
   STARTER_ARCHETYPES,

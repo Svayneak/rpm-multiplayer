@@ -118,7 +118,7 @@ export function selectPerkinsBottomCards(hand, countToBottom) {
     if (isLand) {
       // Deprioritize bottoming lands unless in flood
       const totalLands = hand.filter(c => /land/i.test(c.typeLine || c.type || '')).length;
-      discardScore = totalLands > 3 ? 50 + totalLands : 10;
+      discardScore = totalLands > 3 ? 65 + totalLands : 10;
     } else {
       // Non-lands: score proportional to CMC (higher CMC = higher bottom priority)
       discardScore = 30 + (cmc * 15);
@@ -201,9 +201,11 @@ export class MulliganTracker {
   }
 }
 
-export default {
+export const MulliganEngine = {
   shuffleLibrary,
   evaluatePerkinsMulligan,
   selectPerkinsBottomCards,
   MulliganTracker
 };
+
+export default MulliganEngine;

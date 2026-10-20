@@ -348,7 +348,7 @@ export class ZoneModel {
   static _findCardInPlayer(playerState, instanceId) {
     if (!playerState) return null;
 
-    const simpleZones = ['library', 'hand', 'graveyard', 'exile'];
+    const simpleZones = ['library', 'hand', 'graveyard', 'exile', 'stack'];
     for (const zone of simpleZones) {
       const arr = playerState[zone];
       if (Array.isArray(arr)) {

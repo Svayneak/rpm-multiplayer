@@ -72,7 +72,7 @@ export class ZoneTransitionMatrix {
    * @param {Array} [stack=[]] - Shared stack container
    * @returns {{ card: Object, fromZone: string, toZone: string, details: Object }}
    */
-  static moveCard(playerState, instanceId, fromZone, toZone, options = {}, stack = []) {
+  static moveCard(playerState, instanceId, fromZone, toZone, options = {}, stack = null) {
     if (!playerState) {
       throw new Error('playerState is required for zone transition');
     }
@@ -83,8 +83,12 @@ export class ZoneTransitionMatrix {
       throw new Error(`Invalid destination zone: ${toZone}`);
     }
 
+    const effectiveStack = Array.isArray(stack)
+      ? stack
+      : (playerState.stack || (playerState.stack = []));
+
     // Locate and remove card from source zone
-    const removalResult = ZoneModel.removeCardFromZone(playerState, instanceId, stack);
+    const removalResult = ZoneModel.removeCardFromZone(playerState, instanceId, effectiveStack);
     if (!removalResult || !removalResult.card) {
       throw new Error(`Card with instanceId '${instanceId}' not found in source zone '${fromZone}'`);
     }
@@ -104,7 +108,7 @@ export class ZoneTransitionMatrix {
     const targetSubzone = options.subzone || null;
     const position = options.position || 'bottom';
 
-    ZoneModel.insertCardIntoZone(playerState, card, toZone, targetSubzone, position, stack);
+    ZoneModel.insertCardIntoZone(playerState, card, toZone, targetSubzone, position, effectiveStack);
 
     return {
       card,

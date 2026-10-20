@@ -61,6 +61,11 @@ import {
   calculateAge
 } from './AuthManager.js';
 import { diceCanvas } from './view/DiceCanvas.js';
+import { MulliganModal } from './view/MulliganModal.js';
+import { SearchSelectGridModal } from './view/SearchSelectGridModal.js';
+import { TargetSelectorModal } from './view/TargetSelectorModal.js';
+import { PermanentActionDrawer } from './view/PermanentActionDrawer.js';
+import { DamageAssignmentModal } from './view/DamageAssignmentModal.js';
 
 /**
  * Standard MTG Zone Drawers
@@ -235,6 +240,28 @@ export class RPMAppController {
           this.closeModal();
         }
       }
+    });
+
+    // 11. Feature 19, 20 & 21 Interactive Modals
+    this.mulliganModal = options.mulliganModal || new MulliganModal({
+      onKeep: (data) => this.handleMulliganKeep(data),
+      onMulligan: (data) => this.handleMulliganTake(data),
+      onConfirmBottom: (data) => this.handleMulliganConfirmBottom(data)
+    });
+
+    this.searchModal = options.searchModal || new SearchSelectGridModal();
+
+    this.targetModal = options.targetModal || new TargetSelectorModal({
+      onSelectTarget: (data) => this.handleTargetSelected(data)
+    });
+
+    this.actionDrawer = options.actionDrawer || new PermanentActionDrawer({
+      onActivateAbility: (data) => this.handleAbilityActivated(data),
+      onTapForMana: (data) => this.handleDrawerTapMana(data)
+    });
+
+    this.damageModal = options.damageModal || new DamageAssignmentModal({
+      onConfirmAssignment: (data) => this.handleDamageConfirmed(data)
     });
 
     // Handle container option if provided
@@ -4533,6 +4560,102 @@ export class RPMAppController {
       modalRoot.innerHTML = '';
       modalRoot.setAttribute('aria-hidden', 'true');
     }
+  }
+
+  handleMulliganKeep(data) {
+    if (this.priorityMachine && typeof this.priorityMachine.completeMulliganPhase === 'function') {
+      this.priorityMachine.completeMulliganPhase();
+    }
+    this.render();
+  }
+
+  handleMulliganTake(data) {
+    const player = this.tabletopState?.getPlayer?.(this.myPlayerId);
+    if (!player) return;
+    player.library = [...(player.library || []), ...(player.hand || [])];
+    player.hand = [];
+    this.tabletopState?.drawCard?.(this.myPlayerId, 7);
+    this.mulliganModal?.open({
+      cards: player.hand,
+      mulliganCount: data.nextMulliganCount || 1
+    });
+  }
+
+  handleMulliganConfirmBottom(data) {
+    const player = this.tabletopState?.getPlayer?.(this.myPlayerId);
+    if (!player || !data.bottomedCards) return;
+    for (const card of data.bottomedCards) {
+      const idx = player.hand.findIndex(c => c && c.instanceId === card.instanceId);
+      if (idx !== -1) {
+        const [removed] = player.hand.splice(idx, 1);
+        player.library.push(removed);
+      }
+    }
+    if (this.priorityMachine && typeof this.priorityMachine.completeMulliganPhase === 'function') {
+      this.priorityMachine.completeMulliganPhase();
+    }
+    this.render();
+  }
+
+  handleTargetSelected(data) {
+    if (this._stagedCast) {
+      const { instanceId, autoTap } = this._stagedCast;
+      this._stagedCast = null;
+      this.tabletopState?.dispatch?.('CAST_SPELL', {
+        playerId: this.myPlayerId,
+        instanceId,
+        autoTap,
+        targets: [data.targetId]
+      });
+      this.render();
+    }
+  }
+
+  handleAbilityActivated(data) {
+    const { card, ability, playerId } = data;
+    this.tabletopState?.dispatch?.('ACTIVATE_ABILITY', {
+      playerId,
+      instanceId: card.instanceId,
+      ability
+    });
+    this.render();
+  }
+
+  handleDrawerTapMana(data) {
+    const { card, playerId } = data;
+    this.tabletopState?.dispatch?.('TAP_PERMANENT', {
+      playerId,
+      instanceId: card.instanceId
+    });
+    this.render();
+  }
+
+  handleDamageConfirmed(data) {
+    if (this.tabletopState && typeof this.tabletopState.dealDamage === 'function') {
+      for (const [blockerId, dmg] of Object.entries(data.blockerAssignments || {})) {
+        if (dmg > 0) {
+          this.tabletopState.dealDamage({
+            sourceId: data.attackerId,
+            sourceControllerId: this.myPlayerId,
+            targetId: blockerId,
+            targetType: 'CREATURE',
+            amount: dmg,
+            isCombat: true
+          });
+        }
+      }
+      if (data.playerDamage > 0) {
+        this.tabletopState.dealDamage({
+          sourceId: data.attackerId,
+          sourceControllerId: this.myPlayerId,
+          targetId: this.opponentPlayerId || 'p2',
+          targetType: 'PLAYER',
+          amount: data.playerDamage,
+          isCombat: true
+        });
+      }
+    }
+    this.render();
   }
 
   /**
