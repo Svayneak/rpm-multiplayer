@@ -1,12 +1,13 @@
 {
   "activePlan": "Features 19, 20 & 21 Harmonized",
-  "currentModule": "Module 4: UI Modals & Tabletop View Extensions",
+  "currentModule": "Module 5: Perkins AI Bot Intelligence",
   "completedModules": [
     "Module 1: Pure Core Rules Engines (MulliganEngine.js, CostModificationEngine.js, AbilityEngine.js)",
     "Module 2: Zone Transitions, Combat Damage & SBAs (ZoneTransitionMatrix.js, CombatDamageEngine.js, StateBasedActionsEngine.js)",
-    "Module 3: Stateful Orchestration & Turn Pipeline (PriorityStateMachine.js, TabletopStateManager.js)"
+    "Module 3: Stateful Orchestration & Turn Pipeline (PriorityStateMachine.js, TabletopStateManager.js)",
+    "Module 4: UI Modals & Tabletop View Extensions (MulliganModal.js, SearchSelectGridModal.js, TargetSelectorModal.js, PermanentActionDrawer.js, DamageAssignmentModal.js, TabletopUI.js, tabletop.css)"
   ],
-  "currentStep": "Ready to build Module 4 UI Modals & View Components",
+  "currentStep": "Ready to enhance PerkinsAgent.js with London Mulligan, Tutor Selection, and Combat targeting heuristics",
   "filesCreated": [
     "src/MulliganEngine.js",
     "src/CostModificationEngine.js",
@@ -14,16 +15,23 @@
     "src/ZoneTransitionMatrix.js",
     "src/CombatDamageEngine.js",
     "src/StateBasedActionsEngine.js",
+    "src/view/MulliganModal.js",
+    "src/view/SearchSelectGridModal.js",
+    "src/view/TargetSelectorModal.js",
+    "src/view/PermanentActionDrawer.js",
+    "src/view/DamageAssignmentModal.js",
     "test/test_core_engines_unit.js",
     "test/test_zone_and_combat_unit.js",
-    "test/test_tabletop_orchestration.js"
+    "test/test_tabletop_orchestration.js",
+    "test/test_ui_modals_unit.js"
   ],
   "testStatus": {
     "module1Unit": "PASSED (12/12)",
     "module2Unit": "PASSED (11/11)",
     "module3Integration": "PASSED (9/9)",
+    "module4Unit": "PASSED (7/7)",
     "fullRegression": "PASSED (18/18 Suites, 0 Failures)"
   },
-  "nextAction": "Author Module 4 UI components: MulliganModal.js, SearchSelectGridModal.js, TargetSelectorModal.js, PermanentActionDrawer.js, DamageAssignmentModal.js, TabletopUI.js, tabletop.css, DiceShaker.js",
-  "lastUpdated": "2026-10-20T16:41:55-03:00"
+  "nextAction": "Enhance PerkinsAgent.js with London Mulligan evaluation, bottom card scoring, tutor search intelligence, and legal combat targeting",
+  "lastUpdated": "2026-10-20T16:47:00-03:00"
 }

@@ -3139,10 +3139,10 @@ export class RPMAppController {
           <div class="opponent-land-card ${isTapped ? 'is-tapped card-tapped' : ''}"
                data-instance-id="${instId}"
                data-tapped="${isTapped ? 'true' : 'false'}"
-               style="${isTapped ? 'transform: rotate(90deg); opacity: 0.58;' : ''}"
+               style="${isTapped ? 'opacity: 0.62; border-color: rgba(255,255,255,0.2);' : ''}"
                title="${name} (${isTapped ? 'Tapped' : 'Untapped'}) - Click to inspect">
             <span class="land-pip mana-${pip.colorKey}"><i class="ms ${pip.glyph} ms-cost"></i></span>
-            <span class="land-name">${name}</span>
+            <span class="land-name">${name} ${isTapped ? '(Tapped)' : '(Untapped)'}</span>
             ${isTapped ? '<span class="tap-badge">↺</span>' : ''}
           </div>
         `;

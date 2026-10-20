@@ -1029,11 +1029,15 @@ export class TabletopUI {
       const isTapped = Boolean(card.isTapped);
       const pt = (card.power !== undefined && card.toughness !== undefined) ? `${card.power}/${card.toughness}` : '';
       const loyalty = card.loyalty !== undefined && card.loyalty !== null ? `Loyalty: ${card.loyalty}` : '';
+      const isLand = /land/i.test(card.typeLine || card.type || '');
+      const displayName = (!isHand && isLand)
+        ? `${name} ${isTapped ? '(Tapped)' : '(Untapped)'}`
+        : name;
 
       html += `
         <div class="card-item ${isTapped ? 'card-tapped' : ''}" data-index="${idx}" role="button">
           <div class="card-header-line">
-            <span class="card-name" title="${name}">${name}</span>
+            <span class="card-name" title="${name}">${displayName}</span>
             <span class="card-cost">${costHtml}</span>
           </div>
           <div class="card-typeline-short">${card.typeLine || ''}</div>
