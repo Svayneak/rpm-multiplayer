@@ -21,6 +21,9 @@
 import { projectState, TabletopStateManager } from './TabletopStateManager.js';
 import { getPerkDefinition, resolveRoll } from './PerkCatalog.js';
 import { BEGINNER_DECKS } from './DeckbuilderAI.js';
+import { evaluatePerkinsMulligan, selectPerkinsBottomCards } from './MulliganEngine.js';
+import { CombatDamageEngine } from './CombatDamageEngine.js';
+import { TargetSelectorModal } from './view/TargetSelectorModal.js';
 
 /**
  * Canonical Bilingual Coach Dialogues for the 6 Onboarding Milestones
@@ -1115,6 +1118,133 @@ export class PerkinsAgent {
       cmc += colorMatches.length;
     }
     return cmc;
+  }
+
+  /**
+   * Evaluates opening hand for London Mulligan (INV-MULLIGAN-1).
+   * 
+   * @param {Array<Object>} hand
+   * @param {number} [currentMulliganCount=0]
+   * @returns {{ keep: boolean, reason: string, bottomCards: Array<Object> }}
+   */
+  evaluateOpeningHand(hand, currentMulliganCount = 0) {
+    const evalResult = evaluatePerkinsMulligan(hand, currentMulliganCount);
+    let bottomCards = [];
+    if (evalResult.keep && currentMulliganCount > 0) {
+      bottomCards = selectPerkinsBottomCards(hand, currentMulliganCount);
+    }
+    return {
+      keep: evalResult.keep,
+      reason: evalResult.reason,
+      bottomCards
+    };
+  }
+
+  /**
+   * Intelligently selects candidate card for Tutor / Search effects.
+   * 
+   * @param {Array<Object>} candidates
+   * @param {Object} [context={}]
+   * @returns {Object|null}
+   */
+  selectTutorCandidate(candidates = [], context = {}) {
+    if (!Array.isArray(candidates) || candidates.length === 0) return null;
+
+    const { landsCount = 2, turnNumber = 3 } = context;
+
+    // Emergency mana screw: find a land
+    if (landsCount <= 2 && turnNumber >= 3) {
+      const land = candidates.find(c => /land/i.test(c.typeLine || c.type || ''));
+      if (land) return land;
+    }
+
+    // High impact finisher or removal
+    const sorted = [...candidates].sort((a, b) => {
+      const cmcA = a.cmc ?? this._parseCmc(a.manaCost);
+      const cmcB = b.cmc ?? this._parseCmc(b.manaCost);
+      return cmcB - cmcA;
+    });
+
+    return sorted[0] || candidates[0];
+  }
+
+  /**
+   * Selects legal target for targeted spell, filtering out Hexproof, Shroud, and Protection (INV-TARGET-MENU-1).
+   * 
+   * @param {Object} spell
+   * @param {Object} tabletopState
+   * @returns {{ targetId: string, targetType: 'PLAYER'|'CREATURE' } | null}
+   */
+  selectLegalSpellTarget(spell, tabletopState) {
+    if (!spell || !tabletopState) return null;
+
+    // 1. Check opponent creatures
+    const opponentCreatures = [];
+    for (const [pid, player] of Object.entries(tabletopState.players || {})) {
+      if (pid === this.slotId) continue;
+      const creatures = player.battlefield?.creatures || [];
+      for (const card of creatures) {
+        const legality = TargetSelectorModal.evaluateTargetLegality(
+          { id: card.instanceId, type: 'CREATURE', card },
+          spell,
+          this.slotId
+        );
+        if (legality.isLegal) {
+          opponentCreatures.push(card);
+        }
+      }
+    }
+
+    if (opponentCreatures.length > 0) {
+      // Target highest power legal opponent creature
+      opponentCreatures.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0));
+      return { targetId: opponentCreatures[0].instanceId, targetType: 'CREATURE' };
+    }
+
+    // 2. Opponent Player
+    for (const [pid, player] of Object.entries(tabletopState.players || {})) {
+      if (pid === this.slotId) continue;
+      const legality = TargetSelectorModal.evaluateTargetLegality(
+        { id: pid, type: 'PLAYER', player },
+        spell,
+        this.slotId
+      );
+      if (legality.isLegal) {
+        return { targetId: pid, targetType: 'PLAYER' };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Distributes combat damage for attacker (INV-DAMAGE-ASSIGN-1).
+   * 
+   * @param {Object} attacker
+   * @param {Array<Object>} blockers
+   * @param {number} attackerPower
+   * @returns {Object}
+   */
+  assignCombatDamage(attacker, blockers = [], attackerPower) {
+    return CombatDamageEngine.calculateAttackerDamageDistribution(attacker, blockers, attackerPower);
+  }
+
+  /**
+   * Determines whether Perkins AI opts into the Upkeep Random Perk roll.
+   * Prevents rolling if library is nearly empty (anti-deckout safeguard).
+   * 
+   * @param {Object} state
+   * @returns {boolean}
+   */
+  shouldRollUpkeepPerk(state = null) {
+    const myState = state?.players?.[this.slotId] || this.tabletopState?.getPlayer?.(this.slotId);
+    const libraryCount = myState?.library?.length ?? myState?.libraryCount ?? 40;
+
+    // If deck has 3 or fewer cards, decline to roll to prevent deckout loss
+    if (libraryCount <= 3) {
+      return false;
+    }
+    return true;
   }
 
   /**
