@@ -19,6 +19,10 @@ import {
   PlayerNotFoundError
 } from './ZoneModel.js';
 import { EventEmitter } from './EventEmitter.js';
+import { ZoneTransitionMatrix } from './ZoneTransitionMatrix.js';
+import { CombatDamageEngine } from './CombatDamageEngine.js';
+import { StateBasedActionsEngine } from './StateBasedActionsEngine.js';
+import { AbilityEngine } from './AbilityEngine.js';
 
 export class LandLimitExceededError extends StateTransitionError {
   constructor(message = 'Land drop limit reached for this turn') {
@@ -168,9 +172,11 @@ export class TabletopStateManager extends EventEmitter {
     this.roundNumber = options.roundNumber || 1;
     this.playerTurnNumbers = new Map();
     this.priorityMachine = options.priorityMachine || null;
+    this.abilityEngine = options.abilityEngine || new AbilityEngine();
     this.actionLog = [];
     this.subscribers = new Set();
     this.sequenceCounter = 0;
+    this._priorityMachineWired = false;
 
     if (Array.isArray(options.players)) {
       for (const p of options.players) {
@@ -180,6 +186,10 @@ export class TabletopStateManager extends EventEmitter {
           this.registerPlayer(p.id, p.name || p.id);
         }
       }
+    }
+
+    if (this.priorityMachine) {
+      this._wirePriorityMachine();
     }
   }
 
@@ -359,6 +369,36 @@ export class TabletopStateManager extends EventEmitter {
       case 'HIDE_HAND':
       case 'SET_HAND_REVEALED':
         result = this._handleSetHandRevealed(actionType, payload);
+        break;
+      case 'DEAL_DAMAGE':
+        result = this._handleDealDamage(payload);
+        break;
+      case 'LOSE_LIFE':
+        result = this._handleLoseLife(payload);
+        break;
+      case 'ENTER_WITHOUT_CASTING':
+        result = this._handleEnterWithoutCasting(payload);
+        break;
+      case 'CAST_WITHOUT_PAYING_MANA':
+        result = this._handleCastWithoutPaying(payload);
+        break;
+      case 'REANIMATE':
+        result = this._handleReanimate(payload);
+        break;
+      case 'REGROWTH':
+        result = this._handleRegrowth(payload);
+        break;
+      case 'FLICKER':
+        result = this._handleFlicker(payload);
+        break;
+      case 'MILL':
+        result = this._handleMill(payload);
+        break;
+      case 'IMPULSE_EXILE':
+        result = this._handleImpulseExile(payload);
+        break;
+      case 'RUN_SBA_CHECK':
+        result = this.runSBACheck();
         break;
       default:
         throw new StateTransitionError(`Unknown actionType: ${actionType}`);
@@ -557,6 +597,22 @@ export class TabletopStateManager extends EventEmitter {
     card.zone = 'battlefield';
     card.subzone = 'lands';
     card.isTapped = false;
+
+    // Shockland Detection (Steam Vents, Sacred Foundry, Watery Grave, etc. or ETB 2 life rules text)
+    const isShockland = /steam vents|sacred foundry|watery grave|stomping ground|godless shrine|blood crypt|breeding pool|overgrown tomb|temple garden|hallowed fountain/i.test(card.name || '') ||
+      /pay 2 life.*untapped|enters the battlefield tapped unless you pay 2 life/i.test(card.text || '');
+
+    if (isShockland) {
+      if (payload.pay2Life === true) {
+        CombatDamageEngine.loseLife({ playerId, amount: 2, reason: 'SHOCKLAND_COST' }, this);
+        card.isTapped = false;
+        this.emit('SHOCKLAND_ETB_RESOLVED', { playerId, card, paidLife: true });
+      } else {
+        card.isTapped = true;
+        this.emit('SHOCKLAND_ETB_RESOLVED', { playerId, card, paidLife: false, enteredTapped: true });
+      }
+    }
+
     player.battlefield.lands.push(card);
 
     player.landsPlayedThisTurn = played + 1;
@@ -593,27 +649,31 @@ export class TabletopStateManager extends EventEmitter {
       throw new CardNotFoundError(`Card with instanceId ${instanceId} not found in ${sourceZone}`);
     }
 
-    // Auto-tap or verify sufficient mana before deducting
-    if (payload.autoTap || (payload.manaCost && !manaCostPaid)) {
-      const costToPay = payload.manaCost || sourceArray[cardIdx]?.manaCost;
-      if (costToPay) {
-        this.autoTapForMana(playerId, costToPay);
-      }
-    } else if (manaCostPaid && typeof manaCostPaid === 'object') {
-      for (const [color, amt] of Object.entries(manaCostPaid)) {
-        const required = Number(amt) || 0;
-        if (required > 0) {
-          const available = player.resources.manaPool[color] || 0;
-          if (available < required) {
-            throw new InsufficientManaError(`Insufficient ${color} mana: required ${required}, available ${available}`);
+    const isFree = Boolean(payload.isFreeCast || payload.withoutPayingManaCost || sourceArray[cardIdx]?.isFreeCast);
+
+    // Auto-tap or verify sufficient mana before deducting (bypassed if free cast)
+    if (!isFree) {
+      if (payload.autoTap || (payload.manaCost && !manaCostPaid)) {
+        const costToPay = payload.manaCost || sourceArray[cardIdx]?.manaCost;
+        if (costToPay) {
+          this.autoTapForMana(playerId, costToPay);
+        }
+      } else if (manaCostPaid && typeof manaCostPaid === 'object') {
+        for (const [color, amt] of Object.entries(manaCostPaid)) {
+          const required = Number(amt) || 0;
+          if (required > 0) {
+            const available = player.resources.manaPool[color] || 0;
+            if (available < required) {
+              throw new InsufficientManaError(`Insufficient ${color} mana: required ${required}, available ${available}`);
+            }
           }
         }
-      }
 
-      for (const [color, amt] of Object.entries(manaCostPaid)) {
-        const required = Number(amt) || 0;
-        if (required > 0) {
-          player.resources.manaPool[color] -= required;
+        for (const [color, amt] of Object.entries(manaCostPaid)) {
+          const required = Number(amt) || 0;
+          if (required > 0) {
+            player.resources.manaPool[color] -= required;
+          }
         }
       }
     }
@@ -621,6 +681,10 @@ export class TabletopStateManager extends EventEmitter {
     const [card] = sourceArray.splice(cardIdx, 1);
     card.zone = 'stack';
     card.subzone = null;
+    if (isFree) {
+      card.isFreeCast = true;
+      card.withoutPayingManaCost = true;
+    }
 
     if (targets) {
       card.annotations = card.annotations || {};
@@ -805,6 +869,77 @@ export class TabletopStateManager extends EventEmitter {
     const player = this.getPlayer(playerId);
     player.isHandRevealed = Boolean(isRevealed);
     return { playerId, isHandRevealed: player.isHandRevealed };
+  }
+
+  _handleDealDamage(payload) {
+    const result = CombatDamageEngine.dealDamage(payload, this);
+    this.runSBACheck();
+    return result;
+  }
+
+  _handleLoseLife(payload) {
+    const result = CombatDamageEngine.loseLife(payload, this);
+    this.runSBACheck();
+    return result;
+  }
+
+  _handleEnterWithoutCasting(payload) {
+    const { playerId, instanceId, fromZone = 'library', subzone = null } = payload;
+    const player = this.getPlayer(playerId);
+    const card = ZoneTransitionMatrix.enterWithoutCasting(player, instanceId, fromZone, subzone);
+    this.emit('CARD_ENTERED_WITHOUT_CASTING', { playerId, card, fromZone });
+    this.runSBACheck();
+    return { card };
+  }
+
+  _handleCastWithoutPaying(payload) {
+    const { playerId, instanceId, fromZone = 'hand' } = payload;
+    const player = this.getPlayer(playerId);
+    const card = ZoneTransitionMatrix.castWithoutPayingManaCost(player, instanceId, fromZone, this.stack);
+    this.emit('CARD_CAST_WITHOUT_PAYING', { playerId, card, fromZone });
+    return { card };
+  }
+
+  _handleReanimate(payload) {
+    const { playerId, instanceId } = payload;
+    const player = this.getPlayer(playerId);
+    const card = ZoneTransitionMatrix.reanimate(player, instanceId);
+    this.emit('CREATURE_REANIMATED', { playerId, card });
+    this.runSBACheck();
+    return { card };
+  }
+
+  _handleRegrowth(payload) {
+    const { playerId, instanceId } = payload;
+    const player = this.getPlayer(playerId);
+    const card = ZoneTransitionMatrix.regrowth(player, instanceId);
+    this.emit('CARD_REGROWTH', { playerId, card });
+    return { card };
+  }
+
+  _handleFlicker(payload) {
+    const { playerId, instanceId } = payload;
+    const player = this.getPlayer(playerId);
+    const card = ZoneTransitionMatrix.flicker(player, instanceId);
+    this.emit('PERMANENT_FLICKERED', { playerId, card });
+    this.runSBACheck();
+    return { card };
+  }
+
+  _handleMill(payload) {
+    const { playerId, count = 1 } = payload;
+    const player = this.getPlayer(playerId);
+    const cards = ZoneTransitionMatrix.mill(player, count);
+    this.emit('CARDS_MILLED', { playerId, count, cards });
+    return { cards };
+  }
+
+  _handleImpulseExile(payload) {
+    const { playerId, count = 1 } = payload;
+    const player = this.getPlayer(playerId);
+    const cards = ZoneTransitionMatrix.impulseExile(player, count);
+    this.emit('CARDS_IMPULSE_EXILED', { playerId, count, cards });
+    return { cards };
   }
 
   // --- Convenience Direct Methods ---
@@ -1335,5 +1470,124 @@ export class TabletopStateManager extends EventEmitter {
       timestamp: Date.now()
     }, { card });
     return card;
+  }
+
+  dealDamage(payload) {
+    return this.dispatch('DEAL_DAMAGE', payload);
+  }
+
+  loseLife(playerId, amount, reason = 'LIFE_LOSS') {
+    return this.dispatch('LOSE_LIFE', { playerId, amount, reason });
+  }
+
+  enterWithoutCasting(playerId, instanceId, fromZone = 'library', subzone = null) {
+    return this.dispatch('ENTER_WITHOUT_CASTING', { playerId, instanceId, fromZone, subzone });
+  }
+
+  reanimate(playerId, instanceId) {
+    return this.dispatch('REANIMATE', { playerId, instanceId });
+  }
+
+  regrowth(playerId, instanceId) {
+    return this.dispatch('REGROWTH', { playerId, instanceId });
+  }
+
+  flicker(playerId, instanceId) {
+    return this.dispatch('FLICKER', { playerId, instanceId });
+  }
+
+  mill(playerId, count = 1) {
+    return this.dispatch('MILL', { playerId, count });
+  }
+
+  impulseExile(playerId, count = 1) {
+    return this.dispatch('IMPULSE_EXILE', { playerId, count });
+  }
+
+  searchZone(playerId, zoneName = 'library', filterFn = null) {
+    const player = this.getPlayer(playerId);
+    let cards = [];
+    if (zoneName === 'battlefield') {
+      cards = [
+        ...(player.battlefield?.lands || []),
+        ...(player.battlefield?.creatures || []),
+        ...(player.battlefield?.noncreatures || []),
+        ...(player.battlefield?.planeswalkers || [])
+      ];
+    } else {
+      cards = Array.isArray(player[zoneName]) ? [...player[zoneName]] : [];
+    }
+    if (typeof filterFn === 'function') {
+      return cards.filter(filterFn);
+    }
+    return cards;
+  }
+
+  setPriorityMachine(priorityMachine) {
+    this.priorityMachine = priorityMachine;
+    this._wirePriorityMachine();
+  }
+
+  _wirePriorityMachine() {
+    if (!this.priorityMachine || this._priorityMachineWired) return;
+    this._priorityMachineWired = true;
+
+    this.priorityMachine.on('PHASE_STEP_CHANGED', (data) => {
+      this.handlePhaseStepChanged(data);
+    });
+
+    this.priorityMachine.on('UNTAP_STEP_ENTERED', (data) => {
+      this.handleUntapStep(data.activePlayerId);
+    });
+
+    this.priorityMachine.on('UPKEEP_STEP_ENTERED', (data) => {
+      this.handleUpkeepStep(data.activePlayerId, data.turnNumber);
+    });
+
+    this.priorityMachine.on('CLEANUP_STEP_ENTERED', (data) => {
+      this.handleCleanupStep(data.activePlayerId);
+    });
+  }
+
+  handleUntapStep(activePlayerId) {
+    if (!activePlayerId) return;
+    this.untapAll(activePlayerId);
+    this.resetTurnQuotas(activePlayerId);
+    this.emit('AUTO_UNTAP_RESOLVED', { activePlayerId });
+  }
+
+  handleUpkeepStep(activePlayerId, turnNumber) {
+    this.emit('UPKEEP_PERK_PROMPT_READY', {
+      activePlayerId,
+      turnNumber: turnNumber || this.turnNumber
+    });
+  }
+
+  handleCleanupStep(activePlayerId) {
+    const count = StateBasedActionsEngine.purgeCleanupMarkedDamage(this);
+    this.runSBACheck();
+    this.emit('CLEANUP_DAMAGE_PURGED', { activePlayerId, purgedCount: count });
+  }
+
+  handlePhaseStepChanged(data) {
+    const { currentPhaseStep, activePlayerId } = data;
+    if (currentPhaseStep === 'UNTAP') {
+      this.handleUntapStep(activePlayerId);
+    } else if (currentPhaseStep === 'UPKEEP') {
+      this.handleUpkeepStep(activePlayerId, data.turnNumber);
+    } else if (currentPhaseStep === 'DRAW') {
+      if (!data.shouldSkipDraw) {
+        try {
+          this.drawCardForTurn(activePlayerId);
+          this.emit('AUTO_DRAW_RESOLVED', { activePlayerId });
+        } catch (err) {}
+      }
+    } else if (currentPhaseStep === 'CLEANUP') {
+      this.handleCleanupStep(activePlayerId);
+    }
+  }
+
+  runSBACheck() {
+    return StateBasedActionsEngine.runSBACheck(this, this.abilityEngine);
   }
 }

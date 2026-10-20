@@ -46,6 +46,34 @@ export const TWELVE_PHASE_STEPS = Object.freeze([
   'CLEANUP'             // CR 514: Cleanup step (Discard to hand size, damage removed)
 ]);
 
+export const OVERARCHING_PHASES = Object.freeze({
+  MULLIGAN: 'MULLIGAN',
+  BEGINNING: 'BEGINNING',
+  PRECOMBAT_MAIN: 'PRECOMBAT_MAIN',
+  COMBAT: 'COMBAT',
+  POSTCOMBAT_MAIN: 'POSTCOMBAT_MAIN',
+  ENDING: 'ENDING'
+});
+
+/**
+ * Maps any subphase step to its MTG CR 500 Overarching Phase.
+ * 
+ * @param {string} subphase
+ * @returns {string} One of OVERARCHING_PHASES
+ */
+export function getOverarchingPhase(subphase) {
+  if (subphase === 'MULLIGAN') return OVERARCHING_PHASES.MULLIGAN;
+  if (['UNTAP', 'UPKEEP', 'DRAW'].includes(subphase)) return OVERARCHING_PHASES.BEGINNING;
+  if (subphase === 'PRECOMBAT_MAIN' || subphase === 'MAIN_1') return OVERARCHING_PHASES.PRECOMBAT_MAIN;
+  if ([
+    'COMBAT', 'BEGIN_COMBAT', 'DECLARE_ATTACKERS', 'DECLARE_BLOCKERS', 
+    'FIRST_STRIKE_DAMAGE', 'COMBAT_DAMAGE', 'END_COMBAT'
+  ].includes(subphase)) return OVERARCHING_PHASES.COMBAT;
+  if (subphase === 'POSTCOMBAT_MAIN' || subphase === 'MAIN_2') return OVERARCHING_PHASES.POSTCOMBAT_MAIN;
+  if (['END', 'END_STEP', 'CLEANUP'].includes(subphase)) return OVERARCHING_PHASES.ENDING;
+  return OVERARCHING_PHASES.PRECOMBAT_MAIN;
+}
+
 export const PHASE_STEPS = SEVEN_PHASE_STEPS;
 
 /**
@@ -515,12 +543,31 @@ export class PriorityStateMachine {
     this.emit('PHASE_STEP_CHANGED', {
       previousStep,
       currentPhaseStep: this.currentPhaseStep,
+      overarchingPhase: getOverarchingPhase(this.currentPhaseStep),
       roundNumber: this.roundNumber,
       playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1,
       turnNumber: this.turnNumber,
       activePlayerId: this.activePlayerId,
       priorityPlayerId: this.priorityPlayerId
     });
+
+    // Specific Step Invariant Hooks
+    if (this.currentPhaseStep === 'UNTAP') {
+      this.emit('UNTAP_STEP_ENTERED', {
+        activePlayerId: this.activePlayerId,
+        turnNumber: this.turnNumber
+      });
+    } else if (this.currentPhaseStep === 'UPKEEP') {
+      this.emit('UPKEEP_STEP_ENTERED', {
+        activePlayerId: this.activePlayerId,
+        turnNumber: this.turnNumber
+      });
+    } else if (this.currentPhaseStep === 'CLEANUP') {
+      this.emit('CLEANUP_STEP_ENTERED', {
+        activePlayerId: this.activePlayerId,
+        turnNumber: this.turnNumber
+      });
+    }
 
     this._evaluateDrawStep();
   }
@@ -582,12 +629,31 @@ export class PriorityStateMachine {
     this.emit('PHASE_STEP_CHANGED', {
       previousStep,
       currentPhaseStep: this.currentPhaseStep,
+      overarchingPhase: getOverarchingPhase(this.currentPhaseStep),
       roundNumber: this.roundNumber,
       playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1,
       turnNumber: this.turnNumber,
       activePlayerId: this.activePlayerId,
       priorityPlayerId: this.priorityPlayerId
     });
+
+    // Specific Step Invariant Hooks
+    if (this.currentPhaseStep === 'UNTAP') {
+      this.emit('UNTAP_STEP_ENTERED', {
+        activePlayerId: this.activePlayerId,
+        turnNumber: this.turnNumber
+      });
+    } else if (this.currentPhaseStep === 'UPKEEP') {
+      this.emit('UPKEEP_STEP_ENTERED', {
+        activePlayerId: this.activePlayerId,
+        turnNumber: this.turnNumber
+      });
+    } else if (this.currentPhaseStep === 'CLEANUP') {
+      this.emit('CLEANUP_STEP_ENTERED', {
+        activePlayerId: this.activePlayerId,
+        turnNumber: this.turnNumber
+      });
+    }
 
     this._evaluateDrawStep();
 
@@ -668,6 +734,80 @@ export class PriorityStateMachine {
       playerTurnCount: this.getPlayerTurnCount(playerId),
       activePlayerId: this.activePlayerId
     };
+  }
+
+  /**
+   * Returns current overarching phase according to MTG CR 500.1.
+   * 
+   * @param {string} [subphase]
+   * @returns {string} One of OVERARCHING_PHASES
+   */
+  getOverarchingPhase(subphase = this.currentPhaseStep) {
+    return getOverarchingPhase(subphase);
+  }
+
+  /**
+   * Returns structured information about current phase and subphase.
+   * 
+   * @returns {Object}
+   */
+  getCurrentPhaseInfo() {
+    const overarching = this.getOverarchingPhase();
+    return {
+      overarchingPhase: overarching,
+      currentPhaseStep: this.currentPhaseStep,
+      isMain: overarching === OVERARCHING_PHASES.PRECOMBAT_MAIN || overarching === OVERARCHING_PHASES.POSTCOMBAT_MAIN,
+      isCombat: overarching === OVERARCHING_PHASES.COMBAT,
+      isBeginning: overarching === OVERARCHING_PHASES.BEGINNING,
+      isEnding: overarching === OVERARCHING_PHASES.ENDING,
+      turnNumber: this.turnNumber,
+      roundNumber: this.roundNumber,
+      activePlayerId: this.activePlayerId
+    };
+  }
+
+  /**
+   * Initializes Pre-Game London Mulligan Phase (CR 103).
+   */
+  startMulliganPhase() {
+    this.currentPhaseStep = 'MULLIGAN';
+    this.emit('MULLIGAN_PHASE_STARTED', {
+      players: [...this.players],
+      activePlayerId: this.activePlayerId
+    });
+    return this.currentPhaseStep;
+  }
+
+  /**
+   * Concludes Mulligan Phase and initiates Turn 1 UNTAP step.
+   */
+  completeMulliganPhase() {
+    this.currentPhaseStep = this.phaseSteps[0] || 'UNTAP';
+    this.priorityPlayerId = this.activePlayerId;
+    this.emit('MULLIGAN_PHASE_COMPLETED', {
+      startingPlayerId: this.startingPlayerId,
+      currentPhaseStep: this.currentPhaseStep
+    });
+    this.emit('PHASE_STEP_CHANGED', {
+      previousStep: 'MULLIGAN',
+      currentPhaseStep: this.currentPhaseStep,
+      overarchingPhase: this.getOverarchingPhase(),
+      activePlayerId: this.activePlayerId,
+      turnNumber: this.turnNumber
+    });
+    return this.currentPhaseStep;
+  }
+
+  /**
+   * Inserts FIRST_STRIKE_DAMAGE combat step if first strike combatants exist.
+   */
+  enableFirstStrikeStep() {
+    if (!this.phaseSteps.includes('FIRST_STRIKE_DAMAGE')) {
+      const idx = this.phaseSteps.indexOf('COMBAT_DAMAGE');
+      if (idx !== -1) {
+        this.phaseSteps.splice(idx, 0, 'FIRST_STRIKE_DAMAGE');
+      }
+    }
   }
 
   /**
