@@ -46,6 +46,7 @@ export class SearchSelectGridModal {
 
     this.element = document.createElement('div');
     this.element.className = 'search-modal-backdrop hidden';
+    this.element.style.display = 'none';
     this.element.id = 'search-select-grid-modal';
     this.element.setAttribute('role', 'dialog');
     this.element.setAttribute('aria-modal', 'true');
@@ -127,6 +128,7 @@ export class SearchSelectGridModal {
     if (!this.element) this.init();
     if (!this.element) return;
 
+    this.element.style.display = 'flex';
     this.element.classList.remove('hidden');
     const titleEl = this.element.querySelector('#search-modal-title');
     if (titleEl) titleEl.textContent = this.title;
@@ -140,6 +142,7 @@ export class SearchSelectGridModal {
   close() {
     this.isOpen = false;
     if (this.element) {
+      this.element.style.display = 'none';
       this.element.classList.add('hidden');
     }
   }

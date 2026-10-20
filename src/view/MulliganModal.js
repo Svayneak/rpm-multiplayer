@@ -44,6 +44,7 @@ export class MulliganModal {
 
     this.element = document.createElement('div');
     this.element.className = 'mulligan-modal-backdrop hidden';
+    this.element.style.display = 'none';
     this.element.id = 'mulligan-modal';
     this.element.setAttribute('role', 'dialog');
     this.element.setAttribute('aria-modal', 'true');
@@ -101,6 +102,7 @@ export class MulliganModal {
     if (!this.element) this.init();
     if (!this.element) return;
 
+    this.element.style.display = 'flex';
     this.element.classList.remove('hidden');
     this.render();
   }
@@ -108,6 +110,7 @@ export class MulliganModal {
   close() {
     this.isOpen = false;
     if (this.element) {
+      this.element.style.display = 'none';
       this.element.classList.add('hidden');
     }
   }

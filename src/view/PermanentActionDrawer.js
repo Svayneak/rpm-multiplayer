@@ -40,6 +40,7 @@ export class PermanentActionDrawer {
 
     this.element = document.createElement('div');
     this.element.className = 'permanent-action-drawer hidden';
+    this.element.style.display = 'none';
     this.element.id = 'permanent-action-drawer';
 
     this.element.innerHTML = `
@@ -90,6 +91,7 @@ export class PermanentActionDrawer {
     if (!this.element) this.init();
     if (!this.element) return;
 
+    this.element.style.display = 'block';
     this.element.classList.remove('hidden');
 
     const nameEl = this.element.querySelector('#drawer-card-name');
@@ -134,6 +136,7 @@ export class PermanentActionDrawer {
   close() {
     this.isOpen = false;
     if (this.element) {
+      this.element.style.display = 'none';
       this.element.classList.add('hidden');
     }
   }

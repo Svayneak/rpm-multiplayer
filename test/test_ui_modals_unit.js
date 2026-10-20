@@ -13,6 +13,86 @@ import { TargetSelectorModal } from '../src/view/TargetSelectorModal.js';
 import { DamageAssignmentModal } from '../src/view/DamageAssignmentModal.js';
 import { MulliganModal } from '../src/view/MulliganModal.js';
 import { SearchSelectGridModal } from '../src/view/SearchSelectGridModal.js';
+import { PermanentActionDrawer } from '../src/view/PermanentActionDrawer.js';
+
+// ----------------------------------------------------
+// Mock DOM Environment for Node.js
+// ----------------------------------------------------
+if (typeof globalThis.document === 'undefined') {
+  class MockClassList {
+    constructor() {
+      this._classes = new Set();
+    }
+    add(...classes) {
+      classes.forEach(c => c && this._classes.add(c));
+    }
+    remove(...classes) {
+      classes.forEach(c => this._classes.delete(c));
+    }
+    contains(c) {
+      return this._classes.has(c);
+    }
+  }
+
+  class MockElement {
+    constructor(tagName = 'div') {
+      this.tagName = tagName.toUpperCase();
+      this.classList = new MockClassList();
+      this.style = {};
+      this.attributes = {};
+      this.children = [];
+      this.dataset = {};
+    }
+    setAttribute(name, val) {
+      this.attributes[name] = String(val);
+      if (name === 'class') {
+        this.className = String(val);
+      }
+    }
+    getAttribute(name) {
+      return this.attributes[name] || null;
+    }
+    get className() {
+      return [...this.classList._classes].join(' ');
+    }
+    set className(val) {
+      this.classList._classes.clear();
+      (val || '').split(/\s+/).filter(Boolean).forEach(c => this.classList.add(c));
+    }
+    set innerHTML(val) {}
+    get innerHTML() { return ''; }
+    get textContent() { return this._textContent || ''; }
+    set textContent(val) { this._textContent = String(val); }
+    get disabled() { return !!this.attributes['disabled']; }
+    set disabled(val) {
+      if (val) this.attributes['disabled'] = 'true';
+      else delete this.attributes['disabled'];
+    }
+    appendChild(child) {
+      this.children.push(child);
+      return child;
+    }
+    querySelector() {
+      return new MockElement();
+    }
+    querySelectorAll() {
+      return [];
+    }
+    addEventListener() {}
+    removeEventListener() {}
+  }
+
+  class MockDocument {
+    constructor() {
+      this.body = new MockElement('body');
+    }
+    createElement(tag) {
+      return new MockElement(tag);
+    }
+  }
+
+  globalThis.document = new MockDocument();
+}
 
 let passed = 0;
 let failed = 0;
@@ -171,6 +251,56 @@ it('SearchSelectGridModal filter logic categorizes cards correctly', () => {
   modal.applyFilter();
   assert.strictEqual(modal.filteredCards.length, 1);
   assert.strictEqual(modal.filteredCards[0].name, 'Mox Opal');
+});
+
+// ----------------------------------------------------
+// Section 4: Initial Boot Hidden State Tests (Viewport Protection)
+// ----------------------------------------------------
+console.log('\n--- 4. Initial Boot Hidden State Tests (Viewport Protection) ---');
+
+it('verifies all modals and drawers initialize hidden with display: none and hidden class on page load', () => {
+  const damageModal = new DamageAssignmentModal();
+  assert.ok(damageModal.element, 'DamageAssignmentModal root element should be initialized');
+  assert.strictEqual(damageModal.element.style.display, 'none', 'DamageAssignmentModal display must be none on boot');
+  assert.strictEqual(damageModal.element.classList.contains('hidden'), true, 'DamageAssignmentModal must contain hidden class');
+
+  const mulliganModal = new MulliganModal();
+  assert.ok(mulliganModal.element, 'MulliganModal root element should be initialized');
+  assert.strictEqual(mulliganModal.element.style.display, 'none', 'MulliganModal display must be none on boot');
+  assert.strictEqual(mulliganModal.element.classList.contains('hidden'), true, 'MulliganModal must contain hidden class');
+
+  const searchModal = new SearchSelectGridModal();
+  assert.ok(searchModal.element, 'SearchSelectGridModal root element should be initialized');
+  assert.strictEqual(searchModal.element.style.display, 'none', 'SearchSelectGridModal display must be none on boot');
+  assert.strictEqual(searchModal.element.classList.contains('hidden'), true, 'SearchSelectGridModal must contain hidden class');
+
+  const targetModal = new TargetSelectorModal();
+  assert.ok(targetModal.element, 'TargetSelectorModal root element should be initialized');
+  assert.strictEqual(targetModal.element.style.display, 'none', 'TargetSelectorModal display must be none on boot');
+  assert.strictEqual(targetModal.element.classList.contains('hidden'), true, 'TargetSelectorModal must contain hidden class');
+
+  const actionDrawer = new PermanentActionDrawer();
+  assert.ok(actionDrawer.element, 'PermanentActionDrawer root element should be initialized');
+  assert.strictEqual(actionDrawer.element.style.display, 'none', 'PermanentActionDrawer display must be none on boot');
+  assert.strictEqual(actionDrawer.element.classList.contains('hidden'), true, 'PermanentActionDrawer must contain hidden class');
+});
+
+it('verifies modal open() sets display to flex/block and close() restores display none and hidden class', () => {
+  const damageModal = new DamageAssignmentModal();
+  damageModal.open({ attacker: { instanceId: 'a1' }, blockers: [], attackerPower: 2 });
+  assert.strictEqual(damageModal.element.style.display, 'flex');
+  assert.strictEqual(damageModal.element.classList.contains('hidden'), false);
+  damageModal.close();
+  assert.strictEqual(damageModal.element.style.display, 'none');
+  assert.strictEqual(damageModal.element.classList.contains('hidden'), true);
+
+  const drawer = new PermanentActionDrawer();
+  drawer.open({ card: { name: 'Forest', typeLine: 'Basic Land — Forest' }, playerId: 'p1' });
+  assert.strictEqual(drawer.element.style.display, 'block');
+  assert.strictEqual(drawer.element.classList.contains('hidden'), false);
+  drawer.close();
+  assert.strictEqual(drawer.element.style.display, 'none');
+  assert.strictEqual(drawer.element.classList.contains('hidden'), true);
 });
 
 console.log(`\n=================================================`);

@@ -42,6 +42,7 @@ export class DamageAssignmentModal {
 
     this.element = document.createElement('div');
     this.element.className = 'damage-assign-backdrop hidden';
+    this.element.style.display = 'none';
     this.element.id = 'damage-assignment-modal';
     this.element.setAttribute('role', 'dialog');
     this.element.setAttribute('aria-modal', 'true');
@@ -105,6 +106,7 @@ export class DamageAssignmentModal {
     if (!this.element) this.init();
     if (!this.element) return;
 
+    this.element.style.display = 'flex';
     this.element.classList.remove('hidden');
     this.render();
   }
@@ -112,6 +114,7 @@ export class DamageAssignmentModal {
   close() {
     this.isOpen = false;
     if (this.element) {
+      this.element.style.display = 'none';
       this.element.classList.add('hidden');
     }
   }

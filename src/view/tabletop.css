@@ -2290,6 +2290,15 @@
    FEATURE 19, 20 & 21: UI MODALS, DRAWERS & TWO-TIER PHASE STYLING
    ========================================================================== */
 
+.hidden,
+.mulligan-modal-backdrop.hidden,
+.search-modal-backdrop.hidden,
+.target-modal-backdrop.hidden,
+.damage-assign-backdrop.hidden,
+.permanent-action-drawer.hidden {
+  display: none !important;
+}
+
 /* 1. London Mulligan Modal */
 .mulligan-modal-backdrop,
 .search-modal-backdrop,
