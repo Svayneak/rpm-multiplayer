@@ -505,9 +505,17 @@ export class PriorityStateMachine {
   validateAction(playerId, actionType, details = {}) {
     this.assertHasPriority(playerId);
 
+    const hasFlash = Boolean(
+      details.hasFlash ||
+      details.keywords?.flash ||
+      details.keywords?.Flash ||
+      /flash/i.test(details.oracleText || details.text || details.typeLine || '')
+    );
+
     const isSorcerySpeed =
       actionType === 'SORCERY_SPEED' ||
       (this.strictTiming &&
+        !hasFlash &&
         (details.speed === 'SORCERY' ||
           details.typeLine?.includes('Sorcery') ||
           details.typeLine?.includes('Creature') ||
@@ -679,6 +687,10 @@ export class PriorityStateMachine {
     this.priorityPlayerId = this.activePlayerId;
     this.consecutivePassCount = 0;
 
+    const is1v1 = (this.players.length === 2);
+    const isFirstTurnOfStartingPlayer = (this.roundNumber === 1 && this.activePlayerId === this.startingPlayerId);
+    const shouldSkipDraw = is1v1 && isFirstTurnOfStartingPlayer;
+
     this.emit('PHASE_STEP_CHANGED', {
       previousStep,
       currentPhaseStep: this.currentPhaseStep,
@@ -687,7 +699,8 @@ export class PriorityStateMachine {
       playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1,
       turnNumber: this.turnNumber,
       activePlayerId: this.activePlayerId,
-      priorityPlayerId: this.priorityPlayerId
+      priorityPlayerId: this.priorityPlayerId,
+      shouldSkipDraw: this.currentPhaseStep === 'DRAW' ? shouldSkipDraw : false
     });
 
     // Specific Step Invariant Hooks
@@ -767,6 +780,10 @@ export class PriorityStateMachine {
       this.consecutivePassCount = 0;
     }
 
+    const is1v1 = (this.players.length === 2);
+    const isFirstTurnOfStartingPlayer = (this.roundNumber === 1 && this.activePlayerId === this.startingPlayerId);
+    const shouldSkipDraw = is1v1 && isFirstTurnOfStartingPlayer;
+
     this.emit('PHASE_STEP_CHANGED', {
       previousStep,
       currentPhaseStep: this.currentPhaseStep,
@@ -775,7 +792,8 @@ export class PriorityStateMachine {
       playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1,
       turnNumber: this.turnNumber,
       activePlayerId: this.activePlayerId,
-      priorityPlayerId: this.priorityPlayerId
+      priorityPlayerId: this.priorityPlayerId,
+      shouldSkipDraw: this.currentPhaseStep === 'DRAW' ? shouldSkipDraw : false
     });
 
     // Specific Step Invariant Hooks

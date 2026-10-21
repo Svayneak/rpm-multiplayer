@@ -46,7 +46,7 @@ import {
 } from '../src/AbilityEngine.js';
 import { ZoneTransitionMatrix } from '../src/ZoneTransitionMatrix.js';
 import { StateBasedActionsEngine } from '../src/StateBasedActionsEngine.js';
-import { TabletopStateManager } from '../src/TabletopStateManager.js';
+import { TabletopStateManager, PriorityViolationError, PhaseTimingError } from '../src/TabletopStateManager.js';
 import { PriorityStateMachine } from '../src/PriorityStateMachine.js';
 import { SearchSelectGridModal } from '../src/view/SearchSelectGridModal.js';
 import { ZoneModel } from '../src/ZoneModel.js';
@@ -662,6 +662,192 @@ it('TC-RULES-23: Automatic Lifecycle of Static Continuous Effects on Entry and E
   assert.strictEqual(revertedEval.effectivePower, 1, 'Effective power should revert to base 1');
   assert.strictEqual(revertedEval.effectiveToughness, 1, 'Effective toughness should revert to base 1');
   assert.strictEqual(tsm.abilityEngine.staticEffects.length, 0, 'Static effects array should be empty');
+});
+
+it('TC-RULES-24: Automatic Turn-Based UNTAP Step Actions (CR 302.6, CR 106.4, CR 502)', () => {
+  const psm = new PriorityStateMachine({ players: ['p1', 'p2'], activePlayerId: 'p1' });
+  const tsm = new TabletopStateManager({ players: ['p1', 'p2'], priorityMachine: psm });
+  const p1 = tsm.getPlayer('p1');
+
+  // Setup p1 with tapped land, tapped creature with summoning sickness, lands played, and floating mana
+  const land = {
+    instanceId: 'land_p1',
+    name: 'Mountain',
+    typeLine: 'Basic Land — Mountain',
+    isTapped: true
+  };
+  const creature = {
+    instanceId: 'creature_bear',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    isTapped: true,
+    hasSummoningSickness: true,
+    isSummoningSick: true,
+    summoningSickness: true
+  };
+  p1.battlefield.lands.push(land);
+  p1.battlefield.creatures.push(creature);
+  p1.landsPlayedThisTurn = 1;
+  p1.resources.landsPlayedThisTurn = 1;
+  p1.resources.manaPool = { W: 1, U: 2, B: 0, R: 3, G: 0, C: 1 };
+
+  // Trigger UNTAP step for p1
+  tsm.handleUntapStep('p1');
+
+  // Verify: permanents untapped
+  assert.strictEqual(land.isTapped, false, 'Tapped land should be untapped');
+  assert.strictEqual(creature.isTapped, false, 'Tapped creature should be untapped');
+
+  // Verify: summoning sickness cleared
+  assert.strictEqual(creature.hasSummoningSickness, false, 'hasSummoningSickness flag must be cleared');
+  assert.strictEqual(creature.isSummoningSick, false, 'isSummoningSick flag must be cleared');
+  assert.strictEqual(creature.summoningSickness, false, 'summoningSickness flag must be cleared');
+
+  // Verify: land quota reset to 0
+  assert.strictEqual(p1.landsPlayedThisTurn, 0, 'landsPlayedThisTurn must be reset to 0');
+  assert.strictEqual(p1.resources.landsPlayedThisTurn, 0, 'resources.landsPlayedThisTurn must be reset to 0');
+
+  // Verify: mana pool emptied per CR 106.4
+  assert.deepStrictEqual(p1.resources.manaPool, { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }, 'Mana pool must be fully emptied');
+});
+
+it('TC-RULES-25: Real Haste / Prisa Evaluation (Native & Layer 6 Granted) (CR 302.6, CR 702.10, CR 613.1f)', () => {
+  const tsm = new TabletopStateManager({ players: ['p1'] });
+  const p1 = tsm.getPlayer('p1');
+
+  // 1. Fresh 2/2 creature without Haste (has summoning sickness)
+  const bear = {
+    instanceId: 'creature_bear',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    hasSummoningSickness: true,
+    isSummoningSick: true,
+    summoningSickness: true
+  };
+  p1.battlefield.creatures.push(bear);
+
+  const bearCheck = tsm.canCreatureTapOrAttack(bear);
+  assert.strictEqual(bearCheck.canAct, false, 'Creature with summoning sickness and without Haste cannot tap or attack');
+  assert.strictEqual(bearCheck.reason, 'SUMMONING_SICKNESS');
+
+  // AbilityEngine check for tap ability on non-haste creature
+  const tapAbility = { id: 'ab_ping', cost: { tap: true }, effect: () => {} };
+  const abCheckFail = AbilityEngine.canActivateAbility(bear, tapAbility, { tabletopState: tsm, playerId: 'p1', priorityPlayerId: 'p1' });
+  assert.strictEqual(abCheckFail.canActivate, false);
+  assert.strictEqual(abCheckFail.error, 'SUMMONING_SICKNESS');
+
+  // 2. Creature with native Haste
+  const goblin = {
+    instanceId: 'creature_goblin',
+    name: 'Goblin Guide',
+    typeLine: 'Creature — Goblin Scout',
+    power: 2,
+    toughness: 2,
+    keywords: { haste: true },
+    hasSummoningSickness: true,
+    isSummoningSick: true,
+    summoningSickness: true
+  };
+  p1.battlefield.creatures.push(goblin);
+
+  const goblinCheck = tsm.canCreatureTapOrAttack(goblin);
+  assert.strictEqual(goblinCheck.canAct, true, 'Creature with native Haste can tap or attack immediately');
+  assert.strictEqual(goblinCheck.hasHaste, true);
+
+  const abCheckGoblin = AbilityEngine.canActivateAbility(goblin, tapAbility, { tabletopState: tsm, playerId: 'p1', priorityPlayerId: 'p1' });
+  assert.strictEqual(abCheckGoblin.canActivate, true);
+
+  // 3. Creature granted Haste via Continuous Effect in Layer 6 (CR 613.1f)
+  tsm.abilityEngine.registerStaticEffect({
+    sourceId: 'fervor_enchantment',
+    layer: CONTINUOUS_LAYERS.LAYER_6_ABILITY,
+    grantedKeywords: { haste: true },
+    appliesTo: (c) => /creature/i.test(c.typeLine || '')
+  });
+
+  // Now the Grizzly Bears have Haste evaluated via Layer 6
+  const buffedBearCheck = tsm.canCreatureTapOrAttack(bear);
+  assert.strictEqual(buffedBearCheck.canAct, true, 'Creature granted Haste in Layer 6 can tap or attack immediately');
+  assert.strictEqual(buffedBearCheck.hasHaste, true);
+
+  const abCheckBuffed = AbilityEngine.canActivateAbility(bear, tapAbility, { tabletopState: tsm, playerId: 'p1', priorityPlayerId: 'p1' });
+  assert.strictEqual(abCheckBuffed.canActivate, true, 'Activated tap ability allowed when Haste is granted via Layer 6');
+});
+
+it('TC-RULES-26: Strict Priority and Speed Timing Lock (Instant vs Sorcery) (CR 117.1a, CR 305.1, CR 601.2)', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    currentPhaseStep: 'PRECOMBAT_MAIN'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  const bolt = { instanceId: 'c_bolt', name: 'Lightning Bolt', typeLine: 'Instant', manaCost: '{R}' };
+  const divination = { instanceId: 'c_div', name: 'Divination', typeLine: 'Sorcery', manaCost: '{2}{U}' };
+  const mountain = { instanceId: 'c_mnt', name: 'Mountain', typeLine: 'Basic Land — Mountain' };
+
+  p1.hand.push(bolt);
+  p2.hand.push(divination, mountain);
+  p2.resources.manaPool = { W: 0, U: 1, B: 0, R: 1, G: 0, C: 2 };
+
+  // Scenario 1: P2 has priority during P1 turn (e.g. priority passed to P2)
+  psm.priorityPlayerId = 'p2';
+
+  // P2 can cast Instant (Lightning Bolt)
+  const p2InstantCheck = tsm.canPlayerCastOrPlay('p2', bolt, psm);
+  assert.strictEqual(p2InstantCheck.allowed, true, 'P2 holding priority can cast Instant');
+
+  // P2 CANNOT cast Sorcery on P1 turn
+  const p2SorceryCheck = tsm.canPlayerCastOrPlay('p2', divination, psm);
+  assert.strictEqual(p2SorceryCheck.allowed, false);
+  assert.strictEqual(p2SorceryCheck.reason, 'SORCERY_SPEED_RESTRICTION');
+
+  // Motor rejects P2 casting Sorcery
+  assert.throws(() => {
+    tsm.dispatch('CAST_SPELL', { playerId: 'p2', instanceId: 'c_div' });
+  }, (err) => {
+    assert.ok(err.name === 'PhaseTimingError' || err.name === 'PriorityViolationError');
+    assert.strictEqual(err.reason, 'SORCERY_SPEED_RESTRICTION');
+    return true;
+  });
+
+  // P2 CANNOT play Land on P1 turn
+  const p2LandCheck = tsm.canPlayerCastOrPlay('p2', mountain, psm);
+  assert.strictEqual(p2LandCheck.allowed, false);
+  assert.strictEqual(p2LandCheck.reason, 'SORCERY_SPEED_RESTRICTION');
+
+  assert.throws(() => {
+    tsm.dispatch('PLAY_LAND', { playerId: 'p2', instanceId: 'c_mnt' });
+  }, (err) => {
+    assert.ok(err.name === 'PhaseTimingError' || err.name === 'PriorityViolationError');
+    assert.strictEqual(err.reason, 'SORCERY_SPEED_RESTRICTION');
+    return true;
+  });
+
+  // Scenario 2: P1 does NOT hold priority (priority is held by P2)
+  const p1CheckInstant = tsm.canPlayerCastOrPlay('p1', bolt, psm);
+  assert.strictEqual(p1CheckInstant.allowed, false);
+  assert.strictEqual(p1CheckInstant.reason, 'NO_PRIORITY');
+
+  // Motor rejects any action from P1 when lacking priority
+  assert.throws(() => {
+    tsm.dispatch('CAST_SPELL', { playerId: 'p1', instanceId: 'c_bolt' });
+  }, (err) => {
+    assert.ok(err instanceof PriorityViolationError);
+    assert.strictEqual(err.reason, 'NO_PRIORITY');
+    assert.ok(err.message.includes("Player 'p1' does not hold priority"));
+    return true;
+  });
 });
 
 console.log('\n==================================================================');

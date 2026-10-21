@@ -82,8 +82,31 @@ export class AbilityEngine {
       }
       // Summoning Sickness: Creatures cannot tap for abilities unless they have Haste
       const isCreature = /creature/i.test(permanent.typeLine || permanent.type || '');
-      if (isCreature && permanent.hasSummoningSickness && !permanent.keywords?.haste && !permanent.hasHaste) {
-        return { canActivate: false, error: 'SUMMONING_SICKNESS' };
+      const isSick = Boolean(permanent.hasSummoningSickness || permanent.isSummoningSick || permanent.summoningSickness);
+      if (isCreature && isSick) {
+        let evalCard = permanent;
+        const engine = context.tabletopState?.abilityEngine || context.abilityEngine;
+        if (engine && typeof engine.evaluatePermanentLayers === 'function') {
+          evalCard = engine.evaluatePermanentLayers(permanent, context.tabletopState || context);
+        }
+        const hasHaste = Boolean(
+          evalCard?.keywords?.haste ||
+          evalCard?.keywords?.Haste ||
+          evalCard?.hasHaste ||
+          permanent?.keywords?.haste ||
+          permanent?.keywords?.Haste ||
+          permanent?.hasHaste ||
+          /haste|prisa/i.test(evalCard?.oracleText || evalCard?.text || permanent?.oracleText || permanent?.text || '') ||
+          (Array.isArray(evalCard?.grantedAbilities) && evalCard.grantedAbilities.some(a =>
+            typeof a === 'string' ? /haste|prisa/i.test(a) : /haste|prisa/i.test(a?.name || a?.text || '')
+          )) ||
+          (Array.isArray(permanent?.grantedAbilities) && permanent.grantedAbilities.some(a =>
+            typeof a === 'string' ? /haste|prisa/i.test(a) : /haste|prisa/i.test(a?.name || a?.text || '')
+          ))
+        );
+        if (!hasHaste) {
+          return { canActivate: false, error: 'SUMMONING_SICKNESS' };
+        }
       }
     }
 

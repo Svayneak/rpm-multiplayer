@@ -1009,6 +1009,14 @@ export class RPMAppController {
       }
     }
 
+    if (this.tabletopState && typeof this.tabletopState.canPlayerCastOrPlay === 'function') {
+      const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, card, this.priorityMachine);
+      if (check && !check.allowed) {
+        this.showWarningBanner(`⚠️ ${check.message || 'Cannot play land'}`);
+        return;
+      }
+    }
+
     if (this.tabletopState && typeof this.tabletopState.playLand === 'function') {
       try {
         if (!p.hand) p.hand = [];
@@ -1043,6 +1051,14 @@ export class RPMAppController {
 
   castSpellToStack(card) {
     const p = this.tabletopState?.players?.[this.myPlayerId];
+    if (this.tabletopState && typeof this.tabletopState.canPlayerCastOrPlay === 'function') {
+      const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, card, this.priorityMachine);
+      if (check && !check.allowed) {
+        this.showWarningBanner(`⚠️ ${check.message || 'Cannot cast spell'}`);
+        return;
+      }
+    }
+
     if (card && card.manaCost && this.tabletopState && typeof this.tabletopState.autoTapForMana === 'function') {
       try {
         this.tabletopState.autoTapForMana(this.myPlayerId, card.manaCost);
@@ -3588,18 +3604,38 @@ export class RPMAppController {
             <button id="btn-close-popover" class="btn btn-popover-close">✖️</button>
           `;
 
+          let playOrCastAllowed = true;
+          let playOrCastMessage = '';
+          if (this.tabletopState && typeof this.tabletopState.canPlayerCastOrPlay === 'function') {
+            const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, card, this.priorityMachine);
+            if (check && !check.allowed) {
+              playOrCastAllowed = false;
+              playOrCastMessage = check.message || '';
+            }
+          }
+
           const btnPlay = popover.querySelector('#btn-play-land');
           if (btnPlay) {
+            if (!playOrCastAllowed) {
+              btnPlay.disabled = true;
+              btnPlay.title = playOrCastMessage;
+            }
             btnPlay.addEventListener('click', (ev) => {
               ev.stopPropagation();
+              if (btnPlay.disabled) return;
               this.playLandFromHand(card);
             });
           }
 
           const btnCast = popover.querySelector('#btn-cast-spell');
           if (btnCast) {
+            if (!playOrCastAllowed) {
+              btnCast.disabled = true;
+              btnCast.title = playOrCastMessage;
+            }
             btnCast.addEventListener('click', (ev) => {
               ev.stopPropagation();
+              if (btnCast.disabled) return;
               this.castSpellToStack(card);
             });
           }

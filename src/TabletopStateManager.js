@@ -33,16 +33,20 @@ export class LandLimitExceededError extends StateTransitionError {
 }
 
 export class PriorityViolationError extends StateTransitionError {
-  constructor(message = 'Priority violation') {
+  constructor(message = 'Priority violation', details = {}) {
     super(message);
     this.name = 'PriorityViolationError';
+    this.details = details;
+    this.reason = details.reason || 'NO_PRIORITY';
   }
 }
 
 export class PhaseTimingError extends StateTransitionError {
-  constructor(message = 'Phase timing restriction violated') {
+  constructor(message = 'Phase timing restriction violated', details = {}) {
     super(message);
     this.name = 'PhaseTimingError';
+    this.details = details;
+    this.reason = details.reason || 'SORCERY_SPEED_RESTRICTION';
   }
 }
 
@@ -642,31 +646,27 @@ export class TabletopStateManager extends EventEmitter {
     const playerId = payload.playerId || this.activePlayerId;
     const player = this.getPlayer(playerId);
 
-    const activePid = this.priorityMachine?.activePlayerId || this.activePlayerId;
-    if (activePid && activePid !== playerId) {
-      throw new PriorityViolationError(`Only the active player ('${activePid}') may play a land.`);
-    }
-
-    const currentPhase = this.priorityMachine?.currentPhaseStep;
-    if (currentPhase) {
-      const normalizedPhase = currentPhase.toUpperCase();
-      const isMain = normalizedPhase.includes('MAIN') || normalizedPhase === 'PRECOMBAT_MAIN' || normalizedPhase === 'POSTCOMBAT_MAIN';
-      if (!isMain) {
-        throw new PhaseTimingError(`Lands may only be played during Main phases (current: ${currentPhase}).`);
-      }
-    }
-
-    const stackDepth = this.priorityMachine?.getStackDepth?.() ?? this.stack.length;
-    if (stackDepth > 0) {
-      throw new PriorityViolationError('Lands may only be played when the stack is empty.');
-    }
-
-    const priorityPid = this.priorityMachine?.priorityPlayerId;
-    if (priorityPid && priorityPid !== playerId) {
-      throw new PriorityViolationError(`Player '${playerId}' does not hold priority.`);
-    }
-
     const instanceId = payload.instanceId || (payload.card && payload.card.instanceId);
+    let card = payload.card;
+    if (!card && player && player.hand) {
+      card = player.hand.find(c => c && (
+        (instanceId && c.instanceId === instanceId) ||
+        (payload.card && (c.instanceId === payload.card.instanceId || c.name === payload.card.name))
+      ));
+    }
+    if (!card) {
+      card = { typeLine: 'Land', type: 'Land' };
+    }
+
+    const check = this.canPlayerCastOrPlay(playerId, card, this.priorityMachine);
+    if (!check.allowed) {
+      const err = check.reason === 'SORCERY_SPEED_RESTRICTION'
+        ? new PhaseTimingError(check.message, { playerId, reason: check.reason })
+        : new PriorityViolationError(check.message, { playerId, reason: check.reason });
+      err.reason = check.reason;
+      throw err;
+    }
+
     const cardIdx = player.hand.findIndex(c => c && (
       (instanceId && c.instanceId === instanceId) ||
       (payload.card && (c.instanceId === payload.card.instanceId || c.name === payload.card.name))
@@ -675,7 +675,7 @@ export class TabletopStateManager extends EventEmitter {
       throw new CardNotFoundError(`Card with instanceId ${instanceId || payload.card?.name} not found in player's hand`);
     }
 
-    const card = player.hand[cardIdx];
+    card = player.hand[cardIdx];
     if (!/land/i.test(card.typeLine || card.type || '')) {
       throw new InvalidCardTypeError(`Card is not a land: "${card.name}" (${card.typeLine})`);
     }
@@ -727,6 +727,8 @@ export class TabletopStateManager extends EventEmitter {
     const { playerId, instanceId, sourceZone = 'hand', manaCostPaid, targets } = payload;
     const player = this.getPlayer(playerId);
 
+    const targetInstanceId = instanceId || payload.card?.instanceId;
+
     let sourceArray;
     if (sourceZone === 'hand') {
       sourceArray = player.hand;
@@ -738,12 +740,38 @@ export class TabletopStateManager extends EventEmitter {
       throw new InvalidZoneError(`Invalid sourceZone for CAST_SPELL: ${sourceZone}`);
     }
 
-    const cardIdx = sourceArray.findIndex(c => c && c.instanceId === instanceId);
+    const cardIdx = sourceArray.findIndex(c => c && (
+      (targetInstanceId && c.instanceId === targetInstanceId) ||
+      (payload.card && (c.instanceId === payload.card.instanceId || c.name === payload.card.name))
+    ));
     if (cardIdx === -1) {
-      throw new CardNotFoundError(`Card with instanceId ${instanceId} not found in ${sourceZone}`);
+      if (payload.card) {
+        const check = this.canPlayerCastOrPlay(playerId, payload.card, this.priorityMachine);
+        if (!check.allowed) {
+          const err = check.reason === 'SORCERY_SPEED_RESTRICTION'
+            ? new PhaseTimingError(check.message, { playerId, reason: check.reason })
+            : new PriorityViolationError(check.message, { playerId, reason: check.reason });
+          err.reason = check.reason;
+          throw err;
+        }
+      } else if (this.priorityMachine && this.priorityMachine.priorityPlayerId && this.priorityMachine.priorityPlayerId !== playerId) {
+        const err = new PriorityViolationError(`Player '${playerId}' does not hold priority.`, { playerId, priorityPlayerId: this.priorityMachine.priorityPlayerId, reason: 'NO_PRIORITY' });
+        err.reason = 'NO_PRIORITY';
+        throw err;
+      }
+      throw new CardNotFoundError(`Card with instanceId ${targetInstanceId || payload.card?.name} not found in ${sourceZone}`);
     }
 
     const card = sourceArray[cardIdx];
+
+    const check = this.canPlayerCastOrPlay(playerId, card, this.priorityMachine);
+    if (!check.allowed) {
+      const err = check.reason === 'SORCERY_SPEED_RESTRICTION'
+        ? new PhaseTimingError(check.message, { playerId, reason: check.reason })
+        : new PriorityViolationError(check.message, { playerId, reason: check.reason });
+      err.reason = check.reason;
+      throw err;
+    }
     const isFree = Boolean(payload.isFreeCast || payload.withoutPayingManaCost || card?.isFreeCast);
 
     // Context for CostModificationEngine per CR 601.2f
@@ -935,6 +963,7 @@ export class TabletopStateManager extends EventEmitter {
   _handleUntapAll(payload) {
     const { playerId } = payload;
     const player = this.getPlayer(playerId);
+    if (!player) return { untappedCount: 0 };
     const subzones = ['lands', 'creatures', 'noncreatures', 'planeswalkers'];
     let count = 0;
     for (const sub of subzones) {
@@ -944,6 +973,16 @@ export class TabletopStateManager extends EventEmitter {
           count++;
         }
       }
+    }
+    for (const card of (player.battlefield?.creatures || [])) {
+      card.hasSummoningSickness = false;
+      card.isSummoningSick = false;
+      card.summoningSickness = false;
+    }
+    player.landsPlayedThisTurn = 0;
+    if (player.resources) {
+      player.resources.landsPlayedThisTurn = 0;
+      player.resources.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
     }
     return { untappedCount: count };
   }
@@ -1128,6 +1167,169 @@ export class TabletopStateManager extends EventEmitter {
 
   drawCardForTurn(playerId, context = {}) {
     return this.drawCard(playerId, 1);
+  }
+
+  /**
+   * Evaluates if a creature can legally tap or attack per MTG CR 302.6 & CR 702.10.
+   * Checks summoning sickness and real Haste / Prisa (native or granted via Layer 6).
+   * 
+   * @param {Object} card
+   * @returns {{ canAct: boolean, hasHaste?: boolean, reason?: string }}
+   */
+  canCreatureTapOrAttack(card) {
+    if (!card) {
+      const res = { canAct: false, reason: 'NO_CARD' };
+      res.valueOf = () => false;
+      return res;
+    }
+
+    const isSick = Boolean(card.hasSummoningSickness || card.isSummoningSick || card.summoningSickness);
+    if (!isSick) {
+      const res = { canAct: true };
+      res.valueOf = () => true;
+      return res;
+    }
+
+    // Creature has summoning sickness -> check for Haste / Prisa (evaluated via Layer 6 if engine present)
+    const evalCard = this.abilityEngine
+      ? this.abilityEngine.evaluatePermanentLayers(card, this)
+      : card;
+
+    const hasHaste = Boolean(
+      evalCard?.keywords?.haste ||
+      evalCard?.keywords?.Haste ||
+      evalCard?.hasHaste ||
+      card?.keywords?.haste ||
+      card?.keywords?.Haste ||
+      card?.hasHaste ||
+      /haste|prisa/i.test(evalCard?.oracleText || evalCard?.text || card?.oracleText || card?.text || '') ||
+      (Array.isArray(evalCard?.grantedAbilities) && evalCard.grantedAbilities.some(a =>
+        typeof a === 'string' ? /haste|prisa/i.test(a) : /haste|prisa/i.test(a?.name || a?.text || '')
+      )) ||
+      (Array.isArray(card?.grantedAbilities) && card.grantedAbilities.some(a =>
+        typeof a === 'string' ? /haste|prisa/i.test(a) : /haste|prisa/i.test(a?.name || a?.text || '')
+      ))
+    );
+
+    if (hasHaste) {
+      const res = { canAct: true, hasHaste: true };
+      res.valueOf = () => true;
+      return res;
+    }
+
+    const res = { canAct: false, reason: 'SUMMONING_SICKNESS' };
+    res.valueOf = () => false;
+    return res;
+  }
+
+  /**
+   * Validates priority holding and MTG speed restrictions (Instant vs Sorcery timing).
+   * CR 117.1a, CR 305.1, CR 601.2
+   * 
+   * @param {string} playerId
+   * @param {Object} card
+   * @param {PriorityStateMachine|Object} [priorityState=this.priorityMachine]
+   * @returns {{ allowed: boolean, reason?: string, message?: string }}
+   */
+  canPlayerCastOrPlay(playerId, card, priorityState = this.priorityMachine) {
+    if (!card) {
+      const res = { allowed: false, reason: 'INVALID_CARD', message: 'No card specified.' };
+      res.valueOf = () => false;
+      return res;
+    }
+
+    // a) Priority Rule
+    if (priorityState && priorityState.priorityPlayerId && priorityState.priorityPlayerId !== playerId) {
+      const res = {
+        allowed: false,
+        reason: 'NO_PRIORITY',
+        message: `Player '${playerId}' does not hold priority.`
+      };
+      res.valueOf = () => false;
+      return res;
+    }
+
+    if (!priorityState) {
+      const res = { allowed: true };
+      res.valueOf = () => true;
+      return res;
+    }
+
+    const typeLine = card.typeLine || card.type || '';
+    const isLand = /land/i.test(typeLine);
+    const activePlayerId = priorityState.activePlayerId;
+    const stackLength = priorityState.stack ? priorityState.stack.length : (this.stack?.length || 0);
+    const currentPhase = (priorityState.currentPhaseStep || '').toUpperCase();
+    const isMain = currentPhase.includes('MAIN') || currentPhase === 'PRECOMBAT_MAIN' || currentPhase === 'POSTCOMBAT_MAIN';
+
+    // b) Type & Speed Rules
+    // Lands: Never played at instant speed. Only active player during main phase with empty stack.
+    if (isLand) {
+      if (playerId !== activePlayerId || stackLength !== 0 || !isMain) {
+        const res = {
+          allowed: false,
+          reason: 'SORCERY_SPEED_RESTRICTION',
+          message: 'Lands may only be played at sorcery speed during your main phase with an empty stack.'
+        };
+        res.valueOf = () => false;
+        return res;
+      }
+      const res = { allowed: true };
+      res.valueOf = () => true;
+      return res;
+    }
+
+    // Instant or Flash
+    const isInstant = /instant/i.test(typeLine);
+    const evalCard = this.abilityEngine
+      ? this.abilityEngine.evaluatePermanentLayers(card, this)
+      : card;
+    const hasFlash = Boolean(
+      /flash/i.test(typeLine) ||
+      evalCard?.keywords?.flash ||
+      evalCard?.keywords?.Flash ||
+      evalCard?.hasFlash ||
+      card?.keywords?.flash ||
+      card?.keywords?.Flash ||
+      card?.hasFlash ||
+      /flash/i.test(evalCard?.oracleText || evalCard?.text || card?.oracleText || card?.text || '') ||
+      (Array.isArray(evalCard?.grantedAbilities) && evalCard.grantedAbilities.some(a =>
+        typeof a === 'string' ? /flash/i.test(a) : /flash/i.test(a?.name || a?.text || '')
+      )) ||
+      (Array.isArray(card?.grantedAbilities) && card.grantedAbilities.some(a =>
+        typeof a === 'string' ? /flash/i.test(a) : /flash/i.test(a?.name || a?.text || '')
+      ))
+    );
+
+    if (isInstant || hasFlash) {
+      if (priorityState.priorityPlayerId && priorityState.priorityPlayerId !== playerId) {
+        const res = {
+          allowed: false,
+          reason: 'NO_PRIORITY',
+          message: `Player '${playerId}' does not hold priority.`
+        };
+        res.valueOf = () => false;
+        return res;
+      }
+      const res = { allowed: true };
+      res.valueOf = () => true;
+      return res;
+    }
+
+    // Sorcery speed spells (Sorcery, Creature without Flash, Artifact without Flash, etc.)
+    if (playerId !== activePlayerId || stackLength !== 0 || !isMain) {
+      const res = {
+        allowed: false,
+        reason: 'SORCERY_SPEED_RESTRICTION',
+        message: 'Sorcery speed spells require an empty stack during your main phase.'
+      };
+      res.valueOf = () => false;
+      return res;
+    }
+
+    const res = { allowed: true };
+    res.valueOf = () => true;
+    return res;
   }
 
   canPlayLand(playerId = this.activePlayerId) {
@@ -1749,6 +1951,7 @@ export class TabletopStateManager extends EventEmitter {
     if (typeLine.includes('creature')) {
       destinationSubzone = 'creatures';
       card.subzone = 'creatures';
+      card.hasSummoningSickness = true;
       card.isSummoningSick = true;
       card.summoningSickness = true;
       card.isTapped = false;
@@ -2003,8 +2206,22 @@ export class TabletopStateManager extends EventEmitter {
 
   handleUntapStep(activePlayerId) {
     if (!activePlayerId) return;
+    const player = this.getPlayer(activePlayerId);
     this.untapAll(activePlayerId);
-    this.resetTurnQuotas(activePlayerId);
+    if (player) {
+      for (const card of (player.battlefield?.creatures || [])) {
+        card.hasSummoningSickness = false;
+        card.isSummoningSick = false;
+        card.summoningSickness = false;
+      }
+      player.landsPlayedThisTurn = 0;
+      if (player.resources) {
+        player.resources.landsPlayedThisTurn = 0;
+        player.resources.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      }
+    } else {
+      this.resetTurnQuotas(activePlayerId);
+    }
     this.emit('AUTO_UNTAP_RESOLVED', { activePlayerId });
   }
 
@@ -2028,7 +2245,15 @@ export class TabletopStateManager extends EventEmitter {
     } else if (currentPhaseStep === 'UPKEEP') {
       this.handleUpkeepStep(activePlayerId, data.turnNumber);
     } else if (currentPhaseStep === 'DRAW') {
-      if (!data.shouldSkipDraw) {
+      const is1v1 = (this._priorityMachine?.players?.length === 2) || (Object.keys(this.players).length === 2);
+      const isFirstTurnOfStartingPlayer = this._priorityMachine
+        ? (this._priorityMachine.roundNumber === 1 && this._priorityMachine.activePlayerId === this._priorityMachine.startingPlayerId)
+        : false;
+      const shouldSkip = data.shouldSkipDraw !== undefined
+        ? data.shouldSkipDraw
+        : (is1v1 && isFirstTurnOfStartingPlayer);
+
+      if (!shouldSkip) {
         try {
           this.drawCardForTurn(activePlayerId);
           this.emit('AUTO_DRAW_RESOLVED', { activePlayerId });

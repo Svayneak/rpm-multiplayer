@@ -229,6 +229,23 @@ export class CombatDamageEngine {
       playerTrampleDamage
     };
   }
+
+  /**
+   * Validates if a creature can legally attack per MTG CR 302.6 & CR 508.
+   * 
+   * @param {Object} creature
+   * @param {Object} [tabletopState]
+   * @returns {{ canAttack: boolean, reason?: string }}
+   */
+  static canCreatureAttack(creature, tabletopState) {
+    if (!creature) return { canAttack: false, reason: 'NO_CREATURE' };
+    if (creature.isTapped) return { canAttack: false, reason: 'ALREADY_TAPPED' };
+    if (tabletopState && typeof tabletopState.canCreatureTapOrAttack === 'function') {
+      const check = tabletopState.canCreatureTapOrAttack(creature);
+      if (!check.canAct) return { canAttack: false, reason: check.reason };
+    }
+    return { canAttack: true };
+  }
 }
 
 export default CombatDamageEngine;
