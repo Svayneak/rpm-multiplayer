@@ -46,7 +46,8 @@ export const INTEGRATION_SUITES = Object.freeze([
   'test_3d_dice_and_integrity.js',
   'test_battle_ux_hardening.js',
   'test_combat_damage_engine.js',
-  'test_mtg_rule_engine.js'
+  'test_mtg_rule_engine.js',
+  'test_lifecycle_and_concede.js'
 ]);
 
 /** Module unit suites (former `npm run test:modules`). */

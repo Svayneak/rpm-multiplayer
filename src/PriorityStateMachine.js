@@ -250,6 +250,7 @@ export class PriorityStateMachine {
     this.isTurnEnded = false;
     this.strictTiming = Boolean(options.strictTiming);
     this.tabletopState = options.tabletopState || null;
+    this.eliminatedPlayers = new Set();
 
     // Event listeners & subscribers
     this._listeners = new Map();
@@ -359,17 +360,122 @@ export class PriorityStateMachine {
   // ==========================================
 
   /**
-   * Computes the next player in clockwise turn order.
+   * Checks if a player is eliminated from the game.
+   * 
+   * @param {string} playerId
+   * @returns {boolean}
+   */
+  isPlayerEliminated(playerId) {
+    if (!playerId) return false;
+    if (this.eliminatedPlayers && this.eliminatedPlayers.has(playerId)) return true;
+    if (this.tabletopState?.players?.[playerId]?.isEliminated) return true;
+    return false;
+  }
+
+  /**
+   * Computes the next player in clockwise turn order, skipping eliminated players.
    * 
    * @param {string} playerId
    * @returns {string} Next player ID
    */
   nextPlayer(playerId) {
-    const currentIndex = this.players.indexOf(playerId);
-    if (currentIndex === -1) {
-      return this.players[0];
+    if (!Array.isArray(this.players) || this.players.length === 0) {
+      return null;
     }
-    return this.players[(currentIndex + 1) % this.players.length];
+    const total = this.players.length;
+    let currentIndex = this.players.indexOf(playerId);
+    if (currentIndex === -1) {
+      currentIndex = 0;
+    }
+    for (let step = 1; step <= total; step++) {
+      const candidate = this.players[(currentIndex + step) % total];
+      if (!this.isPlayerEliminated(candidate)) {
+        return candidate;
+      }
+    }
+    return this.players[(currentIndex + 1) % total];
+  }
+
+  /**
+   * Handles player elimination or concession within the priority state machine.
+   * Rotates priority or turn if the eliminated player held either.
+   * 
+   * @param {string} playerId
+   * @returns {{ eliminatedPlayerId: string, remainingPlayerCount: number }}
+   */
+  eliminatePlayer(playerId) {
+    if (!this.eliminatedPlayers) {
+      this.eliminatedPlayers = new Set();
+    }
+    this.eliminatedPlayers.add(playerId);
+
+    const activePlayers = this.players.filter(p => !this.isPlayerEliminated(p));
+
+    // If the eliminated player was priorityPlayerId: pass priority immediately to next alive player
+    if (this.priorityPlayerId === playerId) {
+      const nextPrior = this.nextPlayer(playerId);
+      this.priorityPlayerId = nextPrior;
+      this.consecutivePassCount = 0;
+      this.emit('PRIORITY_CHANGED', {
+        activePlayerId: this.activePlayerId,
+        priorityPlayerId: this.priorityPlayerId,
+        currentPhaseStep: this.currentPhaseStep,
+        consecutivePassCount: this.consecutivePassCount,
+        reason: 'PLAYER_ELIMINATED'
+      });
+      this.emit('PRIORITY_PASSED', {
+        previousPlayerId: playerId,
+        newPriorityPlayerId: nextPrior,
+        reason: 'PLAYER_ELIMINATED'
+      });
+    }
+
+    // If the eliminated player was activePlayerId: rotate turn immediately to next alive player
+    if (this.activePlayerId === playerId) {
+      const nextActive = this.nextPlayer(playerId);
+      const previousPlayerId = playerId;
+      this.activePlayerId = nextActive;
+      this.priorityPlayerId = nextActive;
+      this.currentPhaseStep = this.phaseSteps[0] || 'UNTAP';
+      this.consecutivePassCount = 0;
+
+      const nextTurnCount = (this.playerTurnCounts.get(nextActive) || 0) + 1;
+      this.playerTurnCounts.set(nextActive, nextTurnCount);
+
+      if (nextActive === this.startingPlayerId) {
+        this.roundNumber++;
+      }
+
+      this.emit('TURN_ROTATED', {
+        roundNumber: this.roundNumber,
+        activePlayerId: nextActive,
+        newActivePlayerId: nextActive,
+        playerTurnCount: nextTurnCount,
+        previousPlayerId,
+        reason: 'PLAYER_ELIMINATED'
+      });
+
+      this.emit('TURN_ADVANCED', {
+        turnNumber: this.turnNumber,
+        roundNumber: this.roundNumber,
+        activePlayerId: this.activePlayerId,
+        newActivePlayerId: nextActive,
+        playerTurnCount: nextTurnCount,
+        reason: 'PLAYER_ELIMINATED'
+      });
+
+      this.emit('PHASE_STEP_CHANGED', {
+        phaseStep: this.currentPhaseStep,
+        currentPhaseStep: this.currentPhaseStep,
+        activePlayerId: nextActive,
+        reason: 'PLAYER_ELIMINATED'
+      });
+    }
+
+    return {
+      eliminatedPlayerId: playerId,
+      remainingPlayerCount: activePlayers.length
+    };
   }
 
   /**
@@ -1092,12 +1198,14 @@ export class PriorityStateMachine {
           this.alarmManager.cancel();
         }
 
+        const activePlayerCount = (this.players || []).filter(p => !this.isPlayerEliminated(p)).length || 1;
+
         if (this.stack.length > 0) {
           // Check resolution conditions:
-          // 1. All players in match passed consecutively (CR 117.4)
+          // 1. All active players in match passed consecutively (CR 117.4)
           // 2. In a 2-player match with a freshly cast spell where the active player
           //    cast on empty stack and opponent yields/passes/times-out without responding.
-          const allPlayersPassed = this.consecutivePassCount >= this.players.length;
+          const allPlayersPassed = this.consecutivePassCount >= activePlayerCount;
           const opponentYieldedOnSingleSpell =
             this.stack.length === 1 &&
             this.players.length === 2 &&
@@ -1125,8 +1233,8 @@ export class PriorityStateMachine {
             return { status: 'PRIORITY_PASSED', priorityPlayerId: this.priorityPlayerId };
           }
         } else {
-          // Empty stack: advance phase/step when all players pass consecutively
-          if (this.consecutivePassCount >= this.players.length) {
+          // Empty stack: advance phase/step when all active players pass consecutively
+          if (this.consecutivePassCount >= activePlayerCount) {
             this.advanceStep();
             return { status: 'PHASE_ADVANCED', currentPhaseStep: this.currentPhaseStep };
           } else {

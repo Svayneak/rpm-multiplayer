@@ -67,28 +67,15 @@ export class TabRouter extends EventEmitter {
   canNavigate(targetTab, context = {}, isSpectator = false) {
     if (!targetTab) return false;
     const tab = targetTab.toUpperCase();
+    const isSpec = Boolean(isSpectator === true || context.isSpectator === true);
 
     // Spectators are strictly exempt from lockout and auth (INV-SPEC-1)
-    if (isSpectator === true || context.isSpectator === true) {
+    if (isSpec) {
       return true;
     }
 
-    // 0. Universal Lobby Landing (INV-HUB-1)
-    if (tab === TABS.LOBBY && !this.strictAuthGate) {
-      return true;
-    }
-
-    // 1. Authentication Check (INV-AUTH-1)
-    if (context.isAuthenticated === false) {
-      return tab === TABS.AUTH || (!this.strictAuthGate && tab === TABS.LOBBY);
-    }
-
-    // 2. Onboarding Deck Check (INV-ONBOARD-1)
-    if (context.isOnboarded === false) {
-      return tab === TABS.DECKBUILDER || tab === TABS.AUTH || (!this.strictAuthGate && tab === TABS.LOBBY);
-    }
-
-    // 3. Match Lockout (INV-LOCKOUT-1)
+    // 0. Match Lockout (INV-LOCKOUT-1)
+    // Evaluated with priority before Universal Lobby Landing bypass
     const isMatchActive = Boolean(
       context.isMatchActive ||
       context.status === 'ACTIVE' ||
@@ -97,9 +84,27 @@ export class TabRouter extends EventEmitter {
 
     if (isMatchActive) {
       if (LOCKED_TABS_DURING_MATCH.has(tab)) {
+        if (typeof this.onLockoutBlocked === 'function') {
+          this.onLockoutBlocked(tab);
+        }
         return false;
       }
       return true;
+    }
+
+    // 1. Universal Lobby Landing (INV-HUB-1)
+    if (tab === TABS.LOBBY && !this.strictAuthGate) {
+      return true;
+    }
+
+    // 2. Authentication Check (INV-AUTH-1)
+    if (context.isAuthenticated === false) {
+      return tab === TABS.AUTH || (!this.strictAuthGate && tab === TABS.LOBBY);
+    }
+
+    // 3. Onboarding Deck Check (INV-ONBOARD-1)
+    if (context.isOnboarded === false) {
+      return tab === TABS.DECKBUILDER || tab === TABS.AUTH || (!this.strictAuthGate && tab === TABS.LOBBY);
     }
 
     // 4. Arena Access Rule (INV-ROUTER-2)
@@ -237,6 +242,13 @@ export class TabRouter extends EventEmitter {
       tab: this.currentTab,
       prevTab
     });
+  }
+
+  /**
+   * Explicitly signals that all tab lockout guards are lifted.
+   */
+  unlockAll() {
+    this.emit('unlocked_all');
   }
 }
 

@@ -179,6 +179,8 @@ export class TabletopStateManager extends EventEmitter {
     this.subscribers = new Set();
     this.sequenceCounter = 0;
     this._priorityMachineWired = false;
+    this.winnerId = null;
+    this.isGameOver = false;
 
     if (Array.isArray(options.players)) {
       for (const p of options.players) {
@@ -253,6 +255,95 @@ export class TabletopStateManager extends EventEmitter {
       throw new PlayerNotFoundError(`Player '${playerId}' not found in session`);
     }
     return player;
+  }
+
+  /**
+   * Eliminates a player from the match (via concession, life 0, or deckout).
+   * Unregisters all static effects of the player's permanents, clears their battlefield,
+   * notifies priorityMachine, logs the action, and checks the victory condition.
+   * 
+   * @param {string} playerId
+   * @param {string} [reason='CONCEDED']
+   * @returns {{ eliminatedPlayerId: string, gameOver: boolean, winnerId: string|null }}
+   */
+  eliminatePlayer(playerId, reason = 'CONCEDED') {
+    const player = this.players[playerId];
+    if (!player) return null;
+
+    player.isEliminated = true;
+
+    // Collect permanents to unregister static effects and clear battlefield
+    const permanents = [];
+    if (Array.isArray(player.battlefield)) {
+      permanents.push(...player.battlefield);
+      player.battlefield = [];
+    } else if (player.battlefield && typeof player.battlefield === 'object') {
+      for (const key of Object.keys(player.battlefield)) {
+        if (Array.isArray(player.battlefield[key])) {
+          permanents.push(...player.battlefield[key]);
+          player.battlefield[key] = [];
+        }
+      }
+    }
+    if (player.zones && Array.isArray(player.zones.battlefield)) {
+      permanents.push(...player.zones.battlefield);
+      player.zones.battlefield = [];
+    }
+
+    for (const perm of permanents) {
+      if (perm && perm.instanceId && this.abilityEngine) {
+        try {
+          this.abilityEngine.unregisterEffectsFromSource(perm.instanceId);
+        } catch (_) {}
+      }
+    }
+
+    // Clean up cards on stack controlled or owned by eliminated player
+    if (Array.isArray(this.stack)) {
+      this.stack = this.stack.filter(card => {
+        const owner = card.controllerId || card.ownerId || card.playerId;
+        return owner !== playerId;
+      });
+    }
+
+    const logEntry = {
+      sequenceId: ++this.sequenceCounter,
+      timestamp: Date.now(),
+      actionType: 'PLAYER_ELIMINATED',
+      playerId,
+      payload: { playerId, reason }
+    };
+    this.actionLog.push(logEntry);
+    this.emit('PLAYER_ELIMINATED', { playerId, reason });
+
+    // Notify priority machine if wired
+    if (this.priorityMachine && typeof this.priorityMachine.eliminatePlayer === 'function') {
+      this.priorityMachine.eliminatePlayer(playerId);
+    }
+
+    // Victory condition check: count living players (!p.isEliminated)
+    const survivingPlayers = Object.values(this.players).filter(p => !p.isEliminated);
+    if (survivingPlayers.length === 1) {
+      const survivingPlayer = survivingPlayers[0];
+      this.winnerId = survivingPlayer.id || survivingPlayer.playerId;
+      this.isGameOver = true;
+      const gameOverPayload = {
+        winnerId: this.winnerId,
+        survivingPlayer
+      };
+      this.emit('GAME_OVER', gameOverPayload);
+      return {
+        eliminatedPlayerId: playerId,
+        gameOver: true,
+        winnerId: this.winnerId
+      };
+    }
+
+    return {
+      eliminatedPlayerId: playerId,
+      gameOver: false,
+      winnerId: null
+    };
   }
 
   /**
@@ -1873,28 +1964,39 @@ export class TabletopStateManager extends EventEmitter {
   }
 
   setPriorityMachine(priorityMachine) {
-    this.priorityMachine = priorityMachine;
+    this._priorityMachine = priorityMachine;
+    this._priorityMachineWired = false;
     this._wirePriorityMachine();
   }
 
-  _wirePriorityMachine() {
-    if (!this.priorityMachine || this._priorityMachineWired) return;
-    this._priorityMachineWired = true;
-    this.priorityMachine.tabletopState = this;
+  set priorityMachine(priorityMachine) {
+    this._priorityMachine = priorityMachine;
+    this._priorityMachineWired = false;
+    this._wirePriorityMachine();
+  }
 
-    this.priorityMachine.on('PHASE_STEP_CHANGED', (data) => {
+  get priorityMachine() {
+    return this._priorityMachine;
+  }
+
+  _wirePriorityMachine() {
+    if (!this._priorityMachine || this._priorityMachineWired) return;
+    this._priorityMachineWired = true;
+    this._priorityMachine.tabletopState = this;
+
+    this._priorityMachine.on('PHASE_STEP_CHANGED', (data) => {
       this.handlePhaseStepChanged(data);
     });
 
-    this.priorityMachine.on('UNTAP_STEP_ENTERED', (data) => {
+    this._priorityMachine.on('UNTAP_STEP_ENTERED', (data) => {
       this.handleUntapStep(data.activePlayerId);
     });
 
-    this.priorityMachine.on('UPKEEP_STEP_ENTERED', (data) => {
+    this._priorityMachine.on('UPKEEP_STEP_ENTERED', (data) => {
       this.handleUpkeepStep(data.activePlayerId, data.turnNumber);
     });
 
-    this.priorityMachine.on('CLEANUP_STEP_ENTERED', (data) => {
+    this._priorityMachine.on('CLEANUP_STEP_ENTERED', (data) => {
       this.handleCleanupStep(data.activePlayerId);
     });
   }

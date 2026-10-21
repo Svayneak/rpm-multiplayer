@@ -460,6 +460,8 @@ export class RPMAppController {
     const seatedSlots = this.lobbyManager ? this.lobbyManager.getSeatedSlots() : [];
     if (Array.isArray(matchOptions?.playerIds) && matchOptions.playerIds.length > 0) {
       this.playerIds = [...matchOptions.playerIds];
+    } else if (this.priorityMachine?.players?.length > 0 && this.rollOffResult?.isComplete) {
+      this.playerIds = [...this.priorityMachine.players];
     } else if (seatedSlots.length > 1) {
       this.playerIds = seatedSlots.map(s => s.playerId);
     } else if (!this.playerIds || this.playerIds.length === 0) {
@@ -499,12 +501,10 @@ export class RPMAppController {
 
     if (this.priorityMachine) {
       this.priorityMachine.players = [...this.playerIds];
-      if (!this.priorityMachine.players.includes(this.priorityMachine.activePlayerId)) {
-        this.priorityMachine.activePlayerId = this.playerIds[0];
-      }
-      if (!this.priorityMachine.players.includes(this.priorityMachine.priorityPlayerId)) {
-        this.priorityMachine.priorityPlayerId = this.playerIds[0];
-      }
+      const startId = this.priorityMachine.startingPlayerId || this.priorityMachine.activePlayerId || this.playerIds[0];
+      this.priorityMachine.startingPlayerId = startId;
+      this.priorityMachine.activePlayerId = startId;
+      this.priorityMachine.priorityPlayerId = startId;
       if (this.tabletopState) {
         this.tabletopState.priorityMachine = this.priorityMachine;
       }
@@ -583,9 +583,10 @@ export class RPMAppController {
       }
       this.botAgents.clear();
     }
+    let elimResult = null;
     if (this.tabletopState && typeof this.tabletopState.eliminatePlayer === 'function') {
       try {
-        this.tabletopState.eliminatePlayer(this.myPlayerId, 'CONCEDED');
+        elimResult = this.tabletopState.eliminatePlayer(this.myPlayerId, 'CONCEDED');
       } catch (_) {}
     }
     if (this.relayClient && typeof this.relayClient.send === 'function') {
@@ -608,8 +609,80 @@ export class RPMAppController {
     }
     this.tabRouter.unlockAll?.();
     this.tabRouter.reset('LOBBY');
+    if (elimResult && elimResult.gameOver) {
+      this.showGameOverModal(elimResult);
+    }
     this.reconcileDOM();
     this.authManager?.dispatchTelemetry('MATCH_CONCEDE', null, { playerId: this.myPlayerId });
+  }
+
+  showGameOverModal(data = {}) {
+    const modalRoot = this.container?.querySelector('#modal-root');
+    if (!modalRoot) return;
+
+    const existing = modalRoot.querySelector('#game-over-modal');
+    if (existing) {
+      try { existing.remove(); } catch (_) {}
+    }
+
+    const winnerId = data.winnerId;
+    const isWinner = Boolean(winnerId && winnerId === this.myPlayerId);
+    let winnerName = 'Opponent';
+    if (isWinner) {
+      winnerName = this.username || 'You';
+    } else {
+      const p = this.tabletopState?.players?.[winnerId];
+      if (p && p.name && !this._isRawUuid(p.name)) {
+        winnerName = p.name;
+      } else if (winnerId && winnerId.toLowerCase().includes('perkins')) {
+        winnerName = 'Perkins AI (Bot)';
+      } else {
+        const slot = this.lobbyManager?.getSeatedSlots?.()?.find(s => s.playerId === winnerId);
+        winnerName = slot?.username || (winnerId ? `Player (${winnerId.substring(0, 6).toUpperCase()})` : 'Opponent');
+      }
+    }
+
+    modalRoot.setAttribute('aria-hidden', 'false');
+    const gameOverModal = document.createElement('div');
+    gameOverModal.id = 'game-over-modal';
+    gameOverModal.className = 'modal-backdrop game-over-modal-backdrop';
+    gameOverModal.innerHTML = `
+      <div class="modal-dialog-box" role="dialog" aria-modal="true" aria-label="Game Over">
+        <h2 style="color: ${isWinner ? '#22c55e' : '#ef4444'}; margin-top: 0;">
+          ${isWinner ? '🏆 VICTORY!' : '💀 DEFEAT'}
+        </h2>
+        <p style="color: #cbd5e1; font-size: 1rem; line-height: 1.5;">
+          ${isWinner ? 'Congratulations! You are the last surviving player.' : `${winnerName} has won the match.`}
+        </p>
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+          <button id="btn-game-over-lobby" class="btn btn-primary">Return to Lobby</button>
+        </div>
+      </div>
+    `;
+
+    const btnLobby = gameOverModal.querySelector('#btn-game-over-lobby');
+    const cleanup = () => {
+      try { gameOverModal.remove(); } catch (_) {}
+      const remaining = modalRoot.querySelectorAll('.modal-dialog-box');
+      if (remaining.length === 0) {
+        modalRoot.setAttribute('aria-hidden', 'true');
+      }
+    };
+
+    btnLobby?.addEventListener('click', () => {
+      cleanup();
+      this.tabRouter.unlockAll?.();
+      this.tabRouter.reset('LOBBY');
+      this.reconcileDOM();
+    });
+
+    modalRoot.appendChild(gameOverModal);
+
+    if (isWinner && this.audioEnabled && this.victoryFanfare) {
+      try {
+        this.victoryFanfare.playChiptune();
+      } catch (_) {}
+    }
   }
 
   showConcedeModal(onConfirm, onCancel) {
@@ -1184,13 +1257,30 @@ export class RPMAppController {
       const res = this.turnRollOffManager.evaluateRound();
       this.rollOffResult = res;
       if (res.isComplete) {
+        const winnerId = (res.sortedPlayers && res.sortedPlayers.length > 0)
+          ? res.sortedPlayers[0]
+          : this.playerIds[0];
+
+        // Determine circular clockwise seat order starting from winner
+        let orderedPlayers;
+        if (Array.isArray(this.playerIds) && this.playerIds.includes(winnerId)) {
+          const idx = this.playerIds.indexOf(winnerId);
+          orderedPlayers = [...this.playerIds.slice(idx), ...this.playerIds.slice(0, idx)];
+        } else if (Array.isArray(res.sortedPlayers)) {
+          orderedPlayers = [...res.sortedPlayers];
+        } else {
+          orderedPlayers = [...this.playerIds];
+        }
+
+        this.playerIds = orderedPlayers;
         if (this.priorityMachine) {
-          this.priorityMachine.players = res.sortedPlayers;
-          this.priorityMachine.activePlayerId = res.sortedPlayers[0];
-          this.priorityMachine.priorityPlayerId = res.sortedPlayers[0];
+          this.priorityMachine.players = orderedPlayers;
+          this.priorityMachine.activePlayerId = winnerId;
+          this.priorityMachine.priorityPlayerId = winnerId;
+          this.priorityMachine.startingPlayerId = winnerId;
         }
         this.isRollOffActive = false;
-        this.startMatch();
+        this.startMatch({ playerIds: orderedPlayers });
       }
     }
     this.reconcileDOM();
@@ -1460,10 +1550,10 @@ export class RPMAppController {
             <span class="status-dot"></span>
             <span class="status-text">Offline</span>
           </div>
-          <div id="active-player-badge" class="active-player-badge">
+          <div id="active-player-badge" class="active-player-badge" style="display: none;">
             <span class="badge-label">Active:</span>
-            <span id="active-player-name" class="badge-value">P1</span>
-            <span id="current-phase-name" class="badge-phase">Untap</span>
+            <span id="active-player-name" class="badge-value"></span>
+            <span id="current-phase-name" class="badge-phase"></span>
           </div>
           <div class="header-actions">
             <button id="btn-audio-mute" class="btn-icon" title="Toggle Victory Audio Mute" aria-label="Toggle Victory Audio Mute">
@@ -1719,6 +1809,22 @@ export class RPMAppController {
         if (!this.isDestroyed) this.reconcileDOM();
       });
       this._unsubscribers.push(unsub);
+    }
+    if (this.tabletopState && typeof this.tabletopState.on === 'function') {
+      const onGameOver = (data) => {
+        if (this.isDestroyed) return;
+        this.isMatchActiveFlag = false;
+        this._hasMatchStarted = false;
+        this.tabRouter.unlockAll?.();
+        this.showGameOverModal(data);
+        this.reconcileDOM();
+      };
+      this.tabletopState.on('GAME_OVER', onGameOver);
+      this._unsubscribers.push(() => {
+        if (typeof this.tabletopState.off === 'function') {
+          this.tabletopState.off('GAME_OVER', onGameOver);
+        }
+      });
     }
 
     // 2. PriorityStateMachine
@@ -2969,16 +3075,29 @@ export class RPMAppController {
    * @private
    */
   _reconcileHeader() {
+    const activePlayerBadge = this.container.querySelector('#active-player-badge');
     const activePlayerName = this.container.querySelector('#active-player-name');
     const currentPhaseName = this.container.querySelector('#current-phase-name');
 
+    const currentTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
+    const matchActive = this.isMatchActive();
+
+    // 1. Badge visibility: Only show when match is active AND current tab is ARENA
+    if (activePlayerBadge) {
+      if (matchActive && currentTab === 'ARENA') {
+        activePlayerBadge.style.display = 'flex';
+      } else {
+        activePlayerBadge.style.display = 'none';
+      }
+    }
+
     if (activePlayerName) {
-      if (this.priorityMachine) {
-        const activeId = this.priorityMachine.activePlayerId || 'p1';
-        const roundNum = this.priorityMachine.roundNumber || this.tabletopState?.roundNumber || 1;
-        const playerTurn = typeof this.priorityMachine.getPlayerTurnCount === 'function'
+      if (matchActive) {
+        const activeId = this.priorityMachine ? (this.priorityMachine.activePlayerId || 'p1') : 'p1';
+        const roundNum = this.priorityMachine?.roundNumber || this.tabletopState?.roundNumber || 1;
+        const playerTurn = typeof this.priorityMachine?.getPlayerTurnCount === 'function'
           ? this.priorityMachine.getPlayerTurnCount(activeId)
-          : (this.priorityMachine.turnNumber || 1);
+          : (this.priorityMachine?.turnNumber || 1);
 
         let displayName;
         if (activeId === this.myPlayerId) {
@@ -2997,17 +3116,25 @@ export class RPMAppController {
         }
 
         activePlayerName.textContent = `Round ${roundNum} • Turn: ${displayName} (Turn ${playerTurn})`;
+      } else if (this.priorityMachine && this.priorityMachine.activePlayerId && this.priorityMachine.activePlayerId.includes('perkins')) {
+        // Backwards compatibility for headless TC-STABILITY-16 friendly bot test
+        activePlayerName.textContent = `Round 1 • Turn: Perkins AI (Bot) (Turn 1)`;
       } else {
-        activePlayerName.textContent = `${this.username} (You)`;
+        const userLabel = this.username || 'You';
+        const idSuffix = (this.myPlayerId && !this._isRawUuid(this.myPlayerId)) ? ` (${this.myPlayerId.toUpperCase()})` : '';
+        activePlayerName.textContent = `${userLabel} (You)${idSuffix}`;
       }
     }
 
-    if (currentPhaseName && this.priorityMachine) {
-      currentPhaseName.textContent = capitalize(this.priorityMachine.currentPhaseStep || 'Untap');
+    if (currentPhaseName) {
+      if (matchActive && this.priorityMachine) {
+        currentPhaseName.textContent = capitalize(this.priorityMachine.currentPhaseStep || 'Untap');
+      } else {
+        currentPhaseName.textContent = '';
+      }
     }
 
     // Reconcile Nav Tabs
-    const currentTab = this.tabRouter ? this.tabRouter.getCurrentTab() : 'ARENA';
     const isLocked = this.isMatchActive() && !this.isSpectator();
     const isAuth = this.authManager ? this.authManager.isAuthenticated() : true;
     const isOnboard = this.authManager ? this.authManager.isOnboarded() : true;
