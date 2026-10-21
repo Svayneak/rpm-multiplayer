@@ -803,7 +803,9 @@ async function runTestSuite() {
       instanceId: 'inst_goblin_99',
       name: 'Goblin Guide',
       typeLine: 'Creature — Goblin Scout',
-      type: 'Creature'
+      type: 'Creature',
+      power: 2,
+      toughness: 2
     };
 
     // P1 casts Goblin Guide; priority auto-passes to P2

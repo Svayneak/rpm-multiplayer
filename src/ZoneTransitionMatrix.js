@@ -8,7 +8,9 @@
  * - Authoritative 36-path bi-directional transition matrix:
  *   Zones: library, hand, battlefield, graveyard, exile, stack
  * - MTG CR 400.7 Zone-Change Identity Reset:
- *   Clears marked damage, counters, tap state, and temporary modifications.
+ *   The moved card becomes a new object: it is cloned, receives a regenerated
+ *   (deterministic) instanceId, and has marked damage, counters, tap state, and
+ *   temporary modifications cleared.
  * - Specialized MTG flows:
  *   - "Enter without casting" (Aether Vial, Collected Company, Polymorph)
  *   - "Cast without paying mana cost" (Cascade, Omniscience)
@@ -62,6 +64,51 @@ export class ZoneTransitionMatrix {
   }
 
   /**
+   * Derives the instanceId for the "new object" a card becomes after a zone change (CR 400.7).
+   *
+   * The id is deterministic (lineage root + zone-change ordinal) rather than random so that
+   * every client replaying the same action log over the relay derives identical ids.
+   *
+   * @param {Object} card - Card object that is leaving its current zone
+   * @returns {{ instanceId: string, lineageId: string, zoneChangeCount: number }}
+   */
+  static deriveNextIdentity(card) {
+    const lineageId = card.lineageId || card.instanceId;
+    const zoneChangeCount = (Number(card.zoneChangeCount) || 0) + 1;
+    return {
+      instanceId: `${lineageId}::zc${zoneChangeCount}`,
+      lineageId,
+      zoneChangeCount
+    };
+  }
+
+  /**
+   * Creates the new game object that results from a zone change (MTG CR 400.7):
+   * a fresh clone of the card with a regenerated instanceId and a reset identity.
+   * The source object is never mutated, so stale references held elsewhere
+   * (targets, attackers, stack items) can no longer resolve to the moved card.
+   *
+   * @param {Object} card - Card object removed from its source zone
+   * @param {string} toZone - Destination zone
+   * @returns {Object} New card object
+   */
+  static createZoneChangedObject(card, toZone) {
+    const identity = this.deriveNextIdentity(card);
+    const clone = {
+      ...card,
+      instanceId: identity.instanceId,
+      previousInstanceId: card.instanceId,
+      lineageId: identity.lineageId,
+      zoneChangeCount: identity.zoneChangeCount
+    };
+    // A new object does not inherit cast-time flags from its previous incarnation.
+    delete clone.isFreeCast;
+    delete clone.withoutPayingManaCost;
+    delete clone.impulsePlayable;
+    return this.resetCardIdentity(clone, toZone);
+  }
+
+  /**
    * Executes an authoritative zone transition across any of the 36 valid MTG paths.
    * 
    * @param {Object} playerState - Target player's zone state
@@ -71,6 +118,8 @@ export class ZoneTransitionMatrix {
    * @param {Object} [options={}] - Transition modifiers (position: 'top'|'bottom', subzone, freeCast)
    * @param {Array} [stack=[]] - Shared stack container
    * @returns {{ card: Object, fromZone: string, toZone: string, details: Object }}
+   *   `card` is the NEW object in the destination zone (different reference and instanceId
+   *   from the source card; `card.previousInstanceId` holds the old id).
    */
   static moveCard(playerState, instanceId, fromZone, toZone, options = {}, stack = null) {
     if (!playerState) {
@@ -93,10 +142,9 @@ export class ZoneTransitionMatrix {
       throw new Error(`Card with instanceId '${instanceId}' not found in source zone '${fromZone}'`);
     }
 
-    const card = removalResult.card;
-
-    // Apply CR 400.7 Zone-Change Identity Reset
-    this.resetCardIdentity(card, toZone);
+    // Apply CR 400.7 Zone-Change Identity Reset: the card becomes a brand-new object
+    // (cloned, with a regenerated instanceId) in its destination zone.
+    const card = this.createZoneChangedObject(removalResult.card, toZone);
 
     // Apply specific transition flags
     if (options.withoutPayingManaCost || options.isFreeCast) {
@@ -191,10 +239,10 @@ export class ZoneTransitionMatrix {
    * @returns {Object} Refreshed card on battlefield
    */
   static flicker(playerState, instanceId) {
-    // Step 1: Move to exile
-    this.moveCard(playerState, instanceId, 'battlefield', 'exile');
-    // Step 2: Return to battlefield
-    const result = this.moveCard(playerState, instanceId, 'exile', 'battlefield');
+    // Step 1: Move to exile (CR 400.7: the exiled card is a new object with a new instanceId)
+    const exiled = this.moveCard(playerState, instanceId, 'battlefield', 'exile');
+    // Step 2: Return to battlefield using the exiled object's identity
+    const result = this.moveCard(playerState, exiled.card.instanceId, 'exile', 'battlefield');
     return result.card;
   }
 

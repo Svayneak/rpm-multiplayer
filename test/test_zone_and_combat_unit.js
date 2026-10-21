@@ -66,7 +66,8 @@ it('enterWithoutCasting drops card directly to battlefield bypassing stack', () 
   const entered = ZoneTransitionMatrix.enterWithoutCasting(player, 'aether_creature', 'library');
   assert.strictEqual(entered.zone, 'battlefield');
   assert.strictEqual(player.battlefield.creatures.length, 1);
-  assert.strictEqual(player.battlefield.creatures[0].instanceId, 'aether_creature');
+  assert.strictEqual(player.battlefield.creatures[0].instanceId, entered.instanceId);
+  assert.strictEqual(player.battlefield.creatures[0].lineageId, 'aether_creature');
   assert.strictEqual(player.library.length, 0);
 });
 
@@ -89,12 +90,13 @@ it('specialized flows: reanimate, regrowth, flicker, mill, and impulseExile', ()
   player.graveyard.push(cardInGY);
 
   // Reanimate
-  ZoneTransitionMatrix.reanimate(player, 'reanim_target');
-  assert.strictEqual(player.battlefield.creatures[0].instanceId, 'reanim_target');
+  const reanimated = ZoneTransitionMatrix.reanimate(player, 'reanim_target');
+  assert.strictEqual(player.battlefield.creatures[0].instanceId, reanimated.instanceId);
+  assert.strictEqual(player.battlefield.creatures[0].lineageId, 'reanim_target');
   assert.strictEqual(player.graveyard.length, 0);
 
   // Flicker
-  ZoneTransitionMatrix.flicker(player, 'reanim_target');
+  ZoneTransitionMatrix.flicker(player, reanimated.instanceId);
   assert.strictEqual(player.battlefield.creatures.length, 1);
   assert.strictEqual(player.exile.length, 0);
 

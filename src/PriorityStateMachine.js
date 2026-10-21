@@ -17,6 +17,7 @@
  */
 
 import { StackAlarmManager } from './StackAlarmManager.js';
+import { StateBasedActionsEngine } from './StateBasedActionsEngine.js';
 
 /**
  * Canonical MTG Turn Phases and Steps
@@ -248,6 +249,7 @@ export class PriorityStateMachine {
     this.stack = [];
     this.isTurnEnded = false;
     this.strictTiming = Boolean(options.strictTiming);
+    this.tabletopState = options.tabletopState || null;
 
     // Event listeners & subscribers
     this._listeners = new Map();
@@ -516,6 +518,36 @@ export class PriorityStateMachine {
     this.stack = [];
   }
 
+  /**
+   * Evaluates State-Based Actions (CR 704) and flushes triggered abilities onto the stack
+   * in APNAP order (CR 603.3) before granting priority to a player per MTG CR 117.5.
+   */
+  _runSBAsAndTriggers() {
+    if (!this.tabletopState) return;
+
+    try {
+      StateBasedActionsEngine.runSBACheck(this.tabletopState);
+    } catch (err) {
+      console.error('[PriorityStateMachine] Error running StateBasedActionsEngine.runSBACheck:', err);
+    }
+
+    try {
+      if (
+        this.tabletopState.abilityEngine &&
+        typeof this.tabletopState.abilityEngine.flushTriggersAPNAP === 'function'
+      ) {
+        const triggers = this.tabletopState.abilityEngine.flushTriggersAPNAP(this.activePlayerId, this.players);
+        if (Array.isArray(triggers) && triggers.length > 0) {
+          for (const trig of triggers) {
+            this.pushStack(trig);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[PriorityStateMachine] Error flushing triggers APNAP:', err);
+    }
+  }
+
   // ==========================================
   // Phase / Step Progression Methods
   // ==========================================
@@ -537,6 +569,7 @@ export class PriorityStateMachine {
     }
     const previousStep = this.currentPhaseStep;
     this.currentPhaseStep = step;
+    this._runSBAsAndTriggers();
     this.priorityPlayerId = this.activePlayerId;
     this.consecutivePassCount = 0;
 
@@ -596,6 +629,7 @@ export class PriorityStateMachine {
       const nextPlayerId = this.nextPlayer(this.activePlayerId);
       this.activePlayerId = nextPlayerId;
       this.currentPhaseStep = this.phaseSteps[0]; // 'UNTAP'
+      this._runSBAsAndTriggers();
       this.priorityPlayerId = this.activePlayerId;
       this.consecutivePassCount = 0;
       this.turnNumber++;
@@ -622,6 +656,7 @@ export class PriorityStateMachine {
       });
     } else {
       this.currentPhaseStep = this.phaseSteps[nextIndex];
+      this._runSBAsAndTriggers();
       this.priorityPlayerId = this.activePlayerId;
       this.consecutivePassCount = 0;
     }
@@ -907,9 +942,12 @@ export class PriorityStateMachine {
       try {
         this.tabletopState.handleStackResolution(resolvedItem);
       } catch (err) {
-        console.warn('Error in tabletopState.handleStackResolution:', err);
+        console.error('[PriorityStateMachine.resolveTop] Error in tabletopState.handleStackResolution:', err);
       }
     }
+
+    this._runSBAsAndTriggers();
+    this.priorityPlayerId = this.activePlayerId;
 
     this.emit('STACK_RESOLVE', {
       resolvedItem,
@@ -1070,6 +1108,7 @@ export class PriorityStateMachine {
             return this.resolveTop();
           } else {
             // Priority rotates to next player in turn order
+            this._runSBAsAndTriggers();
             this.priorityPlayerId = this.nextPlayer(this.priorityPlayerId);
 
             if (this.alarmManager && this.peekStack()) {
@@ -1091,6 +1130,7 @@ export class PriorityStateMachine {
             this.advanceStep();
             return { status: 'PHASE_ADVANCED', currentPhaseStep: this.currentPhaseStep };
           } else {
+            this._runSBAsAndTriggers();
             this.priorityPlayerId = this.nextPlayer(this.priorityPlayerId);
 
             this.emit('PRIORITY_CHANGED', {
@@ -1138,6 +1178,17 @@ export class PriorityStateMachine {
       default:
         throw new Error(`Unsupported actionType: ${actionType}`);
     }
+  }
+
+  /**
+   * Dispatches passing priority for the specified player.
+   * 
+   * @param {string} playerId
+   * @param {Object} [options={}]
+   * @returns {Object} Result of PASS_PRIORITY
+   */
+  passPriority(playerId, options = {}) {
+    return this.dispatch('PASS_PRIORITY', { playerId, ...options });
   }
 
   /**

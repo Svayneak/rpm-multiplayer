@@ -197,9 +197,10 @@ it('enterWithoutCasting drops card directly to battlefield without passing stack
   const p1 = tsm.getPlayer('p1');
   p1.library.push({ instanceId: 'vial_creature', name: 'Serra Avenger', typeLine: 'Creature — Angel', power: 3, toughness: 3 });
 
-  tsm.enterWithoutCasting('p1', 'vial_creature', 'library');
+  const res = tsm.enterWithoutCasting('p1', 'vial_creature', 'library');
   assert.strictEqual(p1.battlefield.creatures.length, 1);
-  assert.strictEqual(p1.battlefield.creatures[0].instanceId, 'vial_creature');
+  assert.strictEqual(p1.battlefield.creatures[0].instanceId, res.card.instanceId);
+  assert.strictEqual(p1.battlefield.creatures[0].lineageId, 'vial_creature');
   assert.strictEqual(tsm.stack.length, 0, 'Stack must remain empty for enterWithoutCasting');
 });
 
@@ -218,6 +219,113 @@ it('searchZone returns filtered candidates for tutor and graveyard queries', () 
 
   const all = tsm.searchZone('p1', 'library');
   assert.strictEqual(all.length, 3);
+});
+
+// ------------------------------------------------------------------
+// Section: CR 400.7 Zone Transition & Idempotency Tests
+// ------------------------------------------------------------------
+console.log('--- CR 400.7 Zone Transition & Idempotency ---');
+
+it('CR 400.7: creature resolving from stack arrives on battlefield with counters reset and new instanceId', () => {
+  const tsm = new TabletopStateManager({ players: ['p1'] });
+  const p1 = tsm.getPlayer('p1');
+
+  const creatureOnStack = {
+    instanceId: 'grizzly_001',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    ownerId: 'p1',
+    controllerId: 'p1',
+    counters: { '+1/+1': 2 },
+    damageMarked: 3,
+    grantedAbilities: ['hexproof'],
+    isTapped: true,
+    zone: 'stack'
+  };
+
+  // Place card on the internal stack
+  tsm.stack.push(creatureOnStack);
+  assert.strictEqual(tsm.stack.length, 1, 'Stack should have 1 item');
+
+  const result = tsm.handleStackResolution({ card: creatureOnStack, controllerId: 'p1' });
+
+  // Card should be on the battlefield
+  assert.ok(result, 'handleStackResolution should return a result');
+  assert.strictEqual(result.destinationZone, 'battlefield');
+  assert.strictEqual(result.destinationSubzone, 'creatures');
+
+  // Stack should be empty
+  assert.strictEqual(tsm.stack.length, 0, 'Stack must be empty after resolution');
+
+  // The card on the battlefield must have a NEW instanceId (CR 400.7 — new game object)
+  const bf = p1.battlefield.creatures;
+  assert.strictEqual(bf.length, 1, 'Exactly 1 creature on battlefield');
+  const resolved = bf[0];
+  assert.notStrictEqual(resolved.instanceId, 'grizzly_001', 'instanceId must change after zone transition');
+  assert.ok(resolved.instanceId.includes('grizzly_001'), 'New instanceId should carry lineage');
+
+  // Counters must be reset (CR 400.7 — no state carries across zones)
+  assert.deepStrictEqual(resolved.counters, {}, 'Counters must be reset to {} on zone change');
+  assert.strictEqual(resolved.damageMarked, 0, 'Damage must be cleared');
+  assert.deepStrictEqual(resolved.grantedAbilities, [], 'Granted abilities must be cleared');
+});
+
+it('Idempotency: calling handleStackResolution twice with the same item produces exactly 1 creature', () => {
+  const tsm = new TabletopStateManager({ players: ['p1'] });
+  const p1 = tsm.getPlayer('p1');
+
+  const creature = {
+    instanceId: 'bear_002',
+    name: 'Runeclaw Bear',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    ownerId: 'p1',
+    controllerId: 'p1',
+    counters: {},
+    zone: 'stack'
+  };
+
+  tsm.stack.push(creature);
+
+  const resolvedPayload = { card: creature, controllerId: 'p1' };
+
+  // First call — should resolve normally
+  const result1 = tsm.handleStackResolution(resolvedPayload);
+  assert.ok(result1, 'First call should return a result');
+  assert.strictEqual(p1.battlefield.creatures.length, 1, 'Exactly 1 creature after first call');
+  assert.strictEqual(tsm.stack.length, 0, 'Stack empty after first call');
+
+  // Second call — item is no longer on the stack; should be a no-op
+  const result2 = tsm.handleStackResolution(resolvedPayload);
+  assert.strictEqual(result2, null, 'Second call must return null (idempotent)');
+  assert.strictEqual(p1.battlefield.creatures.length, 1, 'Still exactly 1 creature after second call');
+});
+
+it('Instant spell resolves to graveyard with identity reset', () => {
+  const tsm = new TabletopStateManager({ players: ['p1'] });
+  const p1 = tsm.getPlayer('p1');
+
+  const instant = {
+    instanceId: 'bolt_001',
+    name: 'Lightning Bolt',
+    typeLine: 'Instant',
+    ownerId: 'p1',
+    controllerId: 'p1',
+    counters: { 'charge': 1 },
+    zone: 'stack'
+  };
+
+  tsm.stack.push(instant);
+  const result = tsm.handleStackResolution({ card: instant, controllerId: 'p1' });
+
+  assert.ok(result, 'Should return a result');
+  assert.strictEqual(result.destinationZone, 'graveyard');
+  assert.strictEqual(p1.graveyard.length, 1);
+  assert.notStrictEqual(p1.graveyard[0].instanceId, 'bolt_001', 'instanceId must change for graveyard');
+  assert.deepStrictEqual(p1.graveyard[0].counters, {}, 'Counters must be reset');
 });
 
 console.log(`\n=================================================`);

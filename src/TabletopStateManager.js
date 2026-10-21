@@ -23,6 +23,7 @@ import { ZoneTransitionMatrix } from './ZoneTransitionMatrix.js';
 import { CombatDamageEngine } from './CombatDamageEngine.js';
 import { StateBasedActionsEngine } from './StateBasedActionsEngine.js';
 import { AbilityEngine } from './AbilityEngine.js';
+import { CostModificationEngine } from './CostModificationEngine.js';
 
 export class LandLimitExceededError extends StateTransitionError {
   constructor(message = 'Land drop limit reached for this turn') {
@@ -173,6 +174,7 @@ export class TabletopStateManager extends EventEmitter {
     this.playerTurnNumbers = new Map();
     this.priorityMachine = options.priorityMachine || null;
     this.abilityEngine = options.abilityEngine || new AbilityEngine();
+    this.costEngine = CostModificationEngine;
     this.actionLog = [];
     this.subscribers = new Set();
     this.sequenceCounter = 0;
@@ -614,6 +616,7 @@ export class TabletopStateManager extends EventEmitter {
     }
 
     player.battlefield.lands.push(card);
+    this._onPermanentEnteredBattlefield(card, playerId);
 
     player.landsPlayedThisTurn = played + 1;
     if (player.resources) {
@@ -649,16 +652,44 @@ export class TabletopStateManager extends EventEmitter {
       throw new CardNotFoundError(`Card with instanceId ${instanceId} not found in ${sourceZone}`);
     }
 
-    const isFree = Boolean(payload.isFreeCast || payload.withoutPayingManaCost || sourceArray[cardIdx]?.isFreeCast);
+    const card = sourceArray[cardIdx];
+    const isFree = Boolean(payload.isFreeCast || payload.withoutPayingManaCost || card?.isFreeCast);
+
+    // Context for CostModificationEngine per CR 601.2f
+    const costContext = {
+      isWithoutPayingManaCost: isFree,
+      alternateCostString: payload.alternateCostString || null,
+      genericTax: payload.genericTax || payload.tax || 0,
+      genericReduction: payload.genericReduction || payload.reduction || 0,
+      applyTrinisphere: Boolean(payload.applyTrinisphere),
+      delveCardsExiled: payload.delveCardsExiled || 0,
+      convokeTaps: payload.convokeTaps || [],
+      ...(payload.costContext || payload.context || {})
+    };
+
+    const cardForCost = {
+      ...card,
+      ...(payload.manaCost ? { manaCost: payload.manaCost } : {})
+    };
+
+    const costBreakdown = CostModificationEngine.calculateTotalCost(cardForCost, costContext);
+    payload.costBreakdown = costBreakdown;
 
     // Auto-tap or verify sufficient mana before deducting (bypassed if free cast)
     if (!isFree) {
       if (payload.autoTap || (payload.manaCost && !manaCostPaid)) {
-        const costToPay = payload.manaCost || sourceArray[cardIdx]?.manaCost;
+        const costToPay = costBreakdown.finalCostString || payload.manaCost || card.manaCost;
         if (costToPay) {
           this.autoTapForMana(playerId, costToPay);
         }
-      } else if (manaCostPaid && typeof manaCostPaid === 'object') {
+      }
+
+      player.resources.manaPool = player.resources.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+
+      // Validate affordability using CostModificationEngine
+      const affordCheck = CostModificationEngine.canAffordCost(costBreakdown.finalVector, player.resources.manaPool);
+
+      if (manaCostPaid && typeof manaCostPaid === 'object') {
         for (const [color, amt] of Object.entries(manaCostPaid)) {
           const required = Number(amt) || 0;
           if (required > 0) {
@@ -675,24 +706,62 @@ export class TabletopStateManager extends EventEmitter {
             player.resources.manaPool[color] -= required;
           }
         }
+      } else {
+        if (!affordCheck.canAfford) {
+          const missingDetails = Object.entries(affordCheck.missing || {})
+            .map(([k, v]) => `${v} ${k}`)
+            .join(', ');
+          throw new InsufficientManaError(`Insufficient mana to cast ${card.name || 'spell'}: missing ${missingDetails || 'required mana'}`);
+        }
+
+        // Deduct colored requirements
+        for (const c of ['W', 'U', 'B', 'R', 'G', 'C']) {
+          const req = costBreakdown.finalVector[c] || 0;
+          if (req > 0) {
+            player.resources.manaPool[c] = (player.resources.manaPool[c] || 0) - req;
+          }
+        }
+
+        // Deduct generic requirements from mana pool (colorless first, then colored)
+        let genericToPay = costBreakdown.finalVector.generic || 0;
+        if (genericToPay > 0) {
+          for (const poolKey of ['C', 'colorless']) {
+            if (genericToPay <= 0) break;
+            const avail = player.resources.manaPool[poolKey] || 0;
+            const deduct = Math.min(avail, genericToPay);
+            player.resources.manaPool[poolKey] -= deduct;
+            genericToPay -= deduct;
+          }
+          for (const col of ['W', 'U', 'B', 'R', 'G']) {
+            if (genericToPay <= 0) break;
+            const avail = player.resources.manaPool[col] || 0;
+            const deduct = Math.min(avail, genericToPay);
+            player.resources.manaPool[col] -= deduct;
+            genericToPay -= deduct;
+          }
+        }
       }
+
+      this.emit('MANA_POOL_UPDATED', { playerId, manaPool: { ...player.resources.manaPool } });
     }
 
-    const [card] = sourceArray.splice(cardIdx, 1);
-    card.zone = 'stack';
-    card.subzone = null;
+    const [cardToStack] = sourceArray.splice(cardIdx, 1);
+    cardToStack.zone = 'stack';
+    cardToStack.subzone = null;
+    cardToStack.costBreakdown = costBreakdown;
     if (isFree) {
-      card.isFreeCast = true;
-      card.withoutPayingManaCost = true;
+      cardToStack.isFreeCast = true;
+      cardToStack.withoutPayingManaCost = true;
     }
 
     if (targets) {
-      card.annotations = card.annotations || {};
-      card.annotations.castTargets = targets;
+      cardToStack.targets = targets;
+      cardToStack.annotations = cardToStack.annotations || {};
+      cardToStack.annotations.castTargets = targets;
     }
 
-    this.stack.push(card);
-    return { card };
+    this.stack.push(cardToStack);
+    return { card: cardToStack, costBreakdown };
   }
 
   _handleMoveZone(payload) {
@@ -725,10 +794,18 @@ export class TabletopStateManager extends EventEmitter {
     // Leaving battlefield cleanup
     if (found.zone === 'battlefield') {
       ZoneModel.resetCardState(card);
+      if (toZone !== 'battlefield') {
+        this.abilityEngine?.unregisterEffectsFromSource(card.instanceId);
+      }
     }
 
     // Insert into destination zone
     ZoneModel.insertCardIntoZone(player, card, toZone, targetSubzone, position, this.stack);
+
+    // Entering battlefield from another zone
+    if (toZone === 'battlefield' && found.zone !== 'battlefield') {
+      this._onPermanentEnteredBattlefield(card, playerId);
+    }
 
     return { card, fromZone: found.zone, toZone };
   }
@@ -889,6 +966,7 @@ export class TabletopStateManager extends EventEmitter {
     const { playerId, instanceId, fromZone = 'library', subzone = null } = payload;
     const player = this.getPlayer(playerId);
     const card = ZoneTransitionMatrix.enterWithoutCasting(player, instanceId, fromZone, subzone);
+    this._onPermanentEnteredBattlefield(card, playerId);
     this.emit('CARD_ENTERED_WITHOUT_CASTING', { playerId, card, fromZone });
     this.runSBACheck();
     return { card };
@@ -906,6 +984,7 @@ export class TabletopStateManager extends EventEmitter {
     const { playerId, instanceId } = payload;
     const player = this.getPlayer(playerId);
     const card = ZoneTransitionMatrix.reanimate(player, instanceId);
+    this._onPermanentEnteredBattlefield(card, playerId);
     this.emit('CREATURE_REANIMATED', { playerId, card });
     this.runSBACheck();
     return { card };
@@ -922,7 +1001,9 @@ export class TabletopStateManager extends EventEmitter {
   _handleFlicker(payload) {
     const { playerId, instanceId } = payload;
     const player = this.getPlayer(playerId);
+    this.abilityEngine?.unregisterEffectsFromSource(instanceId);
     const card = ZoneTransitionMatrix.flicker(player, instanceId);
+    this._onPermanentEnteredBattlefield(card, playerId);
     this.emit('PERMANENT_FLICKERED', { playerId, card });
     this.runSBACheck();
     return { card };
@@ -1292,25 +1373,290 @@ export class TabletopStateManager extends EventEmitter {
     return this.dispatch('PLAY_LAND', { playerId: playerIdOrPayload, instanceId, card });
   }
 
-  handleStackResolution(resolvedItem) {
-    if (!resolvedItem) return null;
-    const card = resolvedItem.card || resolvedItem;
-    const controllerId = resolvedItem.controllerId || resolvedItem.sourcePlayerId || card.controllerId || card.ownerId || this.activePlayerId;
-    const player = this.getPlayer(controllerId);
+  _isTargetLegal(target) {
+    if (target === null || target === undefined) return false;
 
-    // If card is still in this.stack, remove it
-    const stackIdx = this.stack.findIndex(c => c && (c.instanceId === card.instanceId || c === card));
-    if (stackIdx !== -1) {
-      this.stack.splice(stackIdx, 1);
+    // Check if target is explicitly a player object
+    if (typeof target === 'object' && (target.playerId || target.type === 'PLAYER')) {
+      const pid = target.playerId || target.id;
+      const player = this.players[pid];
+      return Boolean(player && !player.isEliminated);
     }
 
-    const typeLine = String(card.typeLine || card.type || '').toLowerCase();
-    let destinationZone = 'battlefield';
+    const targetId = typeof target === 'string'
+      ? target
+      : (target.instanceId || target.id || target.targetId || target.card?.instanceId);
+    if (!targetId) return false;
+
+    const expectedZone = typeof target === 'object' ? (target.zone || target.expectedZone || null) : null;
+
+    if (expectedZone === 'graveyard') {
+      for (const p of Object.values(this.players || {})) {
+        if ((p.graveyard || []).some(c => c && (c.instanceId === targetId || c.id === targetId))) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (expectedZone === 'stack') {
+      return (this.stack || []).some(s => s && (s.instanceId === targetId || s.id === targetId || s.card?.instanceId === targetId));
+    }
+
+    // Default: Check battlefield across all players
+    for (const p of Object.values(this.players || {})) {
+      const bf = [
+        ...(p.battlefield?.creatures || []),
+        ...(p.battlefield?.lands || []),
+        ...(p.battlefield?.noncreatures || []),
+        ...(p.battlefield?.planeswalkers || [])
+      ];
+      if (bf.some(c => c && (c.instanceId === targetId || c.id === targetId))) {
+        return true;
+      }
+    }
+
+    // Check if targetId matches an active player
+    const player = this.players[targetId];
+    if (player && !player.isEliminated) {
+      return true;
+    }
+
+    // Check if target is on stack (e.g. Counterspell targeting a spell on stack)
+    if ((this.stack || []).some(s => s && (s.instanceId === targetId || s.id === targetId || s.card?.instanceId === targetId))) {
+      return true;
+    }
+
+    return false;
+  }
+
+  _onPermanentEnteredBattlefield(card, controllerId) {
+    if (!card || !this.abilityEngine) return;
+
+    // a) Register static continuous effects (CR 604)
+    const staticEffects = Array.isArray(card.staticEffects)
+      ? card.staticEffects
+      : (card.staticEffect ? [card.staticEffect] : []);
+
+    for (let i = 0; i < staticEffects.length; i++) {
+      const effect = staticEffects[i];
+      if (effect) {
+        this.abilityEngine.registerStaticEffect({
+          ...effect,
+          id: effect.id || `static_${card.instanceId}_${i}`,
+          sourceId: card.instanceId
+        });
+      }
+    }
+
+    // b) Queue ETB triggered abilities (CR 603)
+    if (card.onEnterBattlefield || card.etbTrigger) {
+      this.abilityEngine.queueTrigger({
+        sourceId: card.instanceId,
+        controllerId,
+        effect: card.onEnterBattlefield || card.etbTrigger,
+        text: `${card.name || 'Permanent'} ETB Trigger`
+      });
+    }
+  }
+
+  handleStackResolution(resolvedItem) {
+    if (!resolvedItem) return null;
+    const originalCard = resolvedItem.card || resolvedItem;
+    const controllerId = resolvedItem.controllerId || resolvedItem.sourcePlayerId || originalCard.controllerId || originalCard.ownerId || this.activePlayerId;
+    const player = this.getPlayer(controllerId);
+
+    // ── Idempotency guard ──────────────────────────────────────────────
+    // Prevent duplicate zone placement when handleStackResolution is
+    // invoked more than once for the same item (e.g. by both PSM.resolveTop
+    // and a subscriber in app.js).
+    //
+    // Step 1: Try to remove the item from TSM's own stack.
+    const stackIdx = this.stack.findIndex(c => c && (
+      c.instanceId === originalCard.instanceId ||
+      c === originalCard ||
+      (resolvedItem.id && c.id === resolvedItem.id) ||
+      (resolvedItem.instanceId && c.instanceId === resolvedItem.instanceId)
+    ));
+    if (stackIdx !== -1) {
+      this.stack.splice(stackIdx, 1);
+    } else {
+      // Step 2: Item was not on TSM's stack (it likely lived only on PSM's
+      // stack and was already popped by resolveTop).  Guard against a
+      // duplicate call by checking whether the card has already landed in
+      // its destination zone.
+      const allBattlefield = [
+        ...(player.battlefield?.creatures || []),
+        ...(player.battlefield?.lands || []),
+        ...(player.battlefield?.noncreatures || []),
+        ...(player.battlefield?.planeswalkers || [])
+      ];
+      const alreadyOnField = allBattlefield.some(c => c && (c.instanceId === originalCard.instanceId || c.previousInstanceId === originalCard.instanceId));
+      const alreadyInGY = (player.graveyard || []).some(c => c && (c.instanceId === originalCard.instanceId || c.previousInstanceId === originalCard.instanceId));
+      if (alreadyOnField || alreadyInGY) {
+        // Already resolved — nothing to do.
+        return null;
+      }
+    }
+
+    const typeLine = String(originalCard.typeLine || originalCard.type || '').toLowerCase();
+    const isInstantOrSorcery = typeLine.includes('instant') || typeLine.includes('sorcery');
+
+    // ── CR 608.2b — Target Validation & Fizzle Rule ────────────────────
+    const rawTargets = resolvedItem.targets || originalCard.targets || originalCard.annotations?.castTargets;
+    const hasTargets = Array.isArray(rawTargets) && rawTargets.length > 0;
+    let legalTargets = [];
+
+    if (hasTargets) {
+      legalTargets = rawTargets.filter(t => this._isTargetLegal(t));
+      if (legalTargets.length === 0) {
+        // All targets are illegal: Spell Fizzles per CR 608.2b
+        if (isInstantOrSorcery || originalCard.isPermanent) {
+          const cardToGrave = ZoneTransitionMatrix.createZoneChangedObject(originalCard, 'graveyard');
+          player.graveyard.push(cardToGrave);
+          if (player.zones?.graveyard) player.zones.graveyard.push(cardToGrave);
+        }
+
+        const logEntry = {
+          sequenceId: ++this.sequenceCounter,
+          actionType: 'SPELL_FIZZLED',
+          rule: 'CR 608.2b',
+          playerId: controllerId,
+          card: originalCard,
+          reason: 'ALL_TARGETS_ILLEGAL',
+          timestamp: Date.now()
+        };
+        this.actionLog.push(logEntry);
+        this._notifySubscribers(logEntry, { card: originalCard, fizzled: true, reason: 'ALL_TARGETS_ILLEGAL' });
+        this.emit('SPELL_FIZZLED', logEntry);
+
+        this.runSBACheck();
+        return { card: originalCard, fizzled: true, reason: 'ALL_TARGETS_ILLEGAL' };
+      }
+    }
+
+    // ── CR 608.2 — Effect Execution ─────────────────────────────────────
+    const effect = resolvedItem.effect || originalCard.effect;
+    if (typeof effect === 'function') {
+      effect(this, resolvedItem);
+    } else if (effect && typeof effect === 'object') {
+      const effectType = String(effect.type || effect.action || '').toUpperCase();
+      const firstTarget = rawTargets && rawTargets[0];
+      const defaultTargetId = effect.targetId || effect.instanceId || (typeof firstTarget === 'string' ? firstTarget : (firstTarget?.instanceId || firstTarget?.id || firstTarget?.targetId));
+
+      switch (effectType) {
+        case 'DEAL_DAMAGE': {
+          const amount = Number(effect.amount ?? effect.damage ?? effect.value ?? 0);
+          const targetsToApply = effect.targetId ? [effect.targetId] : (legalTargets && legalTargets.length > 0 ? legalTargets : [defaultTargetId]);
+
+          for (const t of targetsToApply) {
+            const tid = typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId || t?.playerId);
+            if (!tid) continue;
+
+            let targetPerm = null;
+            for (const p of Object.values(this.players || {})) {
+              const bf = [
+                ...(p.battlefield?.creatures || []),
+                ...(p.battlefield?.lands || []),
+                ...(p.battlefield?.noncreatures || []),
+                ...(p.battlefield?.planeswalkers || [])
+              ];
+              const found = bf.find(c => c && (c.instanceId === tid || c.id === tid));
+              if (found) {
+                targetPerm = found;
+                break;
+              }
+            }
+
+            if (targetPerm) {
+              targetPerm.damageMarked = (targetPerm.damageMarked || 0) + amount;
+            } else {
+              const targetPlayer = this.players[tid] || (t?.playerId && this.players[t.playerId]) || (effect.playerId && this.players[effect.playerId]);
+              if (targetPlayer) {
+                targetPlayer.resources = targetPlayer.resources || {};
+                targetPlayer.resources.life = (targetPlayer.resources.life ?? 20) - amount;
+              }
+            }
+          }
+          break;
+        }
+
+        case 'DRAW_CARD': {
+          const drawPid = effect.playerId || effect.targetPlayerId || (typeof defaultTargetId === 'string' && this.players[defaultTargetId] ? defaultTargetId : null) || controllerId;
+          const drawCount = Number(effect.amount ?? effect.count ?? effect.value ?? 1);
+          this.drawCard(drawPid, drawCount);
+          break;
+        }
+
+        case 'DESTROY_TARGET': {
+          const targetsToDestroy = effect.targetId ? [effect.targetId] : (legalTargets && legalTargets.length > 0 ? legalTargets : [defaultTargetId]);
+          for (const t of targetsToDestroy) {
+            const tid = typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId);
+            if (!tid) continue;
+            for (const [pid, p] of Object.entries(this.players || {})) {
+              const found = ZoneModel.findCard(p, tid);
+              if (found && found.zone === 'battlefield') {
+                this.abilityEngine?.unregisterEffectsFromSource(tid);
+                ZoneTransitionMatrix.moveCard(p, tid, 'battlefield', 'graveyard');
+                this.emit('PERMANENT_DESTROYED', { playerId: pid, cardId: tid });
+                break;
+              }
+            }
+          }
+          break;
+        }
+
+        case 'COUNTER_TARGET': {
+          const targetsToCounter = effect.targetId ? [effect.targetId] : (legalTargets && legalTargets.length > 0 ? legalTargets : [defaultTargetId]);
+          for (const t of targetsToCounter) {
+            const tid = typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId);
+            if (!tid) continue;
+            const targetStackIdx = this.stack.findIndex(s => s && (s.instanceId === tid || s.id === tid || s.card?.instanceId === tid));
+            if (targetStackIdx !== -1) {
+              const [removedItem] = this.stack.splice(targetStackIdx, 1);
+              const targetCard = removedItem.card || removedItem;
+              const ownerId = targetCard.ownerId || targetCard.controllerId || removedItem.controllerId;
+              const owner = this.players[ownerId] || this.getPlayer(this.activePlayerId);
+              if (owner) {
+                const gyCard = ZoneTransitionMatrix.createZoneChangedObject(targetCard, 'graveyard');
+                owner.graveyard.push(gyCard);
+                if (owner.zones?.graveyard) owner.zones.graveyard.push(gyCard);
+                this.emit('SPELL_COUNTERED', { card: targetCard, ownerId });
+              }
+            }
+          }
+          break;
+        }
+
+        case 'MODIFY_LIFE': {
+          const targetPid = effect.playerId || effect.targetPlayerId || (typeof defaultTargetId === 'string' && this.players[defaultTargetId] ? defaultTargetId : null) || controllerId;
+          const targetPlayer = this.players[targetPid];
+          if (targetPlayer) {
+            targetPlayer.resources = targetPlayer.resources || {};
+            if (effect.targetValue !== undefined || effect.target !== undefined) {
+              targetPlayer.resources.life = Number(effect.targetValue ?? effect.target);
+            } else if (effect.amount !== undefined || effect.delta !== undefined || effect.value !== undefined) {
+              targetPlayer.resources.life = (targetPlayer.resources.life ?? 20) + Number(effect.amount ?? effect.delta ?? effect.value);
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    // ── CR 400.7 — Zone-change identity reset ──────────────────────────
+    // The card becomes a new game object when it changes zones.  Strip
+    // counters, damage marks, granted abilities, and assign a fresh
+    // instanceId so no stale state bleeds from the stack.
+    const targetZone = isInstantOrSorcery ? 'graveyard' : 'battlefield';
+
+    const card = ZoneTransitionMatrix.createZoneChangedObject(originalCard, targetZone);
+
+    let destinationZone = targetZone;
     let destinationSubzone = null;
 
     if (typeLine.includes('creature')) {
       destinationSubzone = 'creatures';
-      card.zone = 'battlefield';
       card.subzone = 'creatures';
       card.isSummoningSick = true;
       card.summoningSickness = true;
@@ -1318,37 +1664,31 @@ export class TabletopStateManager extends EventEmitter {
       player.battlefield.creatures.push(card);
     } else if (typeLine.includes('land')) {
       destinationSubzone = 'lands';
-      card.zone = 'battlefield';
       card.subzone = 'lands';
       card.isTapped = false;
       player.battlefield.lands.push(card);
     } else if (typeLine.includes('planeswalker')) {
       destinationSubzone = 'planeswalkers';
-      card.zone = 'battlefield';
       card.subzone = 'planeswalkers';
       card.isTapped = false;
       player.battlefield.planeswalkers.push(card);
     } else if (typeLine.includes('artifact') || typeLine.includes('enchantment') || typeLine.includes('battle')) {
       destinationSubzone = 'noncreatures';
-      card.zone = 'battlefield';
       card.subzone = 'noncreatures';
       card.isTapped = false;
       player.battlefield.noncreatures.push(card);
-    } else if (typeLine.includes('instant') || typeLine.includes('sorcery')) {
+    } else if (isInstantOrSorcery) {
       destinationZone = 'graveyard';
-      card.zone = 'graveyard';
       card.subzone = null;
       player.graveyard.push(card);
     } else {
       if (card.isPermanent) {
         destinationSubzone = 'noncreatures';
-        card.zone = 'battlefield';
         card.subzone = 'noncreatures';
         card.isTapped = false;
         player.battlefield.noncreatures.push(card);
       } else {
         destinationZone = 'graveyard';
-        card.zone = 'graveyard';
         card.subzone = null;
         player.graveyard.push(card);
       }
@@ -1363,6 +1703,10 @@ export class TabletopStateManager extends EventEmitter {
         if (!player.zones.graveyard) player.zones.graveyard = [];
         player.zones.graveyard.push(card);
       }
+    }
+
+    if (destinationZone === 'battlefield') {
+      this._onPermanentEnteredBattlefield(card, controllerId);
     }
 
     this._notifySubscribers({
@@ -1380,6 +1724,9 @@ export class TabletopStateManager extends EventEmitter {
     } else {
       this.emit('SPELL_RESOLVED_TO_GRAVEYARD', { card, controllerId });
     }
+
+    // ── CR 117.5 — State-Based Actions check after resolution ──────────
+    this.runSBACheck();
 
     return { card, destinationZone, destinationSubzone };
   }
@@ -1533,6 +1880,7 @@ export class TabletopStateManager extends EventEmitter {
   _wirePriorityMachine() {
     if (!this.priorityMachine || this._priorityMachineWired) return;
     this._priorityMachineWired = true;
+    this.priorityMachine.tabletopState = this;
 
     this.priorityMachine.on('PHASE_STEP_CHANGED', (data) => {
       this.handlePhaseStepChanged(data);

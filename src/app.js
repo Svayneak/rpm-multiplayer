@@ -1725,15 +1725,6 @@ export class RPMAppController {
     if (this.priorityMachine && typeof this.priorityMachine.subscribe === 'function') {
       const unsub = this.priorityMachine.subscribe((event) => {
         if (this.isDestroyed) return;
-        if (event && (event.type === 'STACK_RESOLVE' || event.name === 'STACK_RESOLVE')) {
-          if (this.tabletopState && typeof this.tabletopState.handleStackResolution === 'function') {
-            try {
-              this.tabletopState.handleStackResolution(event.resolvedItem || event);
-            } catch (err) {
-              console.warn('[app.js] Error in handleStackResolution:', err);
-            }
-          }
-        }
         if (event && (event.type === 'TURN_ADVANCED' || event.type === 'TURN_ROTATED')) {
           if (this.tabletopState && typeof this.tabletopState.resetTurnQuotas === 'function') {
             const nextActiveId = event.activePlayerId || event.newActivePlayerId || this.priorityMachine.activePlayerId;
@@ -1748,11 +1739,8 @@ export class RPMAppController {
     if (this.priorityMachine && typeof this.priorityMachine.on === 'function') {
       const onStackResolve = (event) => {
         if (this.isDestroyed) return;
-        if (this.tabletopState && typeof this.tabletopState.handleStackResolution === 'function') {
-          try {
-            this.tabletopState.handleStackResolution(event.resolvedItem || event);
-          } catch (_) {}
-        }
+        // handleStackResolution is now invoked authoritatively by PriorityStateMachine.resolveTop();
+        // this handler only triggers a visual reconciliation.
         this.reconcileDOM();
       };
       const onTurnChange = (event) => {
@@ -1771,7 +1759,7 @@ export class RPMAppController {
           if (this.tabletopState && typeof this.tabletopState.drawCard === 'function') {
             try {
               this.tabletopState.drawCard(evt.activePlayerId, 1);
-            } catch (_) {}
+            } catch (err) { console.error('[StackResolution Error]:', err); }
           }
         }
         this.reconcileDOM();
@@ -2363,7 +2351,7 @@ export class RPMAppController {
                 senderId: payload.senderId || action.playerId || this.myPlayerId,
                 handCards: this.tabletopState?.players?.[this.myPlayerId]?.zones?.hand || []
               });
-            } catch (_) {}
+            } catch (err) { console.error('[StackResolution Error]:', err); }
           }
           if (!proposal && this.actionLexer) {
             try {
@@ -2371,7 +2359,7 @@ export class RPMAppController {
                 activePlayerId: this.myPlayerId,
                 handCards: this.tabletopState?.players?.[this.myPlayerId]?.zones?.hand || []
               });
-            } catch (_) {}
+            } catch (err) { console.error('[StackResolution Error]:', err); }
           }
           if (proposal && (proposal.status === 'READY' || proposal.status === 'STAGED')) {
             this.executeActionProposal(proposal);

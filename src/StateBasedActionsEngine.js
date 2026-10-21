@@ -31,6 +31,8 @@ export class StateBasedActionsEngine {
    * @returns {{ loopCount: number, totalActionsApplied: number, actions: Array<Object> }}
    */
   static runSBACheck(tabletopState, abilityEngine = null) {
+    if (!tabletopState) return { loopCount: 0, totalActionsApplied: 0, actions: [] };
+    const effectiveAbilityEngine = abilityEngine || tabletopState.abilityEngine || null;
     let loopCount = 0;
     const maxLoops = 25; // Guard against infinite recursion
     let totalActionsApplied = 0;
@@ -94,7 +96,7 @@ export class StateBasedActionsEngine {
 
         for (const card of creatures) {
           // If AbilityEngine is available, evaluate continuous layers first
-          const evaluated = abilityEngine ? abilityEngine.evaluatePermanentLayers(card, tabletopState) : card;
+          const evaluated = effectiveAbilityEngine ? effectiveAbilityEngine.evaluatePermanentLayers(card, tabletopState) : card;
 
           const toughness = evaluated.effectiveToughness !== undefined 
             ? evaluated.effectiveToughness 
@@ -112,6 +114,7 @@ export class StateBasedActionsEngine {
           // INVARIANT INV-STATIC-SBA-1: BYPASSES INDESTRUCTIBLE!
           if (toughness <= 0) {
             ZoneTransitionMatrix.moveCard(player, card.instanceId, 'battlefield', 'graveyard');
+            (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(card.instanceId);
             passActions.push({
               type: 'CREATURE_DIED_ZERO_TOUGHNESS',
               rule: 'CR 704.5f',
@@ -132,6 +135,7 @@ export class StateBasedActionsEngine {
               continue;
             }
             ZoneTransitionMatrix.moveCard(player, card.instanceId, 'battlefield', 'graveyard');
+            (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(card.instanceId);
             passActions.push({
               type: 'CREATURE_DESTROYED_LETHAL_DAMAGE',
               rule: 'CR 704.5g',
@@ -151,6 +155,7 @@ export class StateBasedActionsEngine {
               continue;
             }
             ZoneTransitionMatrix.moveCard(player, card.instanceId, 'battlefield', 'graveyard');
+            (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(card.instanceId);
             passActions.push({
               type: 'CREATURE_DESTROYED_DEATHTOUCH',
               rule: 'CR 704.5h',
@@ -159,6 +164,105 @@ export class StateBasedActionsEngine {
               cardName: card.name
             });
             continue;
+          }
+        }
+      }
+
+      // 5. CR 704.5j: Legend Rule
+      for (const [pid, player] of Object.entries(tabletopState.players || {})) {
+        const perms = [];
+        if (Array.isArray(player.battlefield)) {
+          perms.push(...player.battlefield);
+        } else if (player.battlefield && typeof player.battlefield === 'object') {
+          for (const sub of ['lands', 'creatures', 'noncreatures', 'planeswalkers']) {
+            if (Array.isArray(player.battlefield[sub])) {
+              perms.push(...player.battlefield[sub]);
+            }
+          }
+        }
+
+        const legendariesByName = new Map();
+        for (const card of perms) {
+          if (!card) continue;
+          const isLegendary = Boolean(
+            /legendary/i.test(card.typeLine || card.type || '') ||
+            card.isLegendary ||
+            (Array.isArray(card.supertypes) && card.supertypes.includes('Legendary'))
+          );
+          if (isLegendary && card.name) {
+            if (!legendariesByName.has(card.name)) {
+              legendariesByName.set(card.name, []);
+            }
+            legendariesByName.get(card.name).push(card);
+          }
+        }
+
+        for (const [name, cards] of legendariesByName.entries()) {
+          if (cards.length > 1) {
+            const [kept, ...duplicates] = cards;
+            for (const dup of duplicates) {
+              const moved = ZoneTransitionMatrix.moveCard(player, dup.instanceId, 'battlefield', 'graveyard');
+              (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(dup.instanceId);
+              passActions.push({
+                type: 'LEGEND_RULE_APPLIED',
+                rule: 'CR 704.5j',
+                playerId: pid,
+                cardId: dup.instanceId,
+                graveyardInstanceId: moved?.card?.instanceId || dup.instanceId,
+                cardName: name,
+                keptCardId: kept.instanceId
+              });
+            }
+          }
+        }
+      }
+
+      // 6. CR 704.5d: Tokens outside battlefield cease to exist
+      for (const [pid, player] of Object.entries(tabletopState.players || {})) {
+        const nonBattlefieldZones = ['graveyard', 'exile', 'hand', 'library'];
+        for (const zoneName of nonBattlefieldZones) {
+          const zoneCards = player[zoneName];
+          if (Array.isArray(zoneCards)) {
+            for (let i = zoneCards.length - 1; i >= 0; i--) {
+              const card = zoneCards[i];
+              if (card && card.isToken) {
+                zoneCards.splice(i, 1);
+                passActions.push({
+                  type: 'TOKEN_CEASED_TO_EXIST',
+                  rule: 'CR 704.5d',
+                  playerId: pid,
+                  cardId: card.instanceId,
+                  cardName: card.name,
+                  zone: zoneName
+                });
+              }
+            }
+          }
+          if (player.zones && Array.isArray(player.zones[zoneName])) {
+            const zCards = player.zones[zoneName];
+            for (let i = zCards.length - 1; i >= 0; i--) {
+              const card = zCards[i];
+              if (card && card.isToken) {
+                zCards.splice(i, 1);
+              }
+            }
+          }
+        }
+      }
+
+      if (Array.isArray(tabletopState.stack)) {
+        for (let i = tabletopState.stack.length - 1; i >= 0; i--) {
+          const item = tabletopState.stack[i];
+          const card = item?.card || item;
+          if (card && card.isToken) {
+            tabletopState.stack.splice(i, 1);
+            passActions.push({
+              type: 'TOKEN_CEASED_TO_EXIST',
+              rule: 'CR 704.5d',
+              cardId: card.instanceId,
+              cardName: card.name,
+              zone: 'stack'
+            });
           }
         }
       }

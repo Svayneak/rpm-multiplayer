@@ -49,7 +49,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node test/run_tests.js && node test/test_zone_state.js && node test/test_priority_stack.js && node test/test_dual_chat_action.js && node test/test_tabletop_ui.js && node test/test_relay_sync.js && node test/test_random_perk.js && node test/test_deckbuilder_ai.js && node test/test_victory_fanfare.js && node test/test_browser_harness.js && node test/test_multi_client_sync.js && node test/test_perkins_ai.js && node test/test_unified_platform.js && node test/test_onboarding_lobby.js && node test/test_battle_spectator.js && node test/test_battle_stability.js && node test/test_3d_dice_and_integrity.js && node test/test_battle_ux_hardening.js && node test/test_combat_damage_engine.js && node test/test_mtg_rule_engine.js",
+    "test": "node test/run_all.js",
+    "test:gate": "node test/verify_architecture_invariants.js",
     "test:ux": "node test/test_battle_ux_hardening.js",
     "test:combat": "node test/test_combat_damage_engine.js",
     "test:rules": "node test/test_mtg_rule_engine.js",

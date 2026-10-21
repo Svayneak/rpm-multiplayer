@@ -41,6 +41,7 @@ export class AbilityEngine {
   constructor() {
     this.staticEffects = []; // Array of registered continuous effects
     this.triggeredQueue = []; // Staged triggers awaiting stack placement
+    this._nextTimestamp = 0;
   }
 
   // ==========================================
@@ -205,7 +206,14 @@ export class AbilityEngine {
    * @param {Function} [effect.appliesTo] - Filter function (card) => boolean
    */
   registerStaticEffect(effect) {
-    if (effect && effect.id && effect.layer) {
+    if (effect && effect.layer) {
+      if (!effect.id) {
+        effect.id = `static_${effect.sourceId || Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      }
+      if (effect.timestamp === undefined || effect.timestamp === null) {
+        this._nextTimestamp = (this._nextTimestamp || 0) + 1;
+        effect.timestamp = this._nextTimestamp;
+      }
       // Remove existing with same id if any
       this.unregisterStaticEffect(effect.id);
       this.staticEffects.push(effect);
@@ -234,7 +242,7 @@ export class AbilityEngine {
     if (!card) return card;
 
     // Initialize base values from printed card characteristics
-    const isCreature = /creature/i.test(card.typeLine || card.type || '');
+    let isCreature = /creature/i.test(card.typeLine || card.type || '');
     const basePower = Number(card.power ?? card.basePower ?? 0) || 0;
     const baseToughness = Number(card.toughness ?? card.baseToughness ?? 0) || 0;
 
@@ -263,6 +271,7 @@ export class AbilityEngine {
       switch (effect.layer) {
         case CONTINUOUS_LAYERS.LAYER_4_TYPE:
           if (effect.apply) effect.apply(evaluated, context);
+          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
           break;
 
         case CONTINUOUS_LAYERS.LAYER_5_COLOR:
@@ -281,20 +290,39 @@ export class AbilityEngine {
           if (effect.apply) effect.apply(evaluated, context);
           break;
 
+        case CONTINUOUS_LAYERS.LAYER_7A_CDA_PT:
+          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
+          if (isCreature) {
+            if (effect.apply) {
+              effect.apply(evaluated, context);
+            } else {
+              if (effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
+              if (effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
+            }
+          }
+          break;
+
         case CONTINUOUS_LAYERS.LAYER_7B_SET_PT:
-          if (isCreature && effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
-          if (isCreature && effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
+          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
+          if (isCreature) {
+            if (effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
+            if (effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
+            if (effect.apply) effect.apply(evaluated, context);
+          }
           break;
 
         case CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT:
+          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
           // e.g. Static -1/-1 debuff (Night of Souls' Betrayal, Elesh Norn)
           if (isCreature) {
             evaluated.effectivePower += (effect.powerMod || 0);
             evaluated.effectiveToughness += (effect.toughnessMod || 0);
+            if (effect.apply) effect.apply(evaluated, context);
           }
           break;
 
         case CONTINUOUS_LAYERS.LAYER_7D_COUNTERS_PT:
+          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
           // Counters: +1/+1 and -1/-1 counters
           if (isCreature && evaluated.counters) {
             const p1 = evaluated.counters['+1/+1'] || 0;
@@ -302,14 +330,17 @@ export class AbilityEngine {
             evaluated.effectivePower += (p1 - m1);
             evaluated.effectiveToughness += (p1 - m1);
           }
+          if (isCreature && effect.apply) effect.apply(evaluated, context);
           break;
 
         case CONTINUOUS_LAYERS.LAYER_7E_SWITCH_PT:
+          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
           if (isCreature && effect.switchPT) {
             const temp = evaluated.effectivePower;
             evaluated.effectivePower = evaluated.effectiveToughness;
             evaluated.effectiveToughness = temp;
           }
+          if (isCreature && effect.apply) effect.apply(evaluated, context);
           break;
 
         default:

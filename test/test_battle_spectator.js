@@ -928,11 +928,14 @@ async function runTestSuite() {
       instanceId: 'bear_1',
       name: 'Grizzly Bears',
       typeLine: 'Creature — Bear',
+      power: 2,
+      toughness: 2,
       isPermanent: true,
       ownerId: 'p1',
       controllerId: 'p1'
     };
 
+    tabletop.stack.push(bearCard);
     const resolved = tabletop.handleStackResolution({
       id: 'stack_item_bear',
       sourcePlayerId: 'p1',
@@ -958,6 +961,7 @@ async function runTestSuite() {
       controllerId: 'p1'
     };
 
+    tabletop.stack.push(boltCard);
     const resolvedBolt = tabletop.handleStackResolution({
       id: 'stack_item_bolt',
       sourcePlayerId: 'p1',
