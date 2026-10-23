@@ -26,6 +26,7 @@
  * - TC-RULES-21: Spell Resolution with Damage Effect and SBA Destruction (CR 608.2, CR 704.5g)
  * - TC-RULES-22: Spell Fizzle on Resolution when all targets become illegal (CR 400.7, CR 608.2b)
  * - TC-RULES-23: Automatic Lifecycle of Static Continuous Effects on Entry and Exit (CR 604, CR 613)
+ * - TC-RULES-31: Cast of Lava Spike paying {R} and stack resolution targeting opponent (p2) (CR 601.2, CR 608.2)
  */
 
 import assert from 'assert';
@@ -46,6 +47,7 @@ import {
 } from '../src/AbilityEngine.js';
 import { ZoneTransitionMatrix } from '../src/ZoneTransitionMatrix.js';
 import { StateBasedActionsEngine } from '../src/StateBasedActionsEngine.js';
+import { CombatDamageEngine } from '../src/CombatDamageEngine.js';
 import { TabletopStateManager, PriorityViolationError, PhaseTimingError } from '../src/TabletopStateManager.js';
 import { PriorityStateMachine } from '../src/PriorityStateMachine.js';
 import { SearchSelectGridModal } from '../src/view/SearchSelectGridModal.js';
@@ -848,6 +850,532 @@ it('TC-RULES-26: Strict Priority and Speed Timing Lock (Instant vs Sorcery) (CR 
     assert.ok(err.message.includes("Player 'p1' does not hold priority"));
     return true;
   });
+});
+
+it('TC-RULES-27: Vigilance in Combat (CR 702.20 & CR 508.1f) - Attacking without tapping & Damage Resolution', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    currentPhaseStep: 'DECLARE_ATTACKERS'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  const angel = {
+    instanceId: 'c_angel',
+    name: 'Serra Angel',
+    typeLine: 'Creature — Angel',
+    power: 4,
+    toughness: 4,
+    keywords: { vigilance: true, flying: true },
+    isTapped: false,
+    hasSummoningSickness: false
+  };
+  p1.battlefield.creatures.push(angel);
+
+  // P1 declares Serra Angel as attacker against P2
+  tsm.declareAttackers('p1', [{ creatureId: 'c_angel', defendingPlayerId: 'p2' }]);
+
+  assert.strictEqual(angel.isAttacking, true, 'Serra Angel is attacking');
+  assert.strictEqual(angel.defendingPlayerId, 'p2', 'Targets P2');
+  assert.strictEqual(angel.isTapped, false, 'Serra Angel with Vigilance remains untapped');
+
+  // Advance to COMBAT_DAMAGE step
+  psm.setPhaseStep('COMBAT_DAMAGE');
+  assert.strictEqual(p2.resources.life, 16, 'P2 takes 4 unblocked combat damage from Serra Angel');
+  assert.strictEqual(angel.isTapped, false, 'Serra Angel remains untapped after combat damage');
+});
+
+it('TC-RULES-28: Evasion Flying vs Reach / Non-flying (CR 702.9, CR 702.17, CR 509.1b)', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    currentPhaseStep: 'DECLARE_ATTACKERS'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  const flyer = {
+    instanceId: 'c_flyer',
+    name: 'Storm Crow',
+    typeLine: 'Creature — Bird',
+    power: 1,
+    toughness: 2,
+    keywords: { flying: true },
+    isTapped: false,
+    hasSummoningSickness: false
+  };
+  const bear = {
+    instanceId: 'c_bear',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    isTapped: false
+  };
+  const spider = {
+    instanceId: 'c_spider',
+    name: 'Giant Spider',
+    typeLine: 'Creature — Spider',
+    power: 2,
+    toughness: 4,
+    keywords: { reach: true },
+    isTapped: false
+  };
+  const bird = {
+    instanceId: 'c_bird',
+    name: 'Wind Drake',
+    typeLine: 'Creature — Drake',
+    power: 2,
+    toughness: 2,
+    keywords: { flying: true },
+    isTapped: false
+  };
+
+  p1.battlefield.creatures.push(flyer);
+  p2.battlefield.creatures.push(bear, spider, bird);
+
+  tsm.declareAttackers('p1', [{ creatureId: 'c_flyer', defendingPlayerId: 'p2' }]);
+
+  // 1. Grizzly Bears (no flying, no reach) attempts to block -> REJECTED
+  assert.throws(() => {
+    tsm.declareBlockers('p2', [{ blockerId: 'c_bear', attackerId: 'c_flyer' }]);
+  }, (err) => {
+    assert.ok(/Flying/i.test(err.message), 'Error must indicate Flying restriction');
+    return true;
+  });
+
+  // 2. Giant Spider (Reach) blocks Storm Crow -> ALLOWED
+  const reachRes = tsm.declareBlockers('p2', [{ blockerId: 'c_spider', attackerId: 'c_flyer' }]);
+  assert.strictEqual(spider.isBlocking, true);
+  assert.strictEqual(spider.blockingTargetId, 'c_flyer');
+  assert.strictEqual(reachRes.assignments.length, 1);
+
+  // 3. Wind Drake (Flying) can also legally block
+  const flyerBlockCheck = CombatDamageEngine.canCreatureBlock(bird, flyer, tsm);
+  assert.strictEqual(flyerBlockCheck.canBlock, true, 'Creature with Flying can block creature with Flying');
+});
+
+it('TC-RULES-29: Lethal Combat Damage + Instant Combat Trick + SBA Processing (CR 510, CR 704.5g)', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    currentPhaseStep: 'DECLARE_ATTACKERS'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  const attacker33 = {
+    instanceId: 'c_attacker',
+    name: 'Centaur Courser',
+    typeLine: 'Creature — Centaur',
+    power: 3,
+    toughness: 3,
+    isTapped: false,
+    hasSummoningSickness: false
+  };
+  const blocker22 = {
+    instanceId: 'c_blocker',
+    name: 'Runeclaw Bear',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    isTapped: false
+  };
+
+  p1.battlefield.creatures.push(attacker33);
+  p2.battlefield.creatures.push(blocker22);
+
+  // P1 declares 3/3 attacker
+  tsm.declareAttackers('p1', [{ creatureId: 'c_attacker', defendingPlayerId: 'p2' }]);
+  // P2 blocks with 2/2 blocker
+  tsm.declareBlockers('p2', [{ blockerId: 'c_blocker', attackerId: 'c_attacker' }]);
+
+  // Combat trick before damage: Instant Giant Growth (+3/+3) on attacker
+  tsm.abilityEngine.registerStaticEffect({
+    sourceId: 'giant_growth_instant',
+    layer: CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT,
+    modifyPower: 3,
+    modifyToughness: 3,
+    appliesTo: (c) => c.instanceId === 'c_attacker'
+  });
+
+  // Resolve combat damage
+  tsm.resolveCombatDamage();
+
+  // Attacker 6/6 dealt 6 damage to 2/2 blocker (lethal). Blocker dealt 2 damage to 6/6 attacker.
+  // Blocker took 6 damage (>= 2 toughness) -> SBA CR 704.5g destroys blocker and moves it to graveyard
+  const blockerInGrave = p2.graveyard.find(c => c.lineageId === 'c_blocker' || c.previousInstanceId === 'c_blocker' || c.name === 'Runeclaw Bear');
+  assert.ok(blockerInGrave, '2/2 blocker destroyed by lethal damage and placed in graveyard');
+  const blockerOnBf = p2.battlefield.creatures.find(c => c.instanceId === 'c_blocker');
+  assert.strictEqual(blockerOnBf, undefined, 'Blocker is no longer on battlefield');
+
+  // Attacker took 2 damage (< 6 toughness) -> survives with 2 damage marked
+  const attackerOnBf = p1.battlefield.creatures.find(c => c.instanceId === 'c_attacker');
+  assert.ok(attackerOnBf, 'Attacker survives combat');
+  assert.strictEqual(attackerOnBf.damageMarked, 2, 'Attacker has 2 marked damage');
+});
+
+it('TC-RULES-30: CR 508.8 Skip directly to END_COMBAT when no attackers declared', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    currentPhaseStep: 'DECLARE_ATTACKERS'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+
+  assert.strictEqual(psm.currentPhaseStep, 'DECLARE_ATTACKERS');
+
+  // Declaring empty attackersList triggers CR 508.8 advance directly to END_COMBAT
+  tsm.declareAttackers('p1', []);
+
+  assert.strictEqual(psm.currentPhaseStep, 'END_COMBAT', 'Must jump directly to END_COMBAT per CR 508.8');
+  assert.strictEqual(tsm.combatState.attackers.length, 0);
+  assert.strictEqual(tsm.combatState.blockers.length, 0);
+});
+
+it('TC-RULES-31: Cast of Lava Spike paying {R} and stack resolution targeting opponent (p2) deals 3 damage', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    priorityPlayerId: 'p1',
+    currentPhaseStep: 'PRECOMBAT_MAIN'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  p1.resources.manaPool = { W: 0, U: 0, B: 0, R: 1, G: 0, C: 0 };
+  assert.strictEqual(p2.resources.life, 20);
+
+  const spikeCard = {
+    instanceId: 'lava_spike_p1',
+    name: 'Lava Spike',
+    typeLine: 'Sorcery — Arcane',
+    manaCost: '{R}',
+    cmc: 1,
+    ownerId: 'p1',
+    controllerId: 'p1',
+    zone: 'hand'
+  };
+  p1.hand.push(spikeCard);
+
+  // Cast Lava Spike paying {R}
+  tsm.dispatch('CAST_SPELL', {
+    playerId: 'p1',
+    instanceId: 'lava_spike_p1',
+    card: spikeCard,
+    targets: ['p2']
+  });
+
+  assert.strictEqual(p1.resources.manaPool.R, 0, '{R} mana paid');
+  assert.strictEqual(tsm.stack.length, 1, 'Lava Spike placed on stack');
+
+  // Resolve on the stack targeting opponent (p2)
+  const topItem = tsm.stack[tsm.stack.length - 1];
+  const res = tsm.handleStackResolution(topItem);
+
+  assert.ok(res, 'Resolution result exists');
+  assert.strictEqual(res.destinationZone, 'graveyard');
+  assert.strictEqual(p2.resources.life, 17, 'Opponent life reduced from 20 to 17');
+  assert.strictEqual(p1.graveyard.length, 1, 'Lava Spike in p1 graveyard');
+  assert.strictEqual(p1.graveyard[0].name, 'Lava Spike');
+});
+
+it('TC-RULES-32: Shockland Steam Vents choice (payShockCost enters untapped, default enters tapped) and 1v1 default targeting', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    priorityPlayerId: 'p1',
+    currentPhaseStep: 'PRECOMBAT_MAIN'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    priorityMachine: psm
+  });
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  // 1. Steam Vents played with payShockCost = true
+  const ventsUntapped = {
+    instanceId: 'vents_1',
+    name: 'Steam Vents',
+    typeLine: 'Land — Island Mountain',
+    type: 'Land',
+    oracleText: 'As Steam Vents enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.'
+  };
+  p1.hand.push(ventsUntapped);
+  tsm.playLand('p1', ventsUntapped, { payShockCost: true });
+
+  assert.strictEqual(p1.resources.life, 18, 'P1 paid 2 life for Steam Vents');
+  const bfVents1 = p1.battlefield.lands.find(c => c.instanceId === 'vents_1');
+  assert.ok(bfVents1, 'Steam Vents on battlefield');
+  assert.strictEqual(bfVents1.isTapped, false, 'Steam Vents entered untapped after paying 2 life');
+
+  // Reset land drop quota for testing next scenario
+  p1.landsPlayedThisTurn = 0;
+
+  // 2. Steam Vents played without payShockCost (default false -> enters tapped)
+  const ventsTapped = {
+    instanceId: 'vents_2',
+    name: 'Steam Vents',
+    typeLine: 'Land — Island Mountain',
+    type: 'Land',
+    oracleText: 'As Steam Vents enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.'
+  };
+  p1.hand.push(ventsTapped);
+  tsm.playLand('p1', ventsTapped, { payShockCost: false });
+
+  assert.strictEqual(p1.resources.life, 18, 'P1 did not pay life');
+  const bfVents2 = p1.battlefield.lands.find(c => c.instanceId === 'vents_2');
+  assert.ok(bfVents2, 'Second Steam Vents on battlefield');
+  assert.strictEqual(bfVents2.isTapped, true, 'Steam Vents entered tapped when life was not paid');
+
+  // 3. Lava Spike with no targets in 1v1 defaults to targeting the opponent
+  p1.resources.manaPool.R = 1;
+  const spikeCard2 = {
+    instanceId: 'spike_2',
+    name: 'Lava Spike',
+    typeLine: 'Sorcery — Arcane',
+    manaCost: '{R}'
+  };
+  p1.hand.push(spikeCard2);
+  tsm.dispatch('CAST_SPELL', {
+    playerId: 'p1',
+    instanceId: 'spike_2',
+    card: spikeCard2
+    // targets omitted
+  });
+  const top = tsm.stack[tsm.stack.length - 1];
+  tsm.handleStackResolution(top);
+  assert.strictEqual(p2.resources.life, 17, 'Opponent life reduced by 3 via 1v1 default targeting');
+});
+
+it('TC-RULES-33: CR 103.8a second player draws on first turn (7 -> 8 cards) while P1 skips Turn 1 draw; 0-power creature preserved', () => {
+  const psm = new PriorityStateMachine({ players: ['p1', 'p2'], startingPlayerId: 'p1' });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1',
+    priorityMachine: psm
+  });
+  psm.tabletopState = tsm;
+  tsm.priorityMachine = psm;
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+  for (let i = 1; i <= 7; i++) {
+    p1.hand.push({ instanceId: `a_h_${i}`, name: `Card ${i}` });
+    p2.hand.push({ instanceId: `b_h_${i}`, name: `Card ${i}` });
+  }
+  for (let i = 1; i <= 20; i++) {
+    p1.library.push({ instanceId: `a_l_${i}`, name: `Lib ${i}` });
+    p2.library.push({ instanceId: `b_l_${i}`, name: `Lib ${i}` });
+  }
+  psm.setPhaseStep('DRAW');
+  assert.strictEqual(p1.hand.length, 7, 'P1 skips initial draw');
+  psm.setPhaseStep('CLEANUP');
+  psm.advanceStep();
+  assert.strictEqual(psm.activePlayerId, 'p2');
+  psm.nextPhase('p2');
+  assert.strictEqual(psm.currentPhaseStep, 'PRECOMBAT_MAIN');
+  assert.strictEqual(p2.hand.length, 8, 'P2 ends with 8 cards');
+});
+
+it('TC-RULES-34: Prowess trigger lifecycle & Layer 7c stats (CR 702.108a, CR 613.4c, CR 514.2)', () => {
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1'
+  });
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  const swiftspear = {
+    instanceId: 'swift_1',
+    name: 'Monastery Swiftspear',
+    typeLine: 'Creature — Human Monk',
+    power: 1,
+    toughness: 2,
+    keywords: { haste: true, prowess: true }
+  };
+  TabletopStateManager.hydrateCardMechanics(swiftspear);
+  p1.battlefield.creatures.push(swiftspear);
+
+  // 1. Initial base stats
+  const initialStats = tsm.abilityEngine.evaluateCreatureStats(swiftspear, tsm);
+  assert.strictEqual(initialStats.power, 1, 'Initial base power is 1');
+  assert.strictEqual(initialStats.toughness, 2, 'Initial base toughness is 2');
+
+  // 2. Cast noncreature spell (Lightning Bolt)
+  const bolt = {
+    instanceId: 'bolt_1',
+    name: 'Lightning Bolt',
+    typeLine: 'Instant',
+    manaCost: '{R}'
+  };
+  p1.hand.push(bolt);
+  p1.resources.manaPool.R = 1;
+
+  tsm.dispatch('CAST_SPELL', {
+    playerId: 'p1',
+    instanceId: 'bolt_1',
+    card: bolt,
+    targets: ['p2']
+  });
+
+  // 3. Prowess triggers: Layer 7c buff (+1/+1)
+  const buffedStats = tsm.abilityEngine.evaluateCreatureStats(swiftspear, tsm);
+  assert.strictEqual(buffedStats.power, 2, 'Prowess increases power to 2');
+  assert.strictEqual(buffedStats.toughness, 3, 'Prowess increases toughness to 3');
+
+  // 4. Combat damage with buffed stats
+  tsm.combatState.attackers = [swiftspear];
+  swiftspear.defendingPlayerId = 'p2';
+  swiftspear.isAttacking = true;
+  tsm.resolveCombatDamage();
+  assert.strictEqual(p2.resources.life, 18, 'P2 took 2 combat damage from 2/3 Swiftspear');
+
+  // 5. Cleanup step purges END_OF_TURN static effects
+  tsm.handleCleanupStep('p1');
+  const cleanupStats = tsm.abilityEngine.evaluateCreatureStats(swiftspear, tsm);
+  assert.strictEqual(cleanupStats.power, 1, 'Swiftspear power reverts to 1 after cleanup');
+  assert.strictEqual(cleanupStats.toughness, 2, 'Swiftspear toughness reverts to 2 after cleanup');
+});
+
+it('TC-RULES-35: Steam Vents dual land mana selection & floating (CR 106.1, CR 605.1)', () => {
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1'
+  });
+  const p1 = tsm.getPlayer('p1');
+
+  const vents1 = {
+    instanceId: 'vents_u',
+    name: 'Steam Vents',
+    typeLine: 'Land — Island Mountain',
+    isTapped: false
+  };
+  const vents2 = {
+    instanceId: 'vents_r',
+    name: 'Steam Vents',
+    typeLine: 'Land — Island Mountain',
+    isTapped: false
+  };
+  TabletopStateManager.hydrateCardMechanics(vents1);
+  TabletopStateManager.hydrateCardMechanics(vents2);
+  p1.battlefield.lands.push(vents1, vents2);
+
+  // 1. Explicitly tap for {U}
+  const resU = tsm.tapLandForMana('p1', 'vents_u', 'U');
+  assert.strictEqual(resU.color, 'U', 'Produced U mana');
+  assert.strictEqual(p1.resources.manaPool.U, 1, 'Mana pool has 1 U');
+  assert.strictEqual(vents1.isTapped, true, 'First Steam Vents is tapped');
+
+  // 2. Explicitly tap for {R}
+  const resR = tsm.tapLandForMana('p1', 'vents_r', 'R');
+  assert.strictEqual(resR.color, 'R', 'Produced R mana');
+  assert.strictEqual(p1.resources.manaPool.R, 1, 'Mana pool has 1 R');
+  assert.strictEqual(vents2.isTapped, true, 'Second Steam Vents is tapped');
+});
+
+it('TC-RULES-36: Real GAME_OVER trigger on SBA death (CR 704.5a, CR 704.5c)', () => {
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1'
+  });
+  let gameOverEmitted = false;
+  let gameOverWinner = null;
+  tsm.on('GAME_OVER', (payload) => {
+    gameOverEmitted = true;
+    gameOverWinner = payload.winnerId;
+  });
+
+  const p2 = tsm.getPlayer('p2');
+  p2.resources.life = 0;
+
+  const sbaResult = StateBasedActionsEngine.runSBACheck(tsm);
+  assert.strictEqual(tsm.isGameOver, true, 'tsm.isGameOver must be true');
+  assert.strictEqual(tsm.winnerId, 'p1', 'tsm.winnerId must be p1');
+  assert.strictEqual(gameOverEmitted, true, 'GAME_OVER event must be emitted');
+  assert.strictEqual(gameOverWinner, 'p1', 'GAME_OVER winner must be p1');
+  assert.strictEqual(p2.isEliminated, true, 'p2 must be eliminated');
+});
+
+it('TC-RULES-37: Lightning Bolt targeted cast against creature destroys creature via SBA 704.5g without damaging opponent (CR 601.2, CR 608.2, CR 704.5g)', () => {
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1'
+  });
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  p1.resources.manaPool.R = 1;
+  const bolt = {
+    instanceId: 'bolt_1',
+    name: 'Lightning Bolt',
+    typeLine: 'Instant',
+    manaCost: '{R}'
+  };
+  TabletopStateManager.hydrateCardMechanics(bolt);
+  p1.hand.push(bolt);
+
+  const bear = {
+    instanceId: 'bear_1',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    power: 2,
+    toughness: 2,
+    ownerId: 'p2',
+    controllerId: 'p2',
+    isTapped: false
+  };
+  TabletopStateManager.hydrateCardMechanics(bear);
+  p2.battlefield.creatures.push(bear);
+
+  // Cast Lightning Bolt targeting Grizzly Bears
+  tsm.dispatch('CAST_SPELL', {
+    playerId: 'p1',
+    instanceId: 'bolt_1',
+    targets: ['bear_1']
+  });
+
+  assert.strictEqual(tsm.stack.length, 1, 'Bolt is on stack');
+  const stackBolt = tsm.stack[0];
+  assert.deepStrictEqual(stackBolt.targets, ['bear_1'], 'Bolt has bear_1 target');
+
+  // Resolve stack
+  tsm.handleStackResolution(stackBolt);
+
+  // 1. Grizzly Bears was dealt 3 damage, destroyed by SBA 704.5g and put into p2 graveyard
+  assert.strictEqual(p2.battlefield.creatures.length, 0, 'Bear is no longer on battlefield');
+  assert.ok(p2.graveyard.some(c => c.instanceId === 'bear_1' || c.name === 'Grizzly Bears'), 'Bear moved to graveyard');
+
+  // 2. Opponent p2 life was NOT modified (remains 20)
+  assert.strictEqual(p2.resources.life, 20, 'Opponent p2 life remains 20');
 });
 
 console.log('\n==================================================================');

@@ -232,7 +232,13 @@ export class MulliganModal {
 
       const img = document.createElement('img');
       img.className = 'mulligan-card-img';
-      img.src = card.imageUrl || card.image_uris?.normal || 'assets/card-back.png';
+      const safeTitle = String(card.name || 'MTG').replace(/[<>&'"]/g, '');
+      const fallbackSvg = `data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='308' viewBox='0 0 220 308'><rect width='220' height='308' rx='12' fill='%231e293b' stroke='%23475569' stroke-width='4'/><circle cx='110' cy='140' r='40' fill='%230f172a' stroke='%2338bdf8' stroke-width='3'/><text x='110' y='145' text-anchor='middle' fill='%2338bdf8' font-family='sans-serif' font-size='14' font-weight='bold'>MTG</text><text x='110' y='225' text-anchor='middle' fill='%23f8fafc' font-family='sans-serif' font-size='13' font-weight='bold'>${encodeURIComponent(safeTitle)}</text></svg>`;
+      img.onerror = () => {
+        img.onerror = null;
+        img.src = fallbackSvg;
+      };
+      img.src = card.imageUri || card.imageUrl || card.image_uris?.normal || card.image_uris?.small || fallbackSvg;
       img.alt = card.name || 'Card';
       cardEl.appendChild(img);
 

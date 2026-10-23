@@ -45,9 +45,13 @@ export {
 export {
   TabletopStateManager,
   projectState,
+  hydrateCardMechanics,
   LandLimitExceededError,
   PhaseTimingError
 } from './TabletopStateManager.js';
+
+export { PregameStateMachine, PREGAME_STATES, MULLIGAN_SUBSTATES } from './PregameStateMachine.js';
+export { ProcessTraceLogger, defaultProcessTraceLogger } from './ProcessTraceLogger.js';
 
 export {
   PriorityStateMachine,

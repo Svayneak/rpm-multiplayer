@@ -2134,6 +2134,53 @@
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+/* Clean Horizontal Battlefield Land Badges (INV-LAND-BADGE-1) */
+#battlefield-lands .strip-cards {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  align-items: center !important;
+}
+
+#battlefield-lands .battlefield-card-chip,
+#battlefield-lands .land-chip,
+.battlefield-strip.battlefield-lands .land-chip,
+.battlefield-card-chip.land-chip {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+  transform: none !important;
+  white-space: nowrap !important;
+  line-height: normal !important;
+  gap: 6px !important;
+  padding: 4px 8px !important;
+  border-radius: 4px !important;
+  background: rgba(30, 41, 59, 0.9) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  transition: opacity 0.2s ease, border-color 0.2s ease;
+  cursor: pointer;
+}
+
+#battlefield-lands .battlefield-card-chip.is-tapped,
+#battlefield-lands .battlefield-card-chip.tapped,
+#battlefield-lands .battlefield-card-chip.card-tapped,
+#battlefield-lands .land-chip.is-tapped,
+#battlefield-lands .land-chip.tapped,
+#battlefield-lands .land-chip.card-tapped,
+.battlefield-card-chip.land-chip.is-tapped,
+.battlefield-card-chip.land-chip.tapped,
+.battlefield-card-chip.land-chip.card-tapped {
+  opacity: 0.65 !important;
+  background: rgba(15, 23, 42, 0.85) !important;
+  border-color: rgba(255, 255, 255, 0.06) !important;
+  transform: none !important;
+  writing-mode: horizontal-tb !important;
+  text-orientation: mixed !important;
+}
+
 .opponent-land-card.is-tapped:hover {
   opacity: 0.82;
 }
@@ -2485,6 +2532,26 @@
 }
 
 /* 2. Target Selector Modal */
+#target-selector-modal,
+.target-modal-backdrop {
+  pointer-events: auto !important;
+  z-index: 10000 !important;
+}
+
+#target-selector-modal .target-modal-panel {
+  pointer-events: auto !important;
+  z-index: 10001 !important;
+}
+
+#target-selector-modal .target-candidate-item,
+#target-selector-modal .target-candidate-row,
+#target-selector-modal .target-btn-close,
+#target-selector-modal .btn-close-modal,
+#target-selector-modal #target-btn-cancel,
+#target-selector-modal .btn-cancel-target {
+  pointer-events: auto !important;
+}
+
 .target-candidates-list {
   display: flex;
   flex-direction: column;
@@ -2494,7 +2561,8 @@
   overflow-y: auto;
 }
 
-.target-candidate-item {
+.target-candidate-item,
+.target-candidate-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2505,18 +2573,21 @@
   transition: all 0.15s ease;
 }
 
-.target-candidate-item.legal {
+.target-candidate-item.legal,
+.target-candidate-row.legal {
   cursor: pointer;
   border-color: rgba(16, 185, 129, 0.4);
 }
 
-.target-candidate-item.legal:hover {
+.target-candidate-item.legal:hover,
+.target-candidate-row.legal:hover {
   background: #1e3a2f;
   border-color: #10b981;
   transform: translateX(4px);
 }
 
-.target-candidate-item.illegal {
+.target-candidate-item.illegal,
+.target-candidate-row.illegal {
   opacity: 0.45;
   cursor: not-allowed;
   filter: grayscale(40%);
@@ -2664,3 +2735,23 @@
   background: #2563eb;
   box-shadow: 0 0 8px rgba(37, 99, 235, 0.5);
 }
+
+/* ===== Combat declaration feedback (CR 508): candidates, selection, tapped state ===== */
+.creature-chip.attack-candidate {
+  cursor: pointer;
+  outline: 2px dashed #f5a623;
+  outline-offset: 2px;
+}
+.creature-chip.attack-candidate:hover { filter: brightness(1.25); }
+.creature-chip.attack-selected {
+  outline: 2px solid #ff4d4d;
+  background: rgba(255, 77, 77, 0.25);
+  box-shadow: 0 0 8px rgba(255, 77, 77, 0.7);
+}
+.creature-chip.tapped, .creature-chip.is-tapped {
+  opacity: 0.62;
+  filter: grayscale(0.4);
+}
+.creature-chip.is-attacking { box-shadow: 0 0 8px rgba(255, 140, 0, 0.8); }
+.attack-confirm-bar { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.attack-confirm-bar .attack-hint { font-size: 0.8rem; opacity: 0.8; }

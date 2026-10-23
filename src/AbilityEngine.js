@@ -38,10 +38,12 @@ export const CONTINUOUS_LAYERS = Object.freeze({
 });
 
 export class AbilityEngine {
-  constructor() {
+  constructor(options = {}) {
     this.staticEffects = []; // Array of registered continuous effects
     this.triggeredQueue = []; // Staged triggers awaiting stack placement
     this._nextTimestamp = 0;
+    this.tabletopState = options.tabletopState || null;
+    this.traceLogger = options.traceLogger || null;
   }
 
   // ==========================================
@@ -159,10 +161,38 @@ export class AbilityEngine {
    */
   queueTrigger(trigger) {
     if (trigger) {
-      this.triggeredQueue.push({
+      const entry = {
         ...trigger,
         queuedAt: Date.now()
-      });
+      };
+      this.triggeredQueue.push(entry);
+
+      const state = this.tabletopState || this._tabletopState;
+      if (state && typeof state.recordTrace === 'function') {
+        state.recordTrace('TRIGGER_TRACE', 'TRIGGER_QUEUED', {
+          sourceId: trigger.sourceId,
+          sourceName: trigger.sourceName || trigger.name || 'Ability',
+          controllerId: trigger.controllerId,
+          triggerCondition: trigger.triggerCondition || trigger.event || 'ABILITY',
+          text: trigger.text || null
+        });
+      } else if (this.traceLogger && typeof this.traceLogger.record === 'function') {
+        this.traceLogger.record({
+          category: 'TRIGGER_TRACE',
+          action: 'TRIGGER_QUEUED',
+          payload: {
+            sourceId: trigger.sourceId,
+            sourceName: trigger.sourceName || trigger.name || 'Ability',
+            controllerId: trigger.controllerId,
+            triggerCondition: trigger.triggerCondition || trigger.event || 'ABILITY',
+            text: trigger.text || null
+          }
+        });
+      }
+
+      if (state && typeof state.emit === 'function') {
+        state.emit('TRIGGER_QUEUED', entry);
+      }
     }
   }
 
@@ -204,12 +234,40 @@ export class AbilityEngine {
         sourceName: trig.sourceName || 'Triggered Ability',
         controllerId: trig.controllerId,
         type: 'TRIGGERED_ABILITY',
+        triggerCondition: trig.triggerCondition || trig.event || 'ABILITY',
         abilityText: trig.text || `${trig.event || 'Trigger'} ability`,
         effect: trig.effect,
         targets: trig.targets || [],
         timestamp
       };
     });
+
+    const state = this.tabletopState || this._tabletopState;
+    if (state && typeof state.recordTrace === 'function') {
+      state.recordTrace('TRIGGER_TRACE', 'TRIGGER_FLUSHED_APNAP', {
+        flushedCount: stackItems.length,
+        triggers: stackItems.map(t => ({
+          id: t.id,
+          sourceId: t.sourceId,
+          controllerId: t.controllerId,
+          triggerCondition: t.triggerCondition
+        }))
+      });
+    } else if (this.traceLogger && typeof this.traceLogger.record === 'function') {
+      this.traceLogger.record({
+        category: 'TRIGGER_TRACE',
+        action: 'TRIGGER_FLUSHED_APNAP',
+        payload: {
+          flushedCount: stackItems.length,
+          triggers: stackItems.map(t => ({
+            id: t.id,
+            sourceId: t.sourceId,
+            controllerId: t.controllerId,
+            triggerCondition: t.triggerCondition
+          }))
+        }
+      });
+    }
 
     return stackItems;
   }
@@ -269,6 +327,16 @@ export class AbilityEngine {
     const basePower = Number(card.power ?? card.basePower ?? 0) || 0;
     const baseToughness = Number(card.toughness ?? card.baseToughness ?? 0) || 0;
 
+    const normalizedKeywords = Array.isArray(card.keywords)
+      ? card.keywords.reduce((acc, k) => {
+          if (typeof k === 'string') {
+            acc[k] = true;
+            acc[k.toLowerCase()] = true;
+          }
+          return acc;
+        }, {})
+      : { ...(card.keywords || {}) };
+
     const evaluated = {
       ...card,
       basePower,
@@ -276,7 +344,7 @@ export class AbilityEngine {
       effectivePower: basePower,
       effectiveToughness: baseToughness,
       grantedAbilities: [...(card.grantedAbilities || [])],
-      keywords: { ...(card.keywords || {}) }
+      keywords: normalizedKeywords
     };
 
     // If card has inherent Indestructible keyword, record it
@@ -285,8 +353,32 @@ export class AbilityEngine {
       evaluated.isIndestructible = true;
     }
 
+    if (card.strippedProtectionUntilEOT || evaluated.strippedProtectionUntilEOT) {
+      evaluated.isIndestructible = false;
+      delete evaluated.keywords.indestructible;
+      delete evaluated.keywords.Indestructible;
+      delete evaluated.keywords.hexproof;
+      delete evaluated.keywords.Hexproof;
+    }
+
+    let countersApplied = false;
+    const applyCounters = () => {
+      if (countersApplied) return;
+      countersApplied = true;
+      if (isCreature && evaluated.counters) {
+        const p1 = Number(evaluated.counters['+1/+1'] || 0);
+        const m1 = Number(evaluated.counters['-1/-1'] || 0);
+        evaluated.effectivePower += (p1 - m1);
+        evaluated.effectiveToughness += (p1 - m1);
+      }
+    };
+
     // Iterate through all registered continuous effects in strict layer order
     for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) {
+        continue;
+      }
+
       if (effect.appliesTo && !effect.appliesTo(evaluated, context)) {
         continue;
       }
@@ -336,28 +428,26 @@ export class AbilityEngine {
 
         case CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT:
           isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          // e.g. Static -1/-1 debuff (Night of Souls' Betrayal, Elesh Norn)
+          // e.g. Static -1/-1 debuff (Night of Souls' Betrayal, Elesh Norn) or Prowess buff
           if (isCreature) {
-            evaluated.effectivePower += (effect.powerMod || 0);
-            evaluated.effectiveToughness += (effect.toughnessMod || 0);
+            evaluated.effectivePower += (effect.powerMod || effect.powerDelta || 0);
+            evaluated.effectiveToughness += (effect.toughnessMod || effect.toughnessDelta || 0);
+            if (typeof effect.effectFn === 'function') {
+              effect.effectFn(evaluated, context);
+            }
             if (effect.apply) effect.apply(evaluated, context);
           }
           break;
 
         case CONTINUOUS_LAYERS.LAYER_7D_COUNTERS_PT:
           isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          // Counters: +1/+1 and -1/-1 counters
-          if (isCreature && evaluated.counters) {
-            const p1 = evaluated.counters['+1/+1'] || 0;
-            const m1 = evaluated.counters['-1/-1'] || 0;
-            evaluated.effectivePower += (p1 - m1);
-            evaluated.effectiveToughness += (p1 - m1);
-          }
+          applyCounters();
           if (isCreature && effect.apply) effect.apply(evaluated, context);
           break;
 
         case CONTINUOUS_LAYERS.LAYER_7E_SWITCH_PT:
           isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
+          applyCounters();
           if (isCreature && effect.switchPT) {
             const temp = evaluated.effectivePower;
             evaluated.effectivePower = evaluated.effectiveToughness;
@@ -372,7 +462,41 @@ export class AbilityEngine {
       }
     }
 
+    applyCounters();
+
+    evaluated.power = evaluated.effectivePower;
+    evaluated.toughness = evaluated.effectiveToughness;
+
+    if (card.strippedProtectionUntilEOT || evaluated.strippedProtectionUntilEOT) {
+      evaluated.isIndestructible = false;
+      delete evaluated.keywords.indestructible;
+      delete evaluated.keywords.Indestructible;
+      delete evaluated.keywords.hexproof;
+      delete evaluated.keywords.Hexproof;
+    }
+
     return evaluated;
+  }
+
+  /**
+   * Evaluates creature stats considering all continuous layers and active effects.
+   * 
+   * @param {Object} creature - Creature permanent
+   * @param {Object} [gameState={}] - Optional tabletop / game state context
+   * @returns {{ power: number, toughness: number, keywords: Object, effectivePower: number, effectiveToughness: number }}
+   */
+  evaluateCreatureStats(creature, gameState = {}) {
+    if (!creature) {
+      return { power: 0, toughness: 0, keywords: {}, effectivePower: 0, effectiveToughness: 0 };
+    }
+    const evaluated = this.evaluatePermanentLayers(creature, gameState);
+    return {
+      power: evaluated.effectivePower ?? Number(creature.power ?? 0) ?? 0,
+      toughness: evaluated.effectiveToughness ?? Number(creature.toughness ?? 0) ?? 0,
+      keywords: evaluated.keywords || {},
+      effectivePower: evaluated.effectivePower ?? Number(creature.power ?? 0) ?? 0,
+      effectiveToughness: evaluated.effectiveToughness ?? Number(creature.toughness ?? 0) ?? 0
+    };
   }
 }
 

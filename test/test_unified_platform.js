@@ -730,21 +730,23 @@ async function runTestSuite() {
     });
     await app.mount(container);
 
-    // Turn 1 in 1v1 -> Dormant until Turn 4
+    // Round 1 in 1v1 -> Dormant until Round 4
     app.priorityMachine.turnNumber = 1;
+    app.priorityMachine.roundNumber = 1;
     app.reconcileDOM();
 
     const emblemTurn1 = container.querySelector('#command-emblem-text');
     assert.ok(emblemTurn1, '#command-emblem-text must exist');
-    assert.ok(emblemTurn1.textContent.includes('Dormant until Turn 4'), 'Turn 1 must display dormancy until Turn 4');
+    assert.ok(emblemTurn1.textContent.includes('Dormant until Round 4'), 'Round 1 must display dormancy until Round 4');
 
-    // Turn 4 arrives
-    app.priorityMachine.turnNumber = 4;
+    // Round 4 arrives (turn 7 in 1v1)
+    app.priorityMachine.turnNumber = 7;
+    app.priorityMachine.roundNumber = 4;
     app.priorityMachine.currentPhaseStep = 'upkeep';
     app.reconcileDOM();
 
     const emblemTurn4 = container.querySelector('#command-emblem-text');
-    assert.ok(emblemTurn4.textContent.includes('Active'), 'Turn 4 must display Perk Emblem: Active');
+    assert.ok(emblemTurn4.textContent.includes('Active'), 'Round 4 must display Perk Emblem: Active');
 
     app.destroy();
   });

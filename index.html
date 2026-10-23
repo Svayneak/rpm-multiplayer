@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="description" content="RPM Modern Tabletop Companion - Real-Time Multiplayer Tabletop Arena">
   <title>RPM Modern Tabletop Companion</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="shortcut icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
 
   <!-- High-Performance Typography & Mana Font Embeds -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -189,6 +192,7 @@
         const app = new RPMAppController({
           container: '#app-root',
           autoConnect: true,
+          pregame: true,
           requireAuth: true
         });
         await app.mount();

@@ -302,7 +302,10 @@ export class ZoneModel {
       const managerStack = Array.isArray(playerStateOrManager.stack) ? playerStateOrManager.stack : stack;
       for (const player of Object.values(playerStateOrManager.players)) {
         const found = this._findCardInPlayer(player, instanceId);
-        if (found) return found;
+        if (found) {
+          if (!found.player) found.player = player;
+          return found;
+        }
       }
       // Check stack
       if (Array.isArray(managerStack)) {
@@ -352,14 +355,15 @@ export class ZoneModel {
     for (const zone of simpleZones) {
       const arr = playerState[zone];
       if (Array.isArray(arr)) {
-        const idx = arr.findIndex(c => c && c.instanceId === instanceId);
+        const idx = arr.findIndex(c => c && (c.instanceId === instanceId || c.id === instanceId));
         if (idx !== -1) {
           return {
             card: arr[idx],
             zone,
             subzone: null,
             index: idx,
-            container: arr
+            container: arr,
+            player: playerState
           };
         }
       }
@@ -370,14 +374,15 @@ export class ZoneModel {
       for (const sub of subzones) {
         const arr = playerState.battlefield[sub];
         if (Array.isArray(arr)) {
-          const idx = arr.findIndex(c => c && c.instanceId === instanceId);
+          const idx = arr.findIndex(c => c && (c.instanceId === instanceId || c.id === instanceId));
           if (idx !== -1) {
             return {
               card: arr[idx],
               zone: 'battlefield',
               subzone: sub,
               index: idx,
-              container: arr
+              container: arr,
+              player: playerState
             };
           }
         }
@@ -400,6 +405,49 @@ export class ZoneModel {
     if (!found) return null;
 
     found.container.splice(found.index, 1);
+
+    // Eradicate zombie references from playerState.zones (especially playerState.zones.battlefield)
+    const targetPlayer = found.player || (playerStateOrManager?.players ? null : playerStateOrManager);
+    if (targetPlayer?.zones && typeof targetPlayer.zones === 'object') {
+      if (Array.isArray(targetPlayer.zones.battlefield)) {
+        for (let i = targetPlayer.zones.battlefield.length - 1; i >= 0; i--) {
+          const c = targetPlayer.zones.battlefield[i];
+          if (c && (c.instanceId === instanceId || c.id === instanceId)) {
+            targetPlayer.zones.battlefield.splice(i, 1);
+          }
+        }
+      }
+      if (found.zone && Array.isArray(targetPlayer.zones[found.zone]) && targetPlayer.zones[found.zone] !== found.container) {
+        for (let i = targetPlayer.zones[found.zone].length - 1; i >= 0; i--) {
+          const c = targetPlayer.zones[found.zone][i];
+          if (c && (c.instanceId === instanceId || c.id === instanceId)) {
+            targetPlayer.zones[found.zone].splice(i, 1);
+          }
+        }
+      }
+    } else if (playerStateOrManager?.players && typeof playerStateOrManager.players === 'object') {
+      for (const p of Object.values(playerStateOrManager.players)) {
+        if (p?.zones && typeof p.zones === 'object') {
+          if (Array.isArray(p.zones.battlefield)) {
+            for (let i = p.zones.battlefield.length - 1; i >= 0; i--) {
+              const c = p.zones.battlefield[i];
+              if (c && (c.instanceId === instanceId || c.id === instanceId)) {
+                p.zones.battlefield.splice(i, 1);
+              }
+            }
+          }
+          if (found.zone && Array.isArray(p.zones[found.zone]) && p.zones[found.zone] !== found.container) {
+            for (let i = p.zones[found.zone].length - 1; i >= 0; i--) {
+              const c = p.zones[found.zone][i];
+              if (c && (c.instanceId === instanceId || c.id === instanceId)) {
+                p.zones[found.zone].splice(i, 1);
+              }
+            }
+          }
+        }
+      }
+    }
+
     return {
       card: found.card,
       zone: found.zone,

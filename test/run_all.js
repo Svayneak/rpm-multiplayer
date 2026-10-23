@@ -55,6 +55,7 @@ export const MODULE_SUITES = Object.freeze([
   'test_core_engines_unit.js',
   'test_zone_and_combat_unit.js',
   'test_tabletop_orchestration.js',
+  'test_pregame_turns_combat.js',
   'test_ui_modals_unit.js',
   'test_perkins_module5.js'
 ]);

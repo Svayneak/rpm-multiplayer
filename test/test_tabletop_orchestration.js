@@ -328,6 +328,172 @@ it('Instant spell resolves to graveyard with identity reset', () => {
   assert.deepStrictEqual(p1.graveyard[0].counters, {}, 'Counters must be reset');
 });
 
+it('End-to-End: casting a creature spell and resolving via PriorityStateMachine.resolveTop() puts creature on battlefield', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    startingPlayerId: 'p1'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    priorityMachine: psm
+  });
+  psm.tabletopState = tsm;
+  tsm.priorityMachine = psm;
+  psm.currentPhaseStep = 'PRECOMBAT_MAIN';
+  psm.priorityPlayerId = 'p1';
+  psm.activePlayerId = 'p1';
+
+  const p1 = tsm.getPlayer('p1');
+  const creatureCard = {
+    instanceId: 'grizzly_bear_e2e_1',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    manaCost: '{1}{G}',
+    power: 2,
+    toughness: 2,
+    controllerId: 'p1',
+    ownerId: 'p1'
+  };
+
+  p1.hand.push(creatureCard);
+  if (p1.zones?.hand) p1.zones.hand.push(creatureCard);
+  p1.resources.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 2, C: 0 };
+
+  // 1. Cast creature spell
+  tsm.castSpell('p1', 'grizzly_bear_e2e_1');
+
+  // Verify it exists on stack
+  assert.strictEqual(tsm.stack.length, 1, 'TSM stack must contain the cast creature spell');
+  assert.strictEqual(psm.stack.length, 1, 'PSM stack must contain the cast creature spell');
+
+  // 2. Resolve via PriorityStateMachine.resolveTop()
+  const resolved = psm.resolveTop();
+  assert.ok(resolved, 'resolveTop must return resolved item');
+
+  // 3. Verify final state per CR 608.2 / CR 400.7
+  assert.strictEqual(tsm.stack.length, 0, 'TSM stack must be empty after resolution');
+  assert.strictEqual(psm.stack.length, 0, 'PSM stack must be empty after resolution');
+  assert.strictEqual(p1.battlefield.creatures.length, 1, 'player.battlefield.creatures.length must be exactly 1');
+  assert.strictEqual(p1.battlefield.creatures[0].name, 'Grizzly Bears');
+  assert.strictEqual(p1.battlefield.creatures[0].power, 2);
+  assert.strictEqual(p1.battlefield.creatures[0].toughness, 2);
+  // 4. Verify that casting a creature with residual targets does NOT falsely fizzle (CR 302.1 / CR 608.2b)
+  const bearCard2 = {
+    instanceId: 'grizzly_bear_e2e_2',
+    name: 'Grizzly Bears',
+    typeLine: 'Creature — Bear',
+    manaCost: '{1}{G}',
+    power: 2,
+    toughness: 2,
+    controllerId: 'p1',
+    ownerId: 'p1'
+  };
+  p1.hand.push(bearCard2);
+  p1.resources.manaPool.G = 2;
+
+  tsm.castSpell('p1', 'grizzly_bear_e2e_2', { targets: ['some_illegal_stale_target_id'] });
+  assert.strictEqual(tsm.stack.length, 1);
+  const resolved2 = psm.resolveTop();
+  assert.ok(resolved2);
+  assert.strictEqual(p1.battlefield.creatures.length, 2, 'Creature with residual targets must resolve to battlefield without fizzling');
+});
+
+// ----------------------------------------------------
+// Section 5: Turn Sequence, Second Player Draw & Damage
+// ----------------------------------------------------
+console.log('\n--- 5. Second Player Draw & Spell Damage Integration ---');
+
+it('CR 103.7a & CR 103.8a: Player 1 skips draw on Turn 1; Player 2 draws on Turn 2 increasing hand from 7 to 8', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    startingPlayerId: 'p1'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1',
+    priorityMachine: psm
+  });
+  psm.tabletopState = tsm;
+  tsm.priorityMachine = psm;
+
+  const p1 = tsm.getPlayer('p1');
+  const p2 = tsm.getPlayer('p2');
+
+  for (let i = 1; i <= 7; i++) {
+    p1.hand.push({ instanceId: `p1_h_${i}`, name: `Card ${i}` });
+    p2.hand.push({ instanceId: `p2_h_${i}`, name: `Card ${i}` });
+  }
+  for (let i = 1; i <= 20; i++) {
+    p1.library.push({ instanceId: `p1_lib_${i}`, name: `Lib ${i}` });
+    p2.library.push({ instanceId: `p2_lib_${i}`, name: `Lib ${i}` });
+  }
+
+  assert.strictEqual(p1.hand.length, 7);
+  assert.strictEqual(p2.hand.length, 7);
+
+  // Turn 1: P1 advances to DRAW step -> skips draw per CR 103.7a
+  psm.setPhaseStep('DRAW');
+  assert.strictEqual(p1.hand.length, 7, 'P1 must skip Turn 1 draw in 1v1');
+
+  // P1 finishes turn -> advance to Turn 2 (P2's turn)
+  psm.setPhaseStep('CLEANUP');
+  psm.advanceStep(); // advances to P2's turn UNTAP
+
+  assert.strictEqual(psm.activePlayerId, 'p2');
+  assert.strictEqual(psm.turnNumber, 2);
+
+  // Advancing nextPhase from UNTAP towards MAIN 1 must run DRAW hook
+  psm.nextPhase('p2');
+  assert.strictEqual(psm.currentPhaseStep, 'PRECOMBAT_MAIN', 'nextPhase from UNTAP must reach PRECOMBAT_MAIN');
+  assert.strictEqual(p2.hand.length, 8, 'P2 hand must increase from 7 to 8 on their first turn');
+});
+
+it('Deal Damage Effect (Lava Spike / Lightning Bolt): Resolving without explicit target in 1v1 damages opponent and notifies subscribers', () => {
+  const psm = new PriorityStateMachine({
+    players: ['p1', 'p2'],
+    startingPlayerId: 'p1'
+  });
+  const tsm = new TabletopStateManager({
+    players: ['p1', 'p2'],
+    activePlayerId: 'p1',
+    startingPlayerId: 'p1',
+    priorityMachine: psm
+  });
+  psm.tabletopState = tsm;
+  tsm.priorityMachine = psm;
+
+  let subscriberNotified = false;
+  let notifiedLife = null;
+  tsm.subscribe((evt) => {
+    if (evt?.actionType === 'DAMAGE_DEALT') {
+      subscriberNotified = true;
+      notifiedLife = evt?.result?.newLife ?? evt?.payload?.newLife;
+    }
+  });
+
+  const p2 = tsm.getPlayer('p2');
+  p2.resources.life = 20;
+
+  const lavaSpike = {
+    instanceId: 'lava_spike_01',
+    name: 'Lava Spike',
+    typeLine: 'Sorcery — Arcane',
+    effect: { type: 'DEAL_DAMAGE', amount: 3 },
+    controllerId: 'p1',
+    ownerId: 'p1'
+  };
+
+  tsm.stack.push(lavaSpike);
+  const result = tsm.handleStackResolution({ card: lavaSpike, controllerId: 'p1' });
+
+  assert.ok(result);
+  assert.strictEqual(p2.resources.life, 17, 'Opponent life must drop from 20 to 17');
+  assert.strictEqual(subscriberNotified, true, '_notifySubscribers must be invoked on spell damage');
+  assert.strictEqual(notifiedLife, 17);
+});
+
 console.log(`\n=================================================`);
 console.log(`MODULE 3 TEST RESULTS: ${passed} passed, ${failed} failed`);
 console.log(`=================================================\n`);

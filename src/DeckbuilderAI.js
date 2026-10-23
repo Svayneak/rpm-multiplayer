@@ -21,6 +21,7 @@
 import { StorageAdapter, validateAndGuardGuidelineQuota } from './StorageAdapter.js';
 import { DeckValidator, VALIDATION_ERRORS } from './DeckValidator.js';
 import { evaluateDeckSlots, DECK_SLOT_MILESTONES } from './VictoryFanfare.js';
+import { hydrateCardMechanics } from './TabletopStateManager.js';
 
 // =============================================================================
 // Constants & Semantic Vocabulary
@@ -81,7 +82,10 @@ export const STARTER_CARD_METADATA = {
     imageUri: 'https://cards.scryfall.io/normal/front/3/b/3b0e5411-1940-4c05-9610-0f9752b450c3.jpg',
     power: 2,
     toughness: 2,
-    colors: ['R']
+    colors: ['R'],
+    keywords: { haste: true },
+    hasSummoningSickness: false,
+    isSummoningSick: false
   },
   'monastery swiftspear': {
     name: 'Monastery Swiftspear',
@@ -93,7 +97,10 @@ export const STARTER_CARD_METADATA = {
     imageUri: 'https://cards.scryfall.io/normal/front/d/6/d6bfa227-4309-40ed-952c-279595eab17e.jpg',
     power: 1,
     toughness: 2,
-    colors: ['R']
+    colors: ['R'],
+    keywords: { haste: true, prowess: true },
+    hasSummoningSickness: false,
+    isSummoningSick: false
   },
   'eidolon of the great revel': {
     name: 'Eidolon of the Great Revel',
@@ -115,7 +122,8 @@ export const STARTER_CARD_METADATA = {
     type: 'Instant',
     oracleText: 'Lightning Bolt deals 3 damage to any target.',
     imageUri: 'https://cards.scryfall.io/normal/front/f/2/f29ba16f-c8fb-42fe-aabf-87089cb214a7.jpg',
-    colors: ['R']
+    colors: ['R'],
+    effect: { type: 'DEAL_DAMAGE', amount: 3, targetType: 'any' }
   },
   'lava spike': {
     name: 'Lava Spike',
@@ -125,7 +133,8 @@ export const STARTER_CARD_METADATA = {
     type: 'Sorcery',
     oracleText: 'Lava Spike deals 3 damage to target player or planeswalker.',
     imageUri: 'https://cards.scryfall.io/normal/front/7/9/79c21c1f-eaa4-454d-a1c7-b41466d0a428.jpg',
-    colors: ['R']
+    colors: ['R'],
+    effect: { type: 'DEAL_DAMAGE', amount: 3, targetType: 'player_or_planeswalker' }
   },
   'rift bolt': {
     name: 'Rift Bolt',
@@ -343,7 +352,8 @@ export const STARTER_CARD_METADATA = {
     type: 'Land',
     oracleText: "({T}: Add {U} or {R}.)\nAs Steam Vents enters the battlefield, you may pay 2 life. If you don't, it enters the battlefield tapped.",
     imageUri: 'https://cards.scryfall.io/normal/front/b/8/b8dea3ac-88ca-4179-8210-271223713c43.jpg',
-    colors: []
+    colors: [],
+    isShockland: true
   },
   'spirebluff canal': {
     name: 'Spirebluff Canal',
@@ -1249,8 +1259,14 @@ for (const a of PRECOMPILED_ARCHETYPES) {
           power: meta.power,
           toughness: meta.toughness,
           loyalty: meta.loyalty,
-          colors: meta.colors || []
+          colors: meta.colors || [],
+          effect: meta.effect,
+          keywords: meta.keywords ? { ...meta.keywords } : undefined,
+          isShockland: meta.isShockland,
+          hasSummoningSickness: meta.hasSummoningSickness,
+          isSummoningSick: meta.isSummoningSick
         };
+        hydrateCardMechanics(list[i]);
       }
     }
   }
@@ -1287,7 +1303,7 @@ export function dealStartingHands(playerIds, tabletopState, archetypeId = 'start
           oracleText: '',
           imageUri: ''
         };
-        return {
+        const c = {
           instanceId: `card_${pid}_${idx}_${Date.now()}`,
           name: meta.name || name,
           typeLine: meta.typeLine,
@@ -1304,8 +1320,15 @@ export function dealStartingHands(playerIds, tabletopState, archetypeId = 'start
           ownerId: pid,
           controllerId: pid,
           zone: 'HAND',
-          isTapped: false
+          isTapped: false,
+          effect: meta.effect,
+          keywords: meta.keywords ? { ...meta.keywords } : undefined,
+          isShockland: meta.isShockland,
+          hasSummoningSickness: meta.hasSummoningSickness,
+          isSummoningSick: meta.isSummoningSick
         };
+        hydrateCardMechanics(c);
+        return c;
       });
       p.zones.hand = handCards;
       p.hand = handCards;

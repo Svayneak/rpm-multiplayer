@@ -88,8 +88,8 @@ export class PerkinsAgent {
     this.starterDeck = options.starterDeck || null;
 
     // Subsystem bindings
-    this.app = null;
-    this.relayClient = null;
+    this.app = options.app || null;
+    this.relayClient = options.relayClient || null;
 
     // Safety and lifecycle trackers (INV-SAFE-3)
     this.isDestroyed = false;
@@ -99,6 +99,7 @@ export class PerkinsAgent {
     this._lastPhaseStep = null;
     this._lastCoachTimestamp = 0;
     this._completedMilestones = new Set();
+    this._spacebarTipShown = false;
     this._hasPlayedLandThisTurn = false;
     this._alarmActionCount = 0;
     this._isEvaluating = false;
@@ -209,9 +210,7 @@ export class PerkinsAgent {
             const top = typeof this.app.priorityMachine.peekStack === 'function'
               ? this.app.priorityMachine.peekStack()
               : (this.app.priorityMachine.stack?.[this.app.priorityMachine.stack.length - 1]);
-            if (!this.app.alarmManager) {
-              this.onStackAlarm({ targetPlayerId: this.slotId, stackItemId: top?.id });
-            }
+            this.onStackAlarm({ targetPlayerId: this.slotId, stackItemId: top?.id });
           } else {
             this._handleStackEmpty();
             this.evaluateTurnPhase(this.app.priorityMachine.currentPhaseStep);
@@ -229,6 +228,13 @@ export class PerkinsAgent {
         const currentPhase = event?.currentPhaseStep || event?.phaseStep;
         if (event?.priorityPlayerId === this.slotId || this.app.priorityMachine.priorityPlayerId === this.slotId) {
           this.evaluateTurnPhase(currentPhase);
+        } else if (
+          currentPhase === 'DECLARE_BLOCKERS' &&
+          event?.activePlayerId !== this.slotId &&
+          (this.app?.tabletopState?.combatState?.attackers?.length || 0) > 0 &&
+          !this.app?.tabletopState?.combatState?.blockersDeclared
+        ) {
+          this.evaluateTurnPhase(currentPhase);
         }
       };
       this.app.priorityMachine.on('PHASE_STEP_CHANGED', onPhaseStepChange);
@@ -236,8 +242,16 @@ export class PerkinsAgent {
 
       const onStackResolve = (event) => {
         if (this.isDestroyed) return;
-        if (event?.remainingStackSize === 0 || this.app?.priorityMachine?.stack?.length === 0) {
+        const psm = this.app?.priorityMachine;
+        if (event?.remainingStackSize === 0 || (psm?.stack?.length || 0) === 0) {
           this._handleStackEmpty();
+          if (psm && psm.priorityPlayerId === this.slotId) {
+            if (this._isEvaluating) {
+              this._pendingEvaluation = true;
+            } else {
+              this.evaluateTurnPhase(psm.currentPhaseStep);
+            }
+          }
         }
       };
       this.app.priorityMachine.on('STACK_RESOLVE', onStackResolve);
@@ -313,6 +327,9 @@ export class PerkinsAgent {
    */
   triggerMilestone(milestoneKey) {
     if (!this.coachEnabled || this.isDestroyed) return false;
+    if (milestoneKey === 'MS_PRIORITY_HOTKEY' && this._spacebarTipShown) {
+      return false;
+    }
 
     const now = Date.now();
     if (this._lastCoachTimestamp && (now - this._lastCoachTimestamp < 8000)) {
@@ -325,6 +342,9 @@ export class PerkinsAgent {
     const text = dialogue[this.language] || dialogue['es'];
     this._lastCoachTimestamp = now;
     this._completedMilestones.add(milestoneKey);
+    if (milestoneKey === 'MS_PRIORITY_HOTKEY') {
+      this._spacebarTipShown = true;
+    }
 
     if (this.app?.dualChat && typeof this.app.dualChat.sendChitChat === 'function') {
       this.app.dualChat.sendChitChat(text, 'perkins_coach', 'Perkins Coach');
@@ -365,6 +385,7 @@ export class PerkinsAgent {
 
     // 1. Concurrency Lock: Prevent parallel re-entrant executions (INV-BOT-THROTTLE-1)
     if (this._isEvaluating) {
+      this._pendingAlarmEvent = alarmState || { targetPlayerId: this.slotId };
       return;
     }
 
@@ -414,6 +435,9 @@ export class PerkinsAgent {
               const neededU = 2 - (manaPool.U || 0);
               const landsToTap = untappedLands.slice(0, neededU);
               for (const land of landsToTap) {
+                if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+                  try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+                }
                 land.isTapped = true;
                 await this.dispatchAction({
                   type: 'TAP_PERMANENT',
@@ -421,9 +445,6 @@ export class PerkinsAgent {
                   instanceId: land.instanceId || land.id,
                   payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
                 });
-                if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-                  try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
-                }
               }
             }
 
@@ -472,6 +493,9 @@ export class PerkinsAgent {
           if (boltTargetId) {
             if ((manaPool.R || 0) < 1 && untappedLands.length > 0) {
               const land = untappedLands[0];
+              if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+                try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+              }
               land.isTapped = true;
               await this.dispatchAction({
                 type: 'TAP_PERMANENT',
@@ -479,9 +503,6 @@ export class PerkinsAgent {
                 instanceId: land.instanceId || land.id,
                 payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
               });
-              if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-                try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
-              }
             }
 
             this._alarmActionCount++;
@@ -526,6 +547,9 @@ export class PerkinsAgent {
           if (pushTargetId) {
             if ((manaPool.B || 0) < 1 && untappedLands.length > 0) {
               const land = untappedLands[0];
+              if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+                try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
+              }
               land.isTapped = true;
               await this.dispatchAction({
                 type: 'TAP_PERMANENT',
@@ -533,9 +557,6 @@ export class PerkinsAgent {
                 instanceId: land.instanceId || land.id,
                 payload: { playerId: this.slotId, instanceId: land.instanceId || land.id }
               });
-              if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-                try { this.app.tabletopState.tapLandForMana(this.slotId, land.instanceId || land.id); } catch (_) {}
-              }
             }
 
             this._alarmActionCount++;
@@ -582,10 +603,48 @@ export class PerkinsAgent {
     } finally {
       this._isEvaluating = false;
       this._currentEvaluationPromise = null;
+      this._schedulePendingIfNeeded();
     }
     })();
 
     return await this._currentEvaluationPromise;
+  }
+
+  /**
+   * Schedules any queued phase evaluation or stack alarm reaction once current evaluation yields (INV-TURN-ROTATION-3).
+   * @private
+   */
+  _schedulePendingIfNeeded() {
+    if (this.isDestroyed || this._isEvaluating) return;
+    const psm = this.app?.priorityMachine;
+    if (!psm || psm.priorityPlayerId !== this.slotId) {
+      this._pendingEvaluation = false;
+      this._pendingAlarmEvent = null;
+      return;
+    }
+    const stackDepth = typeof psm.getStackDepth === 'function' ? psm.getStackDepth() : (psm.stack?.length || 0);
+    if (stackDepth > 0) {
+      const evt = this._pendingAlarmEvent || { targetPlayerId: this.slotId, stackItemId: psm.peekStack?.()?.id };
+      this._pendingAlarmEvent = null;
+      this._pendingEvaluation = false;
+      const t = setTimeout(() => {
+        this._activeTimers.delete(t);
+        if (!this.isDestroyed && psm.priorityPlayerId === this.slotId && (psm.stack?.length || 0) > 0) {
+          this.onStackAlarm(evt);
+        }
+      }, 0);
+      this._activeTimers.add(t);
+    } else if (stackDepth === 0) {
+      this._pendingEvaluation = false;
+      this._pendingAlarmEvent = null;
+      const t = setTimeout(() => {
+        this._activeTimers.delete(t);
+        if (!this.isDestroyed && psm.priorityPlayerId === this.slotId && (psm.stack?.length || 0) === 0) {
+          this.evaluateTurnPhase(psm.currentPhaseStep);
+        }
+      }, 0);
+      this._activeTimers.add(t);
+    }
   }
 
   /**
@@ -598,7 +657,12 @@ export class PerkinsAgent {
    */
   async evaluateTurnPhase(phaseStep, injectedState = null) {
     if (this.isDestroyed) return null;
-    if (this._isEvaluating) return null;
+    if (this._isEvaluating) {
+      // Re-entrancy (e.g. our own PASS_PRIORITY rotated the turn synchronously): do not drop the
+      // new phase; remember it and re-evaluate once the current evaluation yields (INV-TURN-ROTATION-3).
+      this._pendingEvaluation = true;
+      return null;
+    }
     this._isEvaluating = true;
     try {
       // Handle injected TabletopStateManager instance
@@ -608,6 +672,9 @@ export class PerkinsAgent {
     } else if (!state) {
       state = this.getProjectedState();
     }
+
+    const activePlayerId = state?.activePlayerId || this.app?.priorityMachine?.activePlayerId || this.slotId;
+    const isMyTurn = (activePlayerId === this.slotId);
 
     // Anti-hang guard: INV-SAFE-1 (max 10 actions per phase)
     if (this._lastPhaseStep !== phaseStep) {
@@ -627,14 +694,16 @@ export class PerkinsAgent {
 
     // Phase 1: UNTAP (CR 502)
     if (phaseStep === 'UNTAP') {
-      this._hasPlayedLandThisTurn = false;
-      const myPlayer = this.app?.tabletopState?.players?.[this.slotId];
-      if (myPlayer) {
-        const bf = myPlayer.battlefield || {};
-        for (const subzone of ['lands', 'creatures', 'noncreatures', 'planeswalkers']) {
-          for (const card of (bf[subzone] || [])) {
-            card.isTapped = false;
-            card.isSummoningSick = false;
+      if (isMyTurn) {
+        this._hasPlayedLandThisTurn = false;
+        const myPlayer = this.app?.tabletopState?.players?.[this.slotId];
+        if (myPlayer) {
+          const bf = myPlayer.battlefield || {};
+          for (const subzone of ['lands', 'creatures', 'noncreatures', 'planeswalkers']) {
+            for (const card of (bf[subzone] || [])) {
+              card.isTapped = false;
+              card.isSummoningSick = false;
+            }
           }
         }
       }
@@ -695,86 +764,95 @@ export class PerkinsAgent {
         )
       );
 
-      // 1. Play Land if not yet played this turn
-      if (!this._hasPlayedLandThisTurn) {
-        const landCard = handCards.find(c => c && !c.isHidden && /land/i.test(c.typeLine || c.type || ''));
-        if (landCard) {
-          this._hasPlayedLandThisTurn = true;
-          const playLandAction = {
-            type: 'PLAY_LAND',
-            playerId: this.slotId,
-            card: landCard,
-            payload: {
+      if (isMyTurn) {
+        // 1. Play Land if not yet played this turn
+        const canPlayLand = !this._hasPlayedLandThisTurn &&
+          (myState?.resources?.landsPlayedThisTurn ?? 0) < 1 &&
+          (myState?.landsPlayedThisTurn ?? 0) < 1;
+
+        if (canPlayLand) {
+          const landCard = handCards.find(c => c && !c.isHidden && /land/i.test(c.typeLine || c.type || ''));
+          if (landCard) {
+            this._hasPlayedLandThisTurn = true;
+            const playLandAction = {
+              type: 'PLAY_LAND',
               playerId: this.slotId,
               card: landCard,
-              instanceId: landCard.instanceId
-            }
-          };
-          await this.dispatchAction(playLandAction);
-          return playLandAction;
-        }
-      }
-
-      // 2. Cast Creatures / Sorceries if affordable
-      const manaPool = myState?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
-      const lands = myState?.battlefield?.lands || [];
-      const untappedLands = lands.filter(l => !l.isTapped);
-      const totalAvailableMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0) + untappedLands.length;
-
-      const castableCreatures = handCards.filter(c => {
-        if (!c || c.isHidden) return false;
-        const type = String(c.typeLine || c.type || '');
-        if (!/creature|sorcery/i.test(type)) return false;
-        const cmc = c.cmc ?? c.manaValue ?? this._parseCmc(c.manaCost);
-        return cmc <= totalAvailableMana;
-      });
-
-      if (castableCreatures.length > 0) {
-        castableCreatures.sort((a, b) => {
-          const cmcA = a.cmc ?? this._parseCmc(a.manaCost);
-          const cmcB = b.cmc ?? this._parseCmc(b.manaCost);
-          return cmcB - cmcA;
-        });
-        const cardToCast = castableCreatures[0];
-
-        // Explicitly tap matching lands before casting (INV-MANA-1)
-        const cmc = cardToCast.cmc ?? this._parseCmc(cardToCast.manaCost);
-        const landsNeeded = Math.min(cmc, untappedLands.length);
-        for (let i = 0; i < landsNeeded; i++) {
-          const landToTap = untappedLands[i];
-          landToTap.isTapped = true;
-          await this.dispatchAction({
-            type: 'TAP_PERMANENT',
-            playerId: this.slotId,
-            instanceId: landToTap.instanceId || landToTap.id,
-            payload: {
-              playerId: this.slotId,
-              instanceId: landToTap.instanceId || landToTap.id
-            }
-          });
-          if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
-            try { this.app.tabletopState.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
+              payload: {
+                playerId: this.slotId,
+                card: landCard,
+                instanceId: landCard.instanceId
+              }
+            };
+            await this.dispatchAction(playLandAction);
+            // Still holding priority with an empty stack: continue the phase (cast or pass) instead of stalling.
+            this._pendingEvaluation = true;
+            return playLandAction;
           }
         }
 
-        const castAction = {
-          type: 'CAST_SPELL',
-          playerId: this.slotId,
-          controllerId: this.slotId,
-          controllerName: this.playerName || 'Perkins AI (Bot)',
-          card: cardToCast,
-          cardName: cardToCast.name,
-          payload: {
+        // 2. Cast Creatures / Sorceries if affordable
+        const manaPool = myState?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+        const lands = myState?.battlefield?.lands || [];
+        const untappedLands = lands.filter(l => !l.isTapped);
+        const totalAvailableMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0) + untappedLands.length;
+
+        const castableCreatures = handCards.filter(c => {
+          if (!c || c.isHidden) return false;
+          const type = String(c.typeLine || c.type || '');
+          if (!/creature|sorcery/i.test(type)) return false;
+          const cmc = c.cmc ?? c.manaValue ?? this._parseCmc(c.manaCost);
+          return cmc <= totalAvailableMana;
+        });
+
+        if (castableCreatures.length > 0) {
+          castableCreatures.sort((a, b) => {
+            const cmcA = a.cmc ?? this._parseCmc(a.manaCost);
+            const cmcB = b.cmc ?? this._parseCmc(b.manaCost);
+            return cmcB - cmcA;
+          });
+          const cardToCast = castableCreatures[0];
+
+          // Explicitly tap matching lands before casting (INV-MANA-1)
+          const cmc = cardToCast.cmc ?? this._parseCmc(cardToCast.manaCost);
+          const floatingMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0);
+          const landsNeeded = Math.max(0, Math.min(cmc - floatingMana, untappedLands.length));
+          for (let i = 0; i < landsNeeded; i++) {
+            const landToTap = untappedLands[i];
+            if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
+              try { this.app.tabletopState.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
+            }
+            landToTap.isTapped = true;
+            await this.dispatchAction({
+              type: 'TAP_PERMANENT',
+              playerId: this.slotId,
+              instanceId: landToTap.instanceId || landToTap.id,
+              payload: {
+                playerId: this.slotId,
+                instanceId: landToTap.instanceId || landToTap.id
+              }
+            });
+          }
+
+          const castAction = {
+            type: 'CAST_SPELL',
             playerId: this.slotId,
             controllerId: this.slotId,
             controllerName: this.playerName || 'Perkins AI (Bot)',
             card: cardToCast,
             cardName: cardToCast.name,
-            instanceId: cardToCast.instanceId
-          }
-        };
-        await this.dispatchAction(castAction);
-        return castAction;
+            payload: {
+              playerId: this.slotId,
+              controllerId: this.slotId,
+              controllerName: this.playerName || 'Perkins AI (Bot)',
+              card: cardToCast,
+              cardName: cardToCast.name,
+              instanceId: cardToCast.instanceId
+            }
+          };
+          await this.dispatchAction(castAction);
+          return castAction;
+        }
       }
 
       // If no sorcery speed actions, pass priority
@@ -794,7 +872,8 @@ export class PerkinsAgent {
       const isActive = (state?.activePlayerId === this.slotId) ||
         (this.app?.priorityMachine?.activePlayerId === this.slotId);
 
-      if (isActive) {
+      const alreadyDeclared = (this.app?.tabletopState?.combatState?.attackers?.length || 0) > 0;
+      if (isActive && !alreadyDeclared) {
         const attackers = this.evaluateCombatAttacks(state);
         if (attackers.length > 0) {
           const attackAction = {
@@ -807,6 +886,7 @@ export class PerkinsAgent {
             }
           };
           await this.dispatchAction(attackAction);
+          this._pendingEvaluation = true;
           return attackAction;
         }
       }
@@ -817,9 +897,12 @@ export class PerkinsAgent {
 
     if (phaseStep === 'DECLARE_BLOCKERS') {
       const isDefending = (state?.activePlayerId !== this.slotId);
-      if (isDefending) {
-        const incomingAttackers = state?.combat?.attackers || [];
-        const blocks = this.evaluateCombatBlocks(state, incomingAttackers);
+      const alreadyBlocked = Boolean(this.app?.tabletopState?.combatState?.blockersDeclared) ||
+        (this.app?.tabletopState?.combatState?.blockers?.length || 0) > 0;
+      if (isDefending && !alreadyBlocked) {
+        const rawAttackers = state?.combat?.attackers ||
+          (this.app?.tabletopState?.combatState?.attackers || []).map(a => a?.creature || a).filter(Boolean);
+        const blocks = this.evaluateCombatBlocks(state, rawAttackers);
         if (blocks.length > 0) {
           const blockAction = {
             type: 'DECLARE_BLOCKERS',
@@ -831,8 +914,12 @@ export class PerkinsAgent {
             }
           };
           await this.dispatchAction(blockAction);
+          this._pendingEvaluation = true;
           return blockAction;
         }
+      }
+      if (this.app?.priorityMachine && this.app.priorityMachine.priorityPlayerId !== this.slotId) {
+        return null;
       }
       const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
       await this.dispatchAction(passAction);
@@ -853,6 +940,7 @@ export class PerkinsAgent {
     return defaultPass;
     } finally {
       this._isEvaluating = false;
+      this._schedulePendingIfNeeded();
     }
   }
 
@@ -876,7 +964,10 @@ export class PerkinsAgent {
     if (!myPlayer) return [];
 
     const myCreatures = myPlayer.battlefield?.creatures || [];
-    const eligibleAttackers = myCreatures.filter(c => !c.isTapped && !c.isSummoningSick);
+    const eligibleAttackers = myCreatures.filter(c => {
+      const check = CombatDamageEngine.canCreatureAttack(c, this.tabletopState);
+      return check.canAttack;
+    });
     if (eligibleAttackers.length === 0) return [];
 
     // Find all opponent untapped blockers
@@ -972,7 +1063,12 @@ export class PerkinsAgent {
         if (availableBlockers.length === 0) break;
         if (damageRemaining < currentLife) break;
 
-        const blocker = availableBlockers.shift();
+        const blockerIndex = availableBlockers.findIndex(b =>
+          CombatDamageEngine.canCreatureBlock(b, attacker, this.tabletopState).canBlock
+        );
+        if (blockerIndex === -1) continue;
+
+        const blocker = availableBlockers.splice(blockerIndex, 1)[0];
         assignments.push({
           blockerId: blocker.instanceId,
           attackerId: attacker.instanceId
@@ -983,17 +1079,34 @@ export class PerkinsAgent {
       return assignments;
     }
 
-    // Case 2: Non-lethal -> Profitable trade only
-    // blocker.power >= attacker.toughness && blocker.toughness > attacker.power
+    // Case 2: Non-lethal -> Profitable or even trade
+    // 1) First look for a strictly profitable blocker (bPower >= aToughness && bToughness > aPower)
+    // 2) If none found, look for an even-trade blocker (bPower >= aToughness && aPower >= bToughness && (aPower >= bPower || aPower >= 2))
     for (const attacker of incomingAttackers) {
       const aPower = Number(attacker.power) || 0;
       const aToughness = Number(attacker.toughness) || 0;
 
-      const blockerIndex = availableBlockers.findIndex(b => {
+      // 1. Strictly profitable blocker
+      let blockerIndex = availableBlockers.findIndex(b => {
+        const canBlock = CombatDamageEngine.canCreatureBlock(b, attacker, this.tabletopState).canBlock;
+        if (!canBlock) return false;
         const bPower = Number(b.power) || 0;
         const bToughness = Number(b.toughness) || 0;
         return bPower >= aToughness && bToughness > aPower;
       });
+
+      // 2. Even-trade blocker
+      if (blockerIndex === -1) {
+        blockerIndex = availableBlockers.findIndex(b => {
+          const canBlock = CombatDamageEngine.canCreatureBlock(b, attacker, this.tabletopState).canBlock;
+          if (!canBlock) return false;
+          const bPower = Number(b.power) || 0;
+          const bToughness = Number(b.toughness) || 0;
+          const isEvenTrade = bPower >= aToughness && aPower >= bToughness;
+          const isWorthyTrade = (aPower >= bPower || aPower >= 2 || Number(attacker.cmc ?? 0) >= Number(b.cmc ?? 0));
+          return isEvenTrade && isWorthyTrade;
+        });
+      }
 
       if (blockerIndex !== -1) {
         const blocker = availableBlockers.splice(blockerIndex, 1)[0];
@@ -1252,6 +1365,7 @@ export class PerkinsAgent {
    */
   destroy() {
     this.isDestroyed = true;
+    this._spacebarTipShown = false;
     for (const timer of this._activeTimers) {
       clearTimeout(timer);
       clearInterval(timer);

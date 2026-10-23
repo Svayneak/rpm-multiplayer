@@ -254,7 +254,8 @@ export class SearchSelectGridModal {
 
       const img = document.createElement('img');
       img.className = 'search-card-img';
-      img.src = card.imageUrl || card.image_uris?.normal || 'assets/card-back.png';
+      const fallbackSvg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='308' viewBox='0 0 220 308'><rect width='220' height='308' rx='12' fill='%231e293b' stroke='%23475569' stroke-width='4'/><circle cx='110' cy='154' r='44' fill='%230f172a' stroke='%2338bdf8' stroke-width='3'/><text x='110' y='160' text-anchor='middle' fill='%23e2e8f0' font-family='sans-serif' font-size='14'>MTG</text></svg>";
+      img.src = card.imageUri || card.imageUrl || card.image_uris?.normal || card.image_uris?.small || fallbackSvg;
       img.alt = card.name || 'Card';
       cardEl.appendChild(img);
 

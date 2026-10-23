@@ -14,6 +14,7 @@ import { CombatDamageEngine } from '../src/CombatDamageEngine.js';
 import { StateBasedActionsEngine } from '../src/StateBasedActionsEngine.js';
 import { AbilityEngine, CONTINUOUS_LAYERS } from '../src/AbilityEngine.js';
 import { ZoneModel } from '../src/ZoneModel.js';
+import { TabletopStateManager } from '../src/TabletopStateManager.js';
 
 let passed = 0;
 let failed = 0;
@@ -303,6 +304,60 @@ it('purgeCleanupMarkedDamage cleanses all marked damage during cleanup step (CR 
   assert.strictEqual(player.battlefield.creatures[0].damageMarked, 0);
   assert.strictEqual(player.battlefield.creatures[0].hasDeathtouchDamageMarked, false);
   assert.strictEqual(player.battlefield.lands[0].damageMarked, 0);
+});
+
+it('Zombie Array regression: two 2/2 Goblin Guides in battlefield and zones.battlefield trade and die to SBA', () => {
+  const state = new TabletopStateManager({ players: ['p1', 'p2'] });
+  const p1 = state.getPlayer('p1');
+  const p2 = state.getPlayer('p2');
+
+  const gg1 = {
+    instanceId: 'gg_p1',
+    name: 'Goblin Guide',
+    power: 2,
+    toughness: 2,
+    damageMarked: 0,
+    isTapped: false,
+    typeLine: 'Creature — Goblin Scout'
+  };
+  const gg2 = {
+    instanceId: 'gg_p2',
+    name: 'Goblin Guide',
+    power: 2,
+    toughness: 2,
+    damageMarked: 0,
+    isTapped: false,
+    typeLine: 'Creature — Goblin Scout'
+  };
+
+  // Present in BOTH player.battlefield.creatures AND player.zones.battlefield
+  p1.battlefield.creatures.push(gg1);
+  if (!p1.zones) p1.zones = {};
+  p1.zones.battlefield = [gg1];
+
+  p2.battlefield.creatures.push(gg2);
+  if (!p2.zones) p2.zones = {};
+  p2.zones.battlefield = [gg2];
+
+  // Attack and block
+  state.declareAttackers('p1', ['gg_p1']);
+  state.declareBlockers('p2', [{ blockerId: 'gg_p2', attackerId: 'gg_p1' }]);
+
+  // Resolve combat damage and run SBA
+  state.resolveCombatDamage();
+  state.runSBACheck();
+
+  // Assert both players' battlefield.creatures AND zones.battlefield are empty
+  assert.strictEqual(p1.battlefield.creatures.length, 0, 'P1 battlefield.creatures must be empty');
+  assert.strictEqual(p1.zones.battlefield.length, 0, 'P1 zones.battlefield must be empty (eradicate zombie array)');
+  assert.strictEqual(p2.battlefield.creatures.length, 0, 'P2 battlefield.creatures must be empty');
+  assert.strictEqual(p2.zones.battlefield.length, 0, 'P2 zones.battlefield must be empty (eradicate zombie array)');
+
+  // Assert both Goblin Guides are in their respective graveyards
+  assert.strictEqual(p1.graveyard.length, 1, 'P1 graveyard must contain 1 card');
+  assert.strictEqual(p2.graveyard.length, 1, 'P2 graveyard must contain 1 card');
+  assert.strictEqual(p1.graveyard[0].name, 'Goblin Guide');
+  assert.strictEqual(p2.graveyard[0].name, 'Goblin Guide');
 });
 
 console.log(`\n=================================================`);

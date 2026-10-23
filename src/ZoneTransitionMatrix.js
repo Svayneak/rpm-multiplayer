@@ -142,6 +142,27 @@ export class ZoneTransitionMatrix {
       throw new Error(`Card with instanceId '${instanceId}' not found in source zone '${fromZone}'`);
     }
 
+    // Defensive cleanup of combat flags and lingering zombie references from playerState.zones.battlefield
+    if (fromZone === 'battlefield') {
+      removalResult.card.isAttacking = false;
+      removalResult.card.defendingPlayerId = null;
+      removalResult.card.isBlocking = false;
+      removalResult.card.blockingTargetId = null;
+
+      if (Array.isArray(playerState.zones?.battlefield)) {
+        for (let i = playerState.zones.battlefield.length - 1; i >= 0; i--) {
+          const c = playerState.zones.battlefield[i];
+          if (c && (c.instanceId === instanceId || c.id === instanceId)) {
+            c.isAttacking = false;
+            c.defendingPlayerId = null;
+            c.isBlocking = false;
+            c.blockingTargetId = null;
+            playerState.zones.battlefield.splice(i, 1);
+          }
+        }
+      }
+    }
+
     // Apply CR 400.7 Zone-Change Identity Reset: the card becomes a brand-new object
     // (cloned, with a regenerated instanceId) in its destination zone.
     const card = this.createZoneChangedObject(removalResult.card, toZone);

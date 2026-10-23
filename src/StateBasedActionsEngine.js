@@ -45,7 +45,11 @@ export class StateBasedActionsEngine {
       // 1. CR 704.5a: Player with 0 or less life loses
       for (const [pid, player] of Object.entries(tabletopState.players || {})) {
         if (!player.isEliminated && (player.resources?.life ?? 20) <= 0) {
-          player.isEliminated = true;
+          if (typeof tabletopState.eliminatePlayer === 'function') {
+            tabletopState.eliminatePlayer(pid, 'LIFE_ZERO_OR_LESS');
+          } else {
+            player.isEliminated = true;
+          }
           passActions.push({
             type: 'PLAYER_ELIMINATED',
             rule: 'CR 704.5a',
@@ -58,7 +62,11 @@ export class StateBasedActionsEngine {
       // 2. CR 704.5c: Player with 10+ poison counters loses
       for (const [pid, player] of Object.entries(tabletopState.players || {})) {
         if (!player.isEliminated && (player.resources?.poison || 0) >= 10) {
-          player.isEliminated = true;
+          if (typeof tabletopState.eliminatePlayer === 'function') {
+            tabletopState.eliminatePlayer(pid, 'POISON_TEN_OR_MORE');
+          } else {
+            player.isEliminated = true;
+          }
           passActions.push({
             type: 'PLAYER_ELIMINATED',
             rule: 'CR 704.5c',
@@ -96,11 +104,20 @@ export class StateBasedActionsEngine {
 
         for (const card of creatures) {
           // If AbilityEngine is available, evaluate continuous layers first
-          const evaluated = effectiveAbilityEngine ? effectiveAbilityEngine.evaluatePermanentLayers(card, tabletopState) : card;
-
-          const toughness = evaluated.effectiveToughness !== undefined 
-            ? evaluated.effectiveToughness 
-            : (Number(card.toughness) || 0);
+          let evaluated = card;
+          let toughness = Number(card.toughness) || 0;
+          if (effectiveAbilityEngine) {
+            if (typeof effectiveAbilityEngine.evaluateCreatureStats === 'function') {
+              const stats = effectiveAbilityEngine.evaluateCreatureStats(card, tabletopState);
+              toughness = stats.toughness ?? stats.effectiveToughness ?? toughness;
+              evaluated = effectiveAbilityEngine.evaluatePermanentLayers(card, tabletopState);
+            } else if (typeof effectiveAbilityEngine.evaluatePermanentLayers === 'function') {
+              evaluated = effectiveAbilityEngine.evaluatePermanentLayers(card, tabletopState);
+              toughness = evaluated.effectiveToughness !== undefined 
+                ? evaluated.effectiveToughness 
+                : (Number(card.toughness) || 0);
+            }
+          }
 
           const markedDamage = card.damageMarked || 0;
           const isIndestructible = !!(
@@ -121,6 +138,8 @@ export class StateBasedActionsEngine {
               playerId: pid,
               cardId: card.instanceId,
               cardName: card.name,
+              markedDamage,
+              toughness,
               effectiveToughness: toughness,
               bypassedIndestructible: isIndestructible
             });
@@ -161,7 +180,9 @@ export class StateBasedActionsEngine {
               rule: 'CR 704.5h',
               playerId: pid,
               cardId: card.instanceId,
-              cardName: card.name
+              cardName: card.name,
+              markedDamage,
+              toughness
             });
             continue;
           }
@@ -274,6 +295,13 @@ export class StateBasedActionsEngine {
       if (passActions.length === 0) {
         break;
       }
+    }
+
+    if (allActions.length > 0 && typeof tabletopState.recordTrace === 'function') {
+      tabletopState.recordTrace('SBA_TRACE', 'SBA_APPLIED', {
+        cycleCount: loopCount,
+        actions: allActions
+      });
     }
 
     if (totalActionsApplied > 0 && tabletopState.emit) {

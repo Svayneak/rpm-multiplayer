@@ -6,6 +6,8 @@
  * @module PerkCatalog
  */
 
+import { ZoneTransitionMatrix } from './ZoneTransitionMatrix.js';
+
 export const PERK_KEYS = Object.freeze([
   '00', '11', '22', '33', '44',
   '55', '66', '77', '88', '99',
@@ -25,6 +27,12 @@ export const RPBD_OPTIONS = Object.freeze([
         player.resources = player.resources || {};
         player.resources.mustAttackOthersUntilNextTurn = true;
       }
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'RPBD_MODE1_RESOLVED',
+        playerId: activePlayerId,
+        payload: { mustAttackOthersUntilNextTurn: true }
+      });
       return {
         success: true,
         mutationsApplied: { customEffects: ['ATTACK_OTHERS_IF_ABLE'] },
@@ -41,6 +49,18 @@ export const RPBD_OPTIONS = Object.freeze([
     execute: (state, { activePlayerId }) => {
       const drawResult = state.dispatch('DRAW_CARD', { playerId: activePlayerId, count: 3 });
       state.dispatch('REVEAL_HAND', { playerId: activePlayerId });
+      const player = state.getPlayer ? state.getPlayer(activePlayerId) : state.players?.[activePlayerId];
+      if (player) {
+        player.resources = player.resources || {};
+        player.resources.freeCastAllowed = true;
+        player.resources.freeCast = true;
+      }
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'RPBD_MODE2_RESOLVED',
+        playerId: activePlayerId,
+        payload: { cardsDrawn: drawResult.drawnCount, freeCastAllowed: true }
+      });
       return {
         success: true,
         mutationsApplied: {
@@ -64,14 +84,25 @@ export const RPBD_OPTIONS = Object.freeze([
         if (pId !== activePlayerId && !player.isEliminated) {
           state.dispatch('REVEAL_HAND', { playerId: pId });
           const nonlandIdx = (player.hand || []).findIndex(c => !/land/i.test(c.typeLine || ''));
-          if (nonlandIdx !== -1) {
-            const card = player.hand[nonlandIdx];
-            state.dispatch('MOVE_ZONE', { playerId: pId, instanceId: card.instanceId, targetZone: 'graveyard' });
+          const discardIdx = nonlandIdx !== -1 ? nonlandIdx : 0;
+          if (player.hand && player.hand.length > 0) {
+            const card = player.hand[discardIdx];
+            try {
+              state.dispatch('MOVE_ZONE', { playerId: pId, instanceId: card.instanceId, targetZone: 'graveyard' });
+            } catch (_) {
+              ZoneTransitionMatrix.moveCard(player, card.instanceId, 'hand', 'graveyard');
+            }
             discards[pId] = 1;
           }
         }
       }
       const drawResult = state.dispatch('DRAW_CARD', { playerId: activePlayerId, count: 1 });
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'RPBD_MODE3_RESOLVED',
+        playerId: activePlayerId,
+        payload: { cardsDiscarded: discards, cardsDrawn: drawResult.drawnCount }
+      });
       return {
         success: true,
         mutationsApplied: {
@@ -101,6 +132,12 @@ export const RPBD_OPTIONS = Object.freeze([
       }
       state.dispatch('ADJUST_LIFE', { playerId: activePlayerId, delta: totalLost });
       lifeDeltas[activePlayerId] = totalLost;
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'RPBD_MODE4_RESOLVED',
+        playerId: activePlayerId,
+        payload: { lifeDeltas }
+      });
       return {
         success: true,
         mutationsApplied: { lifeDeltas },
@@ -120,6 +157,12 @@ export const RPBD_OPTIONS = Object.freeze([
         player.resources = player.resources || {};
         player.resources.attackDrawUntilEOT = true;
       }
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'RPBD_MODE5_RESOLVED',
+        playerId: activePlayerId,
+        payload: { attackDrawUntilEOT: true }
+      });
       return {
         success: true,
         mutationsApplied: { customEffects: ['CREATURES_ATTACK_DRAW_GRANTED'] },
@@ -145,6 +188,13 @@ const CANONICAL_PERKS = Object.freeze({
     execute: (state, { activePlayerId }) => {
       state.dispatch('ADJUST_LIFE', { playerId: activePlayerId, delta: 10 });
       const drawRes = state.dispatch('DRAW_CARD', { playerId: activePlayerId, count: 3 });
+      const drawnNames = (drawRes?.drawn || []).map(c => c.name).filter(Boolean).join(', ') || `${drawRes?.drawnCount || 3} cards`;
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_00_RESOLVED',
+        playerId: activePlayerId,
+        payload: { lifeDeltas: { [activePlayerId]: 10 }, cardsDrawn: { [activePlayerId]: drawRes.drawnCount } }
+      });
       return {
         success: true,
         perkKey: '00',
@@ -153,7 +203,7 @@ const CANONICAL_PERKS = Object.freeze({
           lifeDeltas: { [activePlayerId]: 10 },
           cardsDrawn: { [activePlayerId]: drawRes.drawnCount }
         },
-        logSummary: `Player ${activePlayerId} gained 10 life and drew ${drawRes.drawnCount} cards`
+        logSummary: `Player ${activePlayerId} gained 10 life and drew 3 cards (${drawnNames})`
       };
     }
   },
@@ -175,6 +225,8 @@ const CANONICAL_PERKS = Object.freeze({
       const creatures = player?.battlefield?.creatures || [];
       const countersAdded = [];
       for (const creature of creatures) {
+        creature.counters = creature.counters || {};
+        creature.counters['+1/+1'] = (creature.counters['+1/+1'] || 0) + 1;
         state.dispatch('MODIFY_COUNTERS', {
           playerId: activePlayerId,
           instanceId: creature.instanceId,
@@ -183,6 +235,12 @@ const CANONICAL_PERKS = Object.freeze({
         });
         countersAdded.push({ instanceId: creature.instanceId, counterType: '+1/+1', amount: 1 });
       }
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_11_RESOLVED',
+        playerId: activePlayerId,
+        payload: { countersAdded }
+      });
       return {
         success: true,
         perkKey: '11',
@@ -207,6 +265,13 @@ const CANONICAL_PERKS = Object.freeze({
     hasLegalTargets: () => true,
     execute: (state, { activePlayerId }) => {
       const drawRes = state.dispatch('DRAW_CARD', { playerId: activePlayerId, count: 2 });
+      const drawnNames = (drawRes?.drawn || []).map(c => c.name).filter(Boolean).join(', ') || `${drawRes?.drawnCount || 2} cards`;
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_22_RESOLVED',
+        playerId: activePlayerId,
+        payload: { cardsDrawn: { [activePlayerId]: drawRes.drawnCount } }
+      });
       return {
         success: true,
         perkKey: '22',
@@ -214,7 +279,7 @@ const CANONICAL_PERKS = Object.freeze({
         mutationsApplied: {
           cardsDrawn: { [activePlayerId]: drawRes.drawnCount }
         },
-        logSummary: `Player ${activePlayerId} drew ${drawRes.drawnCount} card(s)`
+        logSummary: `Player ${activePlayerId} drew 2 cards (${drawnNames})`
       };
     }
   },
@@ -233,6 +298,12 @@ const CANONICAL_PERKS = Object.freeze({
     hasLegalTargets: () => true,
     execute: (state, { activePlayerId }) => {
       state.dispatch('ADJUST_LIFE', { playerId: activePlayerId, delta: 10 });
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_33_RESOLVED',
+        playerId: activePlayerId,
+        payload: { lifeDeltas: { [activePlayerId]: 10 } }
+      });
       return {
         success: true,
         perkKey: '33',
@@ -263,7 +334,24 @@ const CANONICAL_PERKS = Object.freeze({
       if (player) {
         player.resources = player.resources || {};
         player.resources.additionalLandsAllowed = (player.resources.additionalLandsAllowed || 0) + 1;
+        player.maxLandsPerTurn = (player.maxLandsPerTurn || 1) + 1;
+        player.landsPerTurnLimit = player.maxLandsPerTurn;
+        if (player.resources) {
+          player.resources.maxLandsPerTurn = player.maxLandsPerTurn;
+        }
       }
+      const drawnNames = (drawRes?.drawn || []).map(c => c.name).filter(Boolean).join(', ') || `${drawRes?.drawnCount || 1} card`;
+      const played = player?.landsPlayedThisTurn ?? 0;
+      const baseLimit = player?.maxLandsPerTurn ?? player?.landsPerTurnLimit ?? player?.resources?.maxLandsPerTurn ?? 1;
+      const extraLands = player?.resources?.additionalLandsAllowed || 0;
+      const limit = Math.max(baseLimit, 1 + extraLands);
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_44_RESOLVED',
+        playerId: activePlayerId,
+        payload: { additionalLandsAllowed: player?.resources?.additionalLandsAllowed || 1, limit }
+      });
       return {
         success: true,
         perkKey: '44',
@@ -272,7 +360,7 @@ const CANONICAL_PERKS = Object.freeze({
           cardsDrawn: { [activePlayerId]: drawRes.drawnCount },
           additionalLandsAllowed: 1
         },
-        logSummary: `Player ${activePlayerId} drew ${drawRes.drawnCount} card and gained 1 additional land play`
+        logSummary: `You drew 1 card (${drawnNames}) and may play 1 additional land this turn (Limits: ${played}/${limit})`
       };
     }
   },
@@ -288,27 +376,33 @@ const CANONICAL_PERKS = Object.freeze({
     isTargeted: true,
     targetType: 'PERMANENT',
     requiresTargets: true,
-    getLegalTargets: (state) => {
-      const targets = [];
+    getLegalTargets: (state, activePlayerId) => {
+      const opponentTargets = [];
+      const ownTargets = [];
       const players = state?.players || {};
       for (const [pId, player] of Object.entries(players)) {
         if (player.isEliminated) continue;
         const bf = player.battlefield || {};
         for (const subzone of ['lands', 'creatures', 'noncreatures', 'planeswalkers']) {
           for (const card of (bf[subzone] || [])) {
-            targets.push({
+            const item = {
               targetType: 'PERMANENT',
-              targetId: card.instanceId,
+              targetId: card.instanceId || card.id,
               ownerId: pId,
               card
-            });
+            };
+            if (activePlayerId && pId === activePlayerId) {
+              ownTargets.push(item);
+            } else {
+              opponentTargets.push(item);
+            }
           }
         }
       }
-      return targets;
+      return [...opponentTargets, ...ownTargets];
     },
-    hasLegalTargets: (state) => {
-      const targets = CANONICAL_PERKS['55'].getLegalTargets(state);
+    hasLegalTargets: (state, activePlayerId) => {
+      const targets = CANONICAL_PERKS['55'].getLegalTargets(state, activePlayerId);
       return targets.length > 0;
     },
     execute: (state, { activePlayerId, targets = [] }) => {
@@ -321,21 +415,35 @@ const CANONICAL_PERKS = Object.freeze({
             card.strippedProtectionUntilEOT = true;
             card.hexproof = false;
             card.indestructible = false;
+            if (card.keywords) {
+              card.keywords.hexproof = false;
+              card.keywords.Hexproof = false;
+              card.keywords.indestructible = false;
+              card.keywords.Indestructible = false;
+              delete card.keywords.hexproof;
+              delete card.keywords.Hexproof;
+              delete card.keywords.indestructible;
+              delete card.keywords.Indestructible;
+            }
           }
         }
       }
 
-      // 2. Destroy target permanent
-      const rawTarget = targets[0];
+      // 2. Destroy target permanent (prioritizing opponent)
+      let rawTarget = targets && targets[0];
+      if (!rawTarget) {
+        const legal = CANONICAL_PERKS['55'].getLegalTargets(state, activePlayerId);
+        rawTarget = legal[0];
+      }
+
       const targetId = rawTarget?.targetId || rawTarget?.instanceId || (typeof rawTarget === 'string' ? rawTarget : null);
       let targetOwnerId = rawTarget?.ownerId;
 
       if (targetId && !targetOwnerId) {
-        // Search across players for the card
         for (const [pId, player] of Object.entries(players)) {
           const bf = player.battlefield || {};
           for (const subzone of ['lands', 'creatures', 'noncreatures', 'planeswalkers']) {
-            if ((bf[subzone] || []).some(c => c.instanceId === targetId)) {
+            if ((bf[subzone] || []).some(c => c && (c.instanceId === targetId || c.id === targetId))) {
               targetOwnerId = pId;
               break;
             }
@@ -345,19 +453,36 @@ const CANONICAL_PERKS = Object.freeze({
       }
 
       const destroyed = [];
+      let destroyedCardName = 'permanent';
       if (targetId && targetOwnerId) {
+        const targetOwner = state.getPlayer ? state.getPlayer(targetOwnerId) : state.players?.[targetOwnerId];
         try {
-          state.dispatch('MOVE_ZONE', {
+          const moveRes = state.dispatch('MOVE_ZONE', {
             playerId: targetOwnerId,
             instanceId: targetId,
             targetZone: 'graveyard'
           });
+          destroyedCardName = moveRes?.card?.name || 'permanent';
           destroyed.push(targetId);
         } catch (err) {
-          // If target is no longer on battlefield or illegal on resolution, fizzle target part
-          console.warn(`Perk #55 could not destroy permanent ${targetId}:`, err?.message);
+          if (targetOwner) {
+            try {
+              const moveRes = ZoneTransitionMatrix.moveCard(targetOwner, targetId, 'battlefield', 'graveyard');
+              destroyedCardName = moveRes?.card?.name || 'permanent';
+              destroyed.push(targetId);
+            } catch (zErr) {
+              console.warn(`Perk #55 fallback moveCard failed:`, zErr?.message);
+            }
+          }
         }
       }
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_55_RESOLVED',
+        playerId: activePlayerId,
+        payload: { destroyed }
+      });
 
       return {
         success: true,
@@ -368,8 +493,8 @@ const CANONICAL_PERKS = Object.freeze({
           customEffects: ['ALL_PERMANENTS_STRIPPED_PROTECTION_UNTIL_EOT']
         },
         logSummary: destroyed.length > 0
-          ? `All permanents stripped of protection; destroyed permanent ${targetId}`
-          : 'All permanents stripped of protection; target fizzled or was absent'
+          ? `All permanents lose Indestructible and Hexproof until end of turn. Destroyed ${destroyedCardName} (${targetId})`
+          : 'All permanents lose Indestructible and Hexproof until end of turn. Target fizzled or was absent'
       };
     }
   },
@@ -398,11 +523,15 @@ const CANONICAL_PERKS = Object.freeze({
         const creatures = player.battlefield?.creatures || [];
         if (creatures.length > 0) {
           const toSacrifice = creatures[0];
-          state.dispatch('MOVE_ZONE', {
-            playerId: pId,
-            instanceId: toSacrifice.instanceId,
-            targetZone: 'graveyard'
-          });
+          try {
+            state.dispatch('MOVE_ZONE', {
+              playerId: pId,
+              instanceId: toSacrifice.instanceId,
+              targetZone: 'graveyard'
+            });
+          } catch (_) {
+            ZoneTransitionMatrix.moveCard(player, toSacrifice.instanceId, 'battlefield', 'graveyard');
+          }
           sacrificed.push(toSacrifice.instanceId);
         }
 
@@ -410,14 +539,25 @@ const CANONICAL_PERKS = Object.freeze({
         const hand = player.hand || [];
         if (hand.length > 0) {
           const toDiscard = hand[0];
-          state.dispatch('MOVE_ZONE', {
-            playerId: pId,
-            instanceId: toDiscard.instanceId,
-            targetZone: 'graveyard'
-          });
+          try {
+            state.dispatch('MOVE_ZONE', {
+              playerId: pId,
+              instanceId: toDiscard.instanceId,
+              targetZone: 'graveyard'
+            });
+          } catch (_) {
+            ZoneTransitionMatrix.moveCard(player, toDiscard.instanceId, 'hand', 'graveyard');
+          }
           discarded[pId] = 1;
         }
       }
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_66_RESOLVED',
+        playerId: activePlayerId,
+        payload: { sacrificed, discarded }
+      });
 
       return {
         success: true,
@@ -449,6 +589,15 @@ const CANONICAL_PERKS = Object.freeze({
       const libraryCount = player?.library?.length || 0;
       const scryCount = Math.min(2, libraryCount);
       const drawRes = state.dispatch('DRAW_CARD', { playerId: activePlayerId, count: 1 });
+      const drawnNames = (drawRes?.drawn || []).map(c => c.name).filter(Boolean).join(', ') || `${drawRes?.drawnCount || 1} card`;
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_77_RESOLVED',
+        playerId: activePlayerId,
+        payload: { scryPerformed: { playerId: activePlayerId, count: scryCount }, cardsDrawn: { [activePlayerId]: drawRes.drawnCount } }
+      });
+
       return {
         success: true,
         perkKey: '77',
@@ -457,7 +606,7 @@ const CANONICAL_PERKS = Object.freeze({
           scryPerformed: { playerId: activePlayerId, count: scryCount },
           cardsDrawn: { [activePlayerId]: drawRes.drawnCount }
         },
-        logSummary: `Player ${activePlayerId} scried ${scryCount} card(s) and drew ${drawRes.drawnCount} card(s)`
+        logSummary: `Player ${activePlayerId} scried ${scryCount} card(s) and drew 1 card (${drawnNames})`
       };
     }
   },
@@ -486,6 +635,13 @@ const CANONICAL_PERKS = Object.freeze({
         const drawRes = state.dispatch('DRAW_CARD', { playerId: pId, count: 2 });
         cardsDrawn[pId] = drawRes.drawnCount;
       }
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_88_RESOLVED',
+        playerId: activePlayerId,
+        payload: { lifeDeltas, cardsDrawn }
+      });
 
       return {
         success: true,
@@ -527,7 +683,11 @@ const CANONICAL_PERKS = Object.freeze({
       return targets.length > 0;
     },
     execute: (state, { activePlayerId, targets = [] }) => {
-      const rawTarget = targets[0];
+      let rawTarget = targets && targets[0];
+      if (!rawTarget) {
+        const legal = CANONICAL_PERKS['99'].getLegalTargets(state, activePlayerId);
+        rawTarget = legal[0];
+      }
       const targetPlayerId = rawTarget?.targetId || (typeof rawTarget === 'string' ? rawTarget : null);
 
       if (!targetPlayerId || !state.players?.[targetPlayerId]) {
@@ -547,11 +707,15 @@ const CANONICAL_PERKS = Object.freeze({
       // CR 608.2c Partial Execution: Discard 1 card if hand > 0
       if ((targetPlayer.hand || []).length > 0) {
         const toDiscard = targetPlayer.hand[0];
-        state.dispatch('MOVE_ZONE', {
-          playerId: targetPlayerId,
-          instanceId: toDiscard.instanceId,
-          targetZone: 'graveyard'
-        });
+        try {
+          state.dispatch('MOVE_ZONE', {
+            playerId: targetPlayerId,
+            instanceId: toDiscard.instanceId,
+            targetZone: 'graveyard'
+          });
+        } catch (_) {
+          ZoneTransitionMatrix.moveCard(targetPlayer, toDiscard.instanceId, 'hand', 'graveyard');
+        }
         discarded[targetPlayerId] = 1;
       }
 
@@ -566,13 +730,24 @@ const CANONICAL_PERKS = Object.freeze({
       }
 
       if (permanentToSac) {
-        state.dispatch('MOVE_ZONE', {
-          playerId: targetPlayerId,
-          instanceId: permanentToSac.instanceId,
-          targetZone: 'graveyard'
-        });
+        try {
+          state.dispatch('MOVE_ZONE', {
+            playerId: targetPlayerId,
+            instanceId: permanentToSac.instanceId,
+            targetZone: 'graveyard'
+          });
+        } catch (_) {
+          ZoneTransitionMatrix.moveCard(targetPlayer, permanentToSac.instanceId, 'battlefield', 'graveyard');
+        }
         sacrificed.push(permanentToSac.instanceId);
       }
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_99_RESOLVED',
+        playerId: activePlayerId,
+        payload: { targetPlayerId, discarded, sacrificed }
+      });
 
       return {
         success: true,
@@ -607,24 +782,39 @@ const CANONICAL_PERKS = Object.freeze({
       // CR 608.2c Partial Execution: Discard 1 card if hand size > 0
       if (player && (player.hand || []).length > 0) {
         const toDiscard = player.hand[0];
-        state.dispatch('MOVE_ZONE', {
-          playerId: activePlayerId,
-          instanceId: toDiscard.instanceId,
-          targetZone: 'graveyard'
-        });
+        try {
+          state.dispatch('MOVE_ZONE', {
+            playerId: activePlayerId,
+            instanceId: toDiscard.instanceId,
+            targetZone: 'graveyard'
+          });
+        } catch (_) {
+          ZoneTransitionMatrix.moveCard(player, toDiscard.instanceId, 'hand', 'graveyard');
+        }
         discarded[activePlayerId] = 1;
       }
 
       // CR 608.2c Partial Execution: Sacrifice 1 creature if creature count > 0
       if (player && (player.battlefield?.creatures || []).length > 0) {
         const toSacrifice = player.battlefield.creatures[0];
-        state.dispatch('MOVE_ZONE', {
-          playerId: activePlayerId,
-          instanceId: toSacrifice.instanceId,
-          targetZone: 'graveyard'
-        });
+        try {
+          state.dispatch('MOVE_ZONE', {
+            playerId: activePlayerId,
+            instanceId: toSacrifice.instanceId,
+            targetZone: 'graveyard'
+          });
+        } catch (_) {
+          ZoneTransitionMatrix.moveCard(player, toSacrifice.instanceId, 'battlefield', 'graveyard');
+        }
         sacrificed.push(toSacrifice.instanceId);
       }
+
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_13_RESOLVED',
+        playerId: activePlayerId,
+        payload: { discarded, sacrificed }
+      });
 
       return {
         success: true,
@@ -657,7 +847,7 @@ const CANONICAL_PERKS = Object.freeze({
 
       if (birthdayOptionIndex !== undefined) {
         if (typeof birthdayOptionIndex === 'string') {
-          const found = RPBD_OPTIONS.find(o => o.id === birthdayOptionIndex);
+          const found = RPBD_OPTIONS.find(o => o.id === birthdayOptionIndex || o.name === birthdayOptionIndex);
           if (found) option = found;
         } else if (typeof birthdayOptionIndex === 'number') {
           // Check 1-based mode number (e.g. Mode 4 -> RPBD_LIFE_LEECH)
@@ -671,6 +861,12 @@ const CANONICAL_PERKS = Object.freeze({
       }
 
       const res = option.execute(state, { activePlayerId });
+      state._notifySubscribers?.({
+        sequenceId: ++state.sequenceCounter,
+        actionType: 'PERK_RPBD_RESOLVED',
+        playerId: activePlayerId,
+        payload: { selectedOptionId: option.id, mutationsApplied: res.mutationsApplied }
+      });
       return {
         success: true,
         perkKey: 'RPBD',

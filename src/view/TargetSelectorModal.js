@@ -49,13 +49,15 @@ export class TargetSelectorModal {
     this.element.setAttribute('role', 'dialog');
     this.element.setAttribute('aria-modal', 'true');
     this.element.setAttribute('aria-label', 'Select Spell Target');
+    this.element.style.pointerEvents = 'auto';
+    this.element.style.zIndex = '10000';
 
     this.element.innerHTML = `
       <div class="target-modal-panel">
         <div class="target-modal-header">
           <div class="target-title-row">
             <h2 class="target-modal-title" id="target-modal-title">Select Target for Spell</h2>
-            <button class="target-btn-close" id="target-btn-close" aria-label="Close">×</button>
+            <button class="target-btn-close btn-close-modal" id="target-btn-close" aria-label="Close">×</button>
           </div>
           <p class="target-instructions" id="target-instructions">
             Choose a valid target. Targets with Hexproof, Shroud, or Protection are illegal.
@@ -65,7 +67,7 @@ export class TargetSelectorModal {
         <div class="target-candidates-list" id="target-candidates-list"></div>
 
         <div class="target-modal-footer">
-          <button class="btn btn-secondary" id="target-btn-cancel">Cancel Spell</button>
+          <button class="btn btn-secondary btn-cancel-target" id="target-btn-cancel">Cancel Spell</button>
         </div>
       </div>
     `;
@@ -74,6 +76,11 @@ export class TargetSelectorModal {
 
     this.element.querySelector('#target-btn-close')?.addEventListener('click', () => this.handleCancel());
     this.element.querySelector('#target-btn-cancel')?.addEventListener('click', () => this.handleCancel());
+    this.element.addEventListener('click', (e) => {
+      if (e.target === this.element) {
+        this.handleCancel();
+      }
+    });
   }
 
   /**
@@ -99,7 +106,7 @@ export class TargetSelectorModal {
       return { isLegal: true };
     }
 
-    if (target.type === 'CREATURE') {
+    if (target.type === 'CREATURE' || target.type === 'PERMANENT') {
       const card = target.card;
       if (!card) return { isLegal: false, reason: 'CARD_NOT_FOUND' };
 
@@ -133,27 +140,77 @@ export class TargetSelectorModal {
   }
 
   /**
-   * Opens the targeting modal for the spell.
-   * 
-   * @param {Object} options
-   * @param {Object} options.spell - Spell card instance
-   * @param {string} options.casterPlayerId
-   * @param {Object} options.tabletopState
+   * Mounts the modal element into a container if not already mounted.
+   * @param {HTMLElement} container
    */
-  open({ spell, casterPlayerId, tabletopState }) {
+  mount(container) {
+    if (!container) return;
+    this.container = container;
+    if (!this.element) {
+      this.init();
+    } else if (this.element.parentNode !== container) {
+      container.appendChild(this.element);
+    }
+  }
+
+  /**
+   * Opens the targeting modal for the spell.
+   * Supports both open({ spell, casterPlayerId, tabletopState, onSelectTarget, onCancel })
+   * and open(spell, tabletopState, casterPlayerId, { onSelectTarget, onCancel }).
+   * 
+   * @param {Object} spellOrOptions - Spell card instance or options object
+   * @param {Object} [tabletopStateArg]
+   * @param {string} [casterPlayerIdArg]
+   * @param {Object} [extraOptions]
+   */
+  open(spellOrOptions, tabletopStateArg, casterPlayerIdArg, extraOptions = {}) {
+    let spell, tabletopState, casterPlayerId, onSelectTarget, onCancel;
+
+    if (spellOrOptions && typeof spellOrOptions === 'object' && spellOrOptions.spell) {
+      spell = spellOrOptions.spell;
+      casterPlayerId = spellOrOptions.casterPlayerId || casterPlayerIdArg;
+      tabletopState = spellOrOptions.tabletopState || tabletopStateArg;
+      onSelectTarget = spellOrOptions.onSelectTarget;
+      onCancel = spellOrOptions.onCancel;
+    } else {
+      spell = spellOrOptions;
+      tabletopState = tabletopStateArg;
+      casterPlayerId = casterPlayerIdArg;
+      onSelectTarget = extraOptions?.onSelectTarget;
+      onCancel = extraOptions?.onCancel;
+    }
+
+    if (typeof onSelectTarget === 'function') this.onSelectTarget = onSelectTarget;
+    if (typeof onCancel === 'function') this.onCancel = onCancel;
+
     this.spell = spell;
-    this.casterPlayerId = casterPlayerId;
     this.tabletopState = tabletopState;
+    this.casterPlayerId = casterPlayerId;
     this.isOpen = true;
 
     if (!this.element) this.init();
     if (!this.element) return;
 
+    // Ensure mounted in container if detached
+    if (this.container && this.element.parentElement !== this.container) {
+      this.container.appendChild(this.element);
+    }
+
+    // Unblock pointer-events on host if in #modal-root
+    const host = this.element.closest?.('#modal-root') || this.container?.closest?.('#modal-root') || (this.container?.id === 'modal-root' ? this.container : null);
+    if (host) {
+      host.setAttribute('aria-hidden', 'false');
+      host.style.pointerEvents = 'auto';
+    }
+
     this.element.style.display = 'flex';
+    this.element.style.pointerEvents = 'auto';
+    this.element.style.zIndex = '10000';
     this.element.classList.remove('hidden');
+    this.element.classList.add('open', 'active');
     const titleEl = this.element.querySelector('#target-modal-title');
     if (titleEl) {
-      titleEl.textContent = `Target for ${spell?.name || 'Spell'}`;
+      titleEl.textContent = `Target for ${this.spell?.name || 'Spell'}`;
     }
 
     this.gatherCandidates();
@@ -165,66 +222,148 @@ export class TargetSelectorModal {
     if (this.element) {
       this.element.style.display = 'none';
       this.element.classList.add('hidden');
+      this.element.classList.remove('open', 'active');
+    }
+
+    // Restore host aria-hidden if no other modals are active
+    const host = this.element?.closest?.('#modal-root') || this.container?.closest?.('#modal-root') || (this.container?.id === 'modal-root' ? this.container : null);
+    if (host) {
+      const remainingModals = host.querySelectorAll('.modal-backdrop:not(.hidden):not([style*="display: none"]), .target-modal-backdrop:not(.hidden):not([style*="display: none"]), .mulligan-modal-backdrop:not(.hidden):not([style*="display: none"]), .modal-dialog-box');
+      if (remainingModals.length === 0) {
+        host.setAttribute('aria-hidden', 'true');
+        host.style.pointerEvents = '';
+      }
     }
   }
 
   handleCancel() {
     this.close();
-    this.onCancel();
+    if (typeof this.onCancel === 'function') {
+      this.onCancel();
+    }
   }
 
   handleTargetClick(target) {
     if (!target.isLegal) return;
     this.close();
-    this.onSelectTarget({
-      targetId: target.id,
-      targetType: target.type,
-      targetName: target.name
-    });
+    if (typeof this.onSelectTarget === 'function') {
+      this.onSelectTarget({
+        targetId: target.id,
+        targetType: target.type,
+        targetName: target.name,
+        target: target
+      });
+    }
   }
 
   gatherCandidates() {
     this.candidateTargets = [];
     if (!this.tabletopState) return;
 
-    // 1. Players
-    for (const [pid, player] of Object.entries(this.tabletopState.players || {})) {
-      const legality = TargetSelectorModal.evaluateTargetLegality(
-        { id: pid, type: 'PLAYER', player },
-        this.spell,
-        this.casterPlayerId
-      );
-      this.candidateTargets.push({
-        id: pid,
-        type: 'PLAYER',
-        name: player.name || `Player ${pid}`,
-        subtitle: `Life: ${player.resources?.life ?? 20}`,
-        isLegal: legality.isLegal,
-        reason: legality.reason
-      });
-    }
+    const targetType = String(this.spell?.effect?.targetType || this.spell?.targetType || 'any').toLowerCase();
+    const allowPlayers = (targetType === 'any' || targetType === 'player' || targetType === 'player_or_planeswalker' || targetType === 'opponent');
+    const allowCreatures = (targetType === 'any' || targetType === 'creature' || targetType === 'permanent' || targetType === 'creature_or_planeswalker');
+    const allowOtherPermanents = (targetType === 'permanent');
 
-    // 2. Creatures on Battlefield
-    for (const [pid, player] of Object.entries(this.tabletopState.players || {})) {
-      const creatures = player.battlefield?.creatures || [];
-      for (const card of creatures) {
+    const gathered = [];
+
+    // 1. Players
+    if (allowPlayers) {
+      for (const [pid, player] of Object.entries(this.tabletopState.players || {})) {
+        if (player.isEliminated) continue;
+        if (targetType === 'opponent' && pid === this.casterPlayerId) continue;
+
+        const isOpponent = pid !== this.casterPlayerId;
         const legality = TargetSelectorModal.evaluateTargetLegality(
-          { id: card.instanceId, type: 'CREATURE', card },
+          { id: pid, type: 'PLAYER', player },
           this.spell,
           this.casterPlayerId
         );
-        this.candidateTargets.push({
-          id: card.instanceId,
-          type: 'CREATURE',
-          name: card.name,
-          subtitle: `${card.power || 0}/${card.toughness || 0} (${player.name || pid})`,
-          imageUrl: card.imageUrl || card.image_uris?.normal,
-          card,
+        gathered.push({
+          id: pid,
+          type: 'PLAYER',
+          isOpponent,
+          controllerId: pid,
+          name: player.name || `Player ${pid}`,
+          subtitle: `Life: ${player.resources?.life ?? 20}`,
           isLegal: legality.isLegal,
           reason: legality.reason
         });
       }
     }
+
+    // 2. Permanents on Battlefield
+    for (const [pid, player] of Object.entries(this.tabletopState.players || {})) {
+      if (player.isEliminated) continue;
+      const isOpponent = pid !== this.casterPlayerId;
+
+      if (allowCreatures) {
+        const creatures = Array.isArray(player.battlefield?.creatures)
+          ? player.battlefield.creatures
+          : (Array.isArray(player.zones?.battlefield) ? player.zones.battlefield.filter(c => /creature/i.test(c.type || c.typeLine || '')) : []);
+
+        for (const card of creatures) {
+          if (!card) continue;
+          const stats = this.tabletopState.abilityEngine?.evaluateCreatureStats
+            ? this.tabletopState.abilityEngine.evaluateCreatureStats(card, this.tabletopState)
+            : { power: card.power ?? 0, toughness: card.toughness ?? 0 };
+          const legality = TargetSelectorModal.evaluateTargetLegality(
+            { id: card.instanceId, type: 'CREATURE', card },
+            this.spell,
+            this.casterPlayerId
+          );
+          gathered.push({
+            id: card.instanceId,
+            type: 'CREATURE',
+            isOpponent,
+            controllerId: pid,
+            name: card.name,
+            subtitle: `${stats.power}/${stats.toughness} (${player.name || pid})`,
+            imageUrl: card.imageUrl || card.image_uris?.normal,
+            card,
+            isLegal: legality.isLegal,
+            reason: legality.reason
+          });
+        }
+      }
+
+      if (allowOtherPermanents) {
+        const otherCards = [
+          ...(player.battlefield?.lands || []),
+          ...(player.battlefield?.noncreatures || []),
+          ...(player.battlefield?.planeswalkers || [])
+        ];
+        for (const card of otherCards) {
+          if (!card) continue;
+          const legality = TargetSelectorModal.evaluateTargetLegality(
+            { id: card.instanceId, type: 'PERMANENT', card },
+            this.spell,
+            this.casterPlayerId
+          );
+          gathered.push({
+            id: card.instanceId,
+            type: 'PERMANENT',
+            isOpponent,
+            controllerId: pid,
+            name: card.name,
+            subtitle: `${card.typeLine || card.type || 'Permanent'} (${player.name || pid})`,
+            imageUrl: card.imageUrl || card.image_uris?.normal,
+            card,
+            isLegal: legality.isLegal,
+            reason: legality.reason
+          });
+        }
+      }
+    }
+
+    // Prioritize opponents first, followed by caster's own targets
+    gathered.sort((a, b) => {
+      if (a.isOpponent && !b.isOpponent) return -1;
+      if (!a.isOpponent && b.isOpponent) return 1;
+      return 0;
+    });
+
+    this.candidateTargets = gathered;
   }
 
   render() {
@@ -235,7 +374,8 @@ export class TargetSelectorModal {
     list.innerHTML = '';
     for (const target of this.candidateTargets) {
       const itemEl = document.createElement('div');
-      itemEl.className = `target-candidate-item ${target.isLegal ? 'legal' : 'illegal'}`;
+      itemEl.className = `target-candidate-item target-candidate-row ${target.isLegal ? 'legal' : 'illegal'}`;
+      itemEl.style.pointerEvents = target.isLegal ? 'auto' : 'default';
 
       itemEl.innerHTML = `
         <div class="target-item-info">

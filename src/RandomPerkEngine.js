@@ -192,26 +192,61 @@ export class RandomPerkEngine extends EventEmitter {
       ? event.turnNumber
       : (this.priorityStateMachine?.turnNumber || 1);
 
+    // In production, PriorityStateMachine emits event.roundNumber.
+    // If event.roundNumber is present, use it. Otherwise derive or check machine.
+    let currentRound = event.roundNumber;
+    if (currentRound === undefined) {
+      currentRound = this.priorityStateMachine?.roundNumber ?? this.tabletopState?.roundNumber;
+    }
+    if (currentRound === undefined) {
+      const pCount = this.initialPlayerCount || 2;
+      currentRound = Math.floor((currentTurn - 1) / pCount) + 1;
+    }
+
     const activePlayerId = event.activePlayerId || this.priorityStateMachine?.activePlayerId;
-    this.handleUpkeepStep(activePlayerId, currentTurn);
+    this.handleUpkeepStep(activePlayerId, currentTurn, currentRound);
   }
 
   /**
-   * Evaluates upkeep step progression and triggers Step 1 if turn >= perkUnlockTurn.
+   * Evaluates upkeep step progression and triggers Step 1 if round/turn >= perkUnlockTurn.
    * 
    * @param {string} activePlayerId
    * @param {number} [turnNumber]
+   * @param {number} [roundNumber]
    */
-  handleUpkeepStep(activePlayerId, turnNumber) {
-    const currentTurn = turnNumber !== undefined
+  handleUpkeepStep(activePlayerId, turnNumber, roundNumber) {
+    const targetPlayerId = activePlayerId || this.priorityStateMachine?.activePlayerId;
+
+    const currentTurn = (turnNumber !== undefined && turnNumber !== null)
       ? turnNumber
       : (this.priorityStateMachine?.turnNumber || 1);
 
-    const targetPlayerId = activePlayerId || this.priorityStateMachine?.activePlayerId;
+    // Determine effective round:
+    // 1. If explicit roundNumber is provided, use it.
+    // 2. If called directly like handleUpkeepStep(pid, roundOrTurn), and roundNumber is undefined:
+    //    If priorityStateMachine has a roundNumber that was explicitly updated, use it;
+    //    otherwise turnNumber represents the round/turn count for backward compatibility.
+    // 3. In 1v1, if global turnNumber >= 7, that is always Round 4+.
+    let effectiveRound;
+    if (roundNumber !== undefined && roundNumber !== null) {
+      effectiveRound = roundNumber;
+    } else if (this.priorityStateMachine?.roundNumber !== undefined) {
+      effectiveRound = this.priorityStateMachine.roundNumber;
+    } else if (typeof turnNumber === 'number') {
+      effectiveRound = turnNumber;
+    } else {
+      effectiveRound = 1;
+    }
 
-    if (currentTurn < this.perkUnlockTurn) {
+    // In 1v1 (2 players), Round 4 corresponds to global turnNumber >= 7
+    if (this.initialPlayerCount === 2 && currentTurn >= 7 && effectiveRound < 4) {
+      effectiveRound = 4;
+    }
+
+    if (effectiveRound < this.perkUnlockTurn) {
       this.emit('PERK_EMBLEM_DORMANT', {
         turnNumber: currentTurn,
+        roundNumber: effectiveRound,
         perkUnlockTurn: this.perkUnlockTurn,
         activePlayerId: targetPlayerId
       });
@@ -236,6 +271,8 @@ export class RandomPerkEngine extends EventEmitter {
       sourcePlayerId: targetActivePlayer,
       type: 'PERK_UPKEEP_TRIGGER',
       name: 'Random Perk Upkeep Trigger',
+      isTrigger: true,
+      isEmblemTrigger: true,
       targets: [],
       timestamp: Date.now()
     };
@@ -243,24 +280,50 @@ export class RandomPerkEngine extends EventEmitter {
     this.activeStep1Item = step1Item;
     this.currentStep = 'STEP_1';
 
+    let nextPlayerId = targetActivePlayer;
     if (this.priorityStateMachine) {
       // Pushing onto stack ensures APNAP top placement so it resolves first
       this.priorityStateMachine.pushStack(step1Item);
       this.priorityStateMachine.consecutivePassCount = 0;
 
       // Rotate priority to opponent
-      const nextPlayerId = this.priorityStateMachine.nextPlayer(targetActivePlayer);
+      nextPlayerId = this.priorityStateMachine.nextPlayer(targetActivePlayer);
       this.priorityStateMachine.priorityPlayerId = nextPlayerId;
 
       // Start 15s Stack Alarm for the opponent receiving priority
       if (this.stackAlarmManager) {
         this.stackAlarmManager.start(nextPlayerId, step1Item.id, this.alarmDurationSeconds);
       }
+
+      this.priorityStateMachine.emit('PRIORITY_CHANGED', {
+        activePlayerId: targetActivePlayer,
+        priorityPlayerId: nextPlayerId,
+        currentPhaseStep: this.priorityStateMachine.currentPhaseStep,
+        consecutivePassCount: 0,
+        stackSize: this.priorityStateMachine.stack.length
+      });
     }
+
+    const pName = this.stateManager?.getPlayer?.(targetActivePlayer)?.playerName || targetActivePlayer;
+    const step1Log = `🔮 [RPM Step 1]: Upkeep Emblem Trigger on stack for ${pName}. Priority open.`;
+    this.stateManager?.recordTrace?.('PERK_TRACE', 'PERK_STEP1_TRIGGERED', {
+      activePlayerId: targetActivePlayer,
+      priorityPlayerId: nextPlayerId,
+      stackItemId: step1Item.id,
+      summary: step1Log
+    });
 
     this.emit('PERK_UPKEEP_TRIGGER_PLACED', {
       stackItem: step1Item,
-      activePlayerId: targetActivePlayer
+      activePlayerId: targetActivePlayer,
+      priorityPlayerId: nextPlayerId,
+      logMessage: step1Log
+    });
+    this.emit('PERK_STEP1_TRIGGERED', {
+      stackItem: step1Item,
+      activePlayerId: targetActivePlayer,
+      priorityPlayerId: nextPlayerId,
+      logMessage: step1Log
     });
 
     return step1Item;
@@ -326,6 +389,23 @@ export class RandomPerkEngine extends EventEmitter {
     this.lastRollResult = rollResult;
     this.activeStep1Item = null;
 
+    const perkName = match.isMiss ? 'Miss' : (getPerkDefinition(match.perkKey)?.name || match.perkKey);
+    const pName = this.stateManager?.getPlayer?.(activePlayerId)?.playerName || activePlayerId;
+    const rollLog = `🎲 [RPM Roll]: ${pName} rolled ${roll.rollString} (${perkName})`;
+
+    this.stateManager?.recordTrace?.('PERK_TRACE', 'PERK_DICE_ROLLED', {
+      activePlayerId,
+      roll: rollResult,
+      perkName,
+      summary: rollLog
+    });
+
+    this.emit('PERK_DICE_ROLLED', {
+      activePlayerId,
+      roll: rollResult,
+      perkName,
+      logMessage: rollLog
+    });
     this.emit('PERK_ROLLED', rollResult);
 
     // Roll Miss Branch (INV-PERK-8)
@@ -334,7 +414,8 @@ export class RandomPerkEngine extends EventEmitter {
       this.emit('PERK_ROLL_MISS', {
         activePlayerId,
         roll: rollResult,
-        turnNumber: this.priorityStateMachine?.turnNumber || 1
+        turnNumber: this.priorityStateMachine?.turnNumber || 1,
+        logMessage: rollLog
       });
       return rollResult;
     }
@@ -395,6 +476,8 @@ export class RandomPerkEngine extends EventEmitter {
       id: generateStackItemId(),
       sourcePlayerId: targetPlayerId,
       type: 'PERK_EFFECT_TRIGGER',
+      isTrigger: true,
+      isEmblemTrigger: true,
       perkKey,
       perkName: perkDef?.name || perkKey,
       targets: targets || [],
@@ -405,24 +488,53 @@ export class RandomPerkEngine extends EventEmitter {
     this.activeStep2Item = step2Item;
     this.currentStep = 'STEP_2';
 
+    let nextPlayerId = targetPlayerId;
     if (this.priorityStateMachine) {
       this.priorityStateMachine.pushStack(step2Item);
       this.priorityStateMachine.consecutivePassCount = 0;
 
       // Priority passes to opponent with fresh 15s Stack Alarm
-      const nextPlayerId = this.priorityStateMachine.nextPlayer(targetPlayerId);
+      nextPlayerId = this.priorityStateMachine.nextPlayer(targetPlayerId);
       this.priorityStateMachine.priorityPlayerId = nextPlayerId;
 
       if (this.stackAlarmManager) {
         this.stackAlarmManager.start(nextPlayerId, step2Item.id, this.alarmDurationSeconds);
       }
+
+      this.priorityStateMachine.emit('PRIORITY_CHANGED', {
+        activePlayerId: targetPlayerId,
+        priorityPlayerId: nextPlayerId,
+        currentPhaseStep: this.priorityStateMachine.currentPhaseStep,
+        consecutivePassCount: 0,
+        stackSize: this.priorityStateMachine.stack.length
+      });
     }
+
+    const pName = this.stateManager?.getPlayer?.(targetPlayerId)?.playerName || targetPlayerId;
+    const step2Log = `🔮 [RPM Step 2]: Perk Effect Trigger (${step2Item.perkName}) on stack for ${pName}. Priority open.`;
+    this.stateManager?.recordTrace?.('PERK_TRACE', 'PERK_STEP2_TRIGGERED', {
+      activePlayerId: targetPlayerId,
+      priorityPlayerId: nextPlayerId,
+      perkKey,
+      stackItemId: step2Item.id,
+      summary: step2Log
+    });
 
     this.emit('PERK_EFFECT_TRIGGER_PLACED', {
       stackItem: step2Item,
       activePlayerId: targetPlayerId,
+      priorityPlayerId: nextPlayerId,
       perkKey,
-      targets
+      targets,
+      logMessage: step2Log
+    });
+    this.emit('PERK_STEP2_TRIGGERED', {
+      stackItem: step2Item,
+      activePlayerId: targetPlayerId,
+      priorityPlayerId: nextPlayerId,
+      perkKey,
+      targets,
+      logMessage: step2Log
     });
 
     return step2Item;
@@ -453,11 +565,23 @@ export class RandomPerkEngine extends EventEmitter {
     this.currentStep = 'IDLE';
     this.activeStep2Item = null;
 
+    const summary = executionResult?.logSummary || `Resolved Perk #${item.perkKey}`;
+    const resolvedLog = `✨ [RPM #${item.perkKey} Resolved]: ${summary}`;
+
+    this.stateManager?.recordTrace?.('PERK_TRACE', 'PERK_RESOLVED', {
+      activePlayerId: item.sourcePlayerId,
+      perkKey: item.perkKey,
+      perkName: item.perkName,
+      result: executionResult,
+      summary: resolvedLog
+    });
+
     const payload = {
       activePlayerId: item.sourcePlayerId,
       perkKey: item.perkKey,
       perkName: item.perkName,
       result: executionResult,
+      logMessage: resolvedLog,
       timestamp: Date.now()
     };
 

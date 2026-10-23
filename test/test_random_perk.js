@@ -109,6 +109,7 @@ runTest('VEC-02: Turn Scaling 1v1 (Turn 4 unlock) (INV-PERK-4)', () => {
 
   // Turn 1 Upkeep -> Dormant
   psm.turnNumber = 1;
+  psm.roundNumber = 1;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 0, 'Stack must remain empty on Turn 1');
   assert.equal(dormantEvents.length, 1);
@@ -116,18 +117,21 @@ runTest('VEC-02: Turn Scaling 1v1 (Turn 4 unlock) (INV-PERK-4)', () => {
 
   // Turn 2 Upkeep -> Dormant
   psm.turnNumber = 2;
+  psm.roundNumber = 2;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 0, 'Stack must remain empty on Turn 2');
   assert.equal(dormantEvents.length, 2);
 
   // Turn 3 Upkeep -> Dormant
   psm.turnNumber = 3;
+  psm.roundNumber = 3;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 0, 'Stack must remain empty on Turn 3');
   assert.equal(dormantEvents.length, 3);
 
   // Turn 4 Upkeep -> Unlocks & triggers Step 1
   psm.turnNumber = 4;
+  psm.roundNumber = 4;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 1, 'Stack must receive Step 1 trigger on Turn 4');
   assert.equal(psm.stack[0].type, 'PERK_UPKEEP_TRIGGER');
@@ -156,12 +160,14 @@ runTest('VEC-03: Turn Scaling 3+ Players (Turn 2 unlock) (INV-PERK-4)', () => {
 
   // Turn 1 Upkeep -> Dormant
   psm.turnNumber = 1;
+  psm.roundNumber = 1;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 0, 'Stack must remain empty on Turn 1');
   assert.equal(dormantCount, 1);
 
   // Turn 2 Upkeep -> Triggers Step 1
   psm.turnNumber = 2;
+  psm.roundNumber = 2;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 1, 'Stack must receive Step 1 trigger on Turn 2');
   assert.equal(psm.stack[0].type, 'PERK_UPKEEP_TRIGGER');
@@ -193,6 +199,7 @@ runTest('VEC-04: Turn Scaling Immutability after Mid-Game Elimination (INV-PERK-
 
   // Advance to Turn 2 Upkeep
   psm.turnNumber = 2;
+  psm.roundNumber = 2;
   psm.setPhaseStep('UPKEEP');
   assert.equal(psm.stack.length, 1, 'Emblem must trigger on Turn 2 despite only 2 living players remaining');
   assert.equal(psm.stack[0].type, 'PERK_UPKEEP_TRIGGER');
@@ -219,6 +226,7 @@ runTest('VEC-05: Step 1 Stack Placement & 15s Stack Alarm (INV-PERK-2, INV-PERK-
 
   // Advance to Turn 4 Upkeep
   psm.turnNumber = 4;
+  psm.roundNumber = 4;
   psm.setPhaseStep('UPKEEP');
 
   assert.equal(psm.stack.length, 1);
@@ -614,6 +622,7 @@ runTest('VEC-14: Engine Teardown & Event Listener Cleanup (INV-HARNESS-2)', () =
 
   // Fire upkeep once while active
   psm.turnNumber = 4;
+  psm.roundNumber = 4;
   psm.setPhaseStep('UPKEEP');
   assert.equal(upkeepEventCount, 1);
   psm.clearStack();
@@ -628,6 +637,183 @@ runTest('VEC-14: Engine Teardown & Event Listener Cleanup (INV-HARNESS-2)', () =
   psm.setPhaseStep('UPKEEP');
   assert.equal(upkeepEventCount, 1, 'Destroyed engine must not process phase step changes');
   assert.equal(psm.stack.length, 0, 'No triggers should be pushed after engine destruction');
+});
+
+// -------------------------------------------------------------------------------------------------
+// VEC-15: Stack Resolution Excludes Emblem Triggers from Graveyard (CR 113.3b / CR 608.2)
+// -------------------------------------------------------------------------------------------------
+runTest('VEC-15: Stack Resolution Excludes Emblem Triggers from Graveyard (CR 113.3b / CR 608.2)', () => {
+  const ttsm = new TabletopStateManager({ players: ['p1', 'p2'] });
+  const psm = new PriorityStateMachine({ players: ['p1', 'p2'], activePlayerId: 'p1', tabletopState: ttsm });
+  ttsm._priorityMachine = psm;
+
+  const engine = new RandomPerkEngine({
+    tabletopState: ttsm,
+    priorityStateMachine: psm,
+    initialPlayerCount: 2
+  });
+
+  // Step 1: Upkeep Trigger placed onto stack
+  psm.turnNumber = 4;
+  psm.roundNumber = 4;
+  psm.setPhaseStep('UPKEEP');
+  assert.equal(psm.stack.length, 1);
+  assert.equal(psm.peekStack().type, 'PERK_UPKEEP_TRIGGER');
+
+  // Resolving Step 1 trigger via PSM resolveTop
+  psm.resolveTop();
+  assert.equal(ttsm.players.p1.graveyard.length, 0, 'PERK_UPKEEP_TRIGGER must never enter p1 graveyard');
+  assert.equal(ttsm.players.p2.graveyard.length, 0, 'PERK_UPKEEP_TRIGGER must never enter p2 graveyard');
+
+  // Step 2: Push effect trigger and resolve
+  psm.clearStack();
+  const step2Item = engine.triggerStep2('22', [], undefined, 'p1');
+  assert.equal(psm.stack.length, 1);
+  assert.equal(psm.peekStack().type, 'PERK_EFFECT_TRIGGER');
+
+  psm.resolveTop();
+  assert.equal(ttsm.players.p1.graveyard.length, 0, 'PERK_EFFECT_TRIGGER must never enter p1 graveyard');
+  assert.equal(ttsm.players.p2.graveyard.length, 0, 'PERK_EFFECT_TRIGGER must never enter p2 graveyard');
+
+  engine.destroy();
+});
+
+// -------------------------------------------------------------------------------------------------
+// VEC-16: Perk #44 (Exploration) Additional Land Drop Limit & Turn Reset
+// -------------------------------------------------------------------------------------------------
+runTest('VEC-16: Perk #44 (Exploration) Additional Land Drop Limit & Turn Reset', () => {
+  const ttsm = new TabletopStateManager({ players: ['p1', 'p2'] });
+  const psm = new PriorityStateMachine({ players: ['p1', 'p2'], activePlayerId: 'p1', tabletopState: ttsm });
+  ttsm._priorityMachine = psm;
+
+  // Set to PRECOMBAT_MAIN where lands are legally played
+  psm.setPhaseStep('PRECOMBAT_MAIN');
+
+  // Add 3 lands and 1 card to library
+  ttsm.players.p1.library = [{ instanceId: 'c_lib', name: 'Lightning Bolt', typeLine: 'Instant' }];
+  ttsm.addCardToZone('p1', 'hand', { instanceId: 'land_1', name: 'Forest', typeLine: 'Basic Land — Forest', isPermanent: true });
+  ttsm.addCardToZone('p1', 'hand', { instanceId: 'land_2', name: 'Mountain', typeLine: 'Basic Land — Mountain', isPermanent: true });
+  ttsm.addCardToZone('p1', 'hand', { instanceId: 'land_3', name: 'Island', typeLine: 'Basic Land — Island', isPermanent: true });
+
+  // Baseline: Play 1st land succeeds
+  ttsm.playLand('p1', 'land_1');
+  assert.equal(ttsm.players.p1.landsPlayedThisTurn, 1);
+
+  // Playing 2nd land without perk fails
+  assert.throws(() => ttsm.playLand('p1', 'land_2'));
+
+  // Resolve Perk #44
+  const result = executePerkEffect('44', ttsm, { activePlayerId: 'p1' });
+  assert.equal(result.success, true);
+  assert.equal(ttsm.players.p1.resources.additionalLandsAllowed, 1);
+  assert.equal(ttsm.players.p1.maxLandsPerTurn, 2);
+
+  // Now playing 2nd land must succeed
+  ttsm.playLand('p1', 'land_2');
+  assert.equal(ttsm.players.p1.landsPlayedThisTurn, 2);
+
+  // Playing 3rd land must fail
+  assert.throws(() => ttsm.playLand('p1', 'land_3'));
+
+  // Advance turn / untap: quotas must reset to 1
+  ttsm.resetTurnQuotas('p1');
+  assert.equal(ttsm.players.p1.landsPlayedThisTurn, 0);
+  assert.equal(ttsm.players.p1.maxLandsPerTurn, 1);
+  assert.equal(ttsm.players.p1.resources.additionalLandsAllowed, 0);
+  assert.equal(ttsm.players.p1.resources.maxLandsPerTurn, 1);
+});
+
+// -------------------------------------------------------------------------------------------------
+// VEC-17: Next Phase Invariant: Stack Non-Empty Stops Fast-Forward at UPKEEP
+// -------------------------------------------------------------------------------------------------
+runTest('VEC-17: Next Phase Invariant: Stack Non-Empty Stops Fast-Forward at UPKEEP', () => {
+  const ttsm = new TabletopStateManager({ players: ['p1', 'p2'] });
+  const psm = new PriorityStateMachine({ players: ['p1', 'p2'], activePlayerId: 'p1', tabletopState: ttsm });
+  ttsm._priorityMachine = psm;
+
+  const engine = new RandomPerkEngine({
+    tabletopState: ttsm,
+    priorityStateMachine: psm,
+    initialPlayerCount: 2
+  });
+
+  // On Turn 4 (1v1 unlock), start at UNTAP and advance
+  psm.turnNumber = 4;
+  psm.roundNumber = 4;
+  psm.setPhaseStep('UNTAP');
+
+  const step = psm.nextPhase('p1');
+  assert.equal(step, 'UPKEEP', 'nextPhase from UNTAP must stop at UPKEEP when stack is non-empty');
+  assert.equal(psm.currentPhaseStep, 'UPKEEP');
+  assert.equal(psm.stack.length, 1);
+  assert.equal(psm.peekStack().type, 'PERK_UPKEEP_TRIGGER');
+
+  engine.destroy();
+});
+
+// -------------------------------------------------------------------------------------------------
+// VEC-18: 1v1 Full Round Progression Dormancy (Rounds 1-3 Dormant, Round 4 / Turn 7 Unlock)
+// -------------------------------------------------------------------------------------------------
+runTest('VEC-18: 1v1 Full Round Progression Dormancy (Rounds 1-3 Dormant, Round 4 / Turn 7 Unlock)', () => {
+  const ttsm = new TabletopStateManager({ players: ['p1', 'p2'] });
+  const psm = new PriorityStateMachine({ players: ['p1', 'p2'], activePlayerId: 'p1', tabletopState: ttsm });
+  ttsm._priorityMachine = psm;
+
+  const engine = new RandomPerkEngine({
+    tabletopState: ttsm,
+    priorityStateMachine: psm,
+    initialPlayerCount: 2
+  });
+
+  const dormantTurns = [];
+  engine.on('PERK_EMBLEM_DORMANT', (evt) => {
+    dormantTurns.push(evt);
+  });
+
+  // Turns 1 to 6 (Rounds 1, 2, 3 in 1v1):
+  // T1: P1, Round 1
+  // T2: P2, Round 1
+  // T3: P1, Round 2
+  // T4: P2, Round 2
+  // T5: P1, Round 3
+  // T6: P2, Round 3
+  for (let turn = 1; turn <= 6; turn++) {
+    const round = Math.ceil(turn / 2);
+    const activePid = (turn % 2 === 1) ? 'p1' : 'p2';
+    psm.turnNumber = turn;
+    psm.roundNumber = round;
+    psm.activePlayerId = activePid;
+    psm.clearStack();
+    psm.setPhaseStep('UPKEEP');
+
+    assert.equal(psm.stack.length, 0, `Turn ${turn} (Round ${round}) must not trigger PERK_UPKEEP_TRIGGER`);
+  }
+
+  assert.equal(dormantTurns.length, 6, 'All 6 individual turns across Rounds 1-3 must be dormant');
+
+  // Turn 7: P1, Round 4 (Player 1's 4th turn) -> Triggers!
+  psm.turnNumber = 7;
+  psm.roundNumber = 4;
+  psm.activePlayerId = 'p1';
+  psm.clearStack();
+  psm.setPhaseStep('UPKEEP');
+
+  assert.equal(psm.stack.length, 1, 'Turn 7 (Round 4) must trigger PERK_UPKEEP_TRIGGER');
+  assert.equal(psm.peekStack().type, 'PERK_UPKEEP_TRIGGER');
+  assert.equal(psm.peekStack().sourcePlayerId, 'p1');
+
+  // Turn 8: P2, Round 4 (Player 2's 4th turn) -> Also triggers!
+  psm.clearStack();
+  psm.turnNumber = 8;
+  psm.roundNumber = 4;
+  psm.activePlayerId = 'p2';
+  psm.setPhaseStep('UPKEEP');
+
+  assert.equal(psm.stack.length, 1, 'Turn 8 (Round 4) must trigger PERK_UPKEEP_TRIGGER');
+  assert.equal(psm.peekStack().type, 'PERK_UPKEEP_TRIGGER');
+  assert.equal(psm.peekStack().sourcePlayerId, 'p2');
+
+  engine.destroy();
 });
 
 // -------------------------------------------------------------------------------------------------

@@ -303,6 +303,48 @@ it('verifies modal open() sets display to flex/block and close() restores displa
   assert.strictEqual(drawer.element.classList.contains('hidden'), true);
 });
 
+it('verifies TargetSelectorModal executes onSelectTarget and closes when selecting a legal target, and cleans up when cancelled', () => {
+  let selectedData = null;
+  let cancelFired = false;
+
+  const targetModal = new TargetSelectorModal({
+    onSelectTarget: (data) => {
+      selectedData = data;
+    },
+    onCancel: () => {
+      cancelFired = true;
+    }
+  });
+
+  const bolt = { name: 'Lightning Bolt', typeLine: 'Instant', effect: { targetType: 'any' } };
+  targetModal.open({ spell: bolt, casterPlayerId: 'p1' });
+
+  assert.strictEqual(targetModal.isOpen, true, 'Modal should be open');
+  assert.strictEqual(targetModal.element.style.display, 'flex');
+  assert.strictEqual(targetModal.element.classList.contains('hidden'), false);
+
+  // 1. Legal target click
+  const legalTarget = { id: 'p2', type: 'PLAYER', name: 'Player 2', isLegal: true };
+  targetModal.handleTargetClick(legalTarget);
+
+  assert.strictEqual(targetModal.isOpen, false, 'Modal should close on legal target selection');
+  assert.strictEqual(targetModal.element.style.display, 'none');
+  assert.strictEqual(targetModal.element.classList.contains('hidden'), true);
+  assert.ok(selectedData, 'onSelectTarget must be called');
+  assert.strictEqual(selectedData.targetId, 'p2');
+  assert.strictEqual(selectedData.targetType, 'PLAYER');
+
+  // 2. Cancellation
+  targetModal.open(bolt, null, 'p1');
+  assert.strictEqual(targetModal.isOpen, true, 'Modal should be open again');
+  targetModal.handleCancel();
+
+  assert.strictEqual(targetModal.isOpen, false, 'Modal should close on cancel');
+  assert.strictEqual(targetModal.element.style.display, 'none');
+  assert.strictEqual(targetModal.element.classList.contains('hidden'), true);
+  assert.strictEqual(cancelFired, true, 'onCancel callback must be invoked');
+});
+
 console.log(`\n=================================================`);
 console.log(`MODULE 4 TEST RESULTS: ${passed} passed, ${failed} failed`);
 console.log(`=================================================\n`);

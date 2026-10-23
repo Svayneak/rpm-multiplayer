@@ -250,6 +250,7 @@ export class PriorityStateMachine {
     this.isTurnEnded = false;
     this.strictTiming = Boolean(options.strictTiming);
     this.tabletopState = options.tabletopState || null;
+    this.combatState = options.combatState || null;
     this.eliminatedPlayers = new Set();
 
     // Event listeners & subscribers
@@ -602,6 +603,20 @@ export class PriorityStateMachine {
       });
     }
     this.stack.push(item);
+
+    if (this.tabletopState && Array.isArray(this.tabletopState.stack)) {
+      const card = item?.card || item;
+      const alreadyInTsm = this.tabletopState.stack.some(s => s && (
+        s === card ||
+        s === item ||
+        (s.instanceId && card.instanceId && s.instanceId === card.instanceId) ||
+        (s.id && item.id && s.id === item.id)
+      ));
+      if (!alreadyInTsm) {
+        this.tabletopState.stack.push(card);
+      }
+    }
+
     return item;
   }
 
@@ -623,6 +638,10 @@ export class PriorityStateMachine {
   peekStack() {
     if (this.stack.length === 0) return null;
     return this.stack[this.stack.length - 1];
+  }
+
+  get _stack() {
+    return this.stack;
   }
 
   /**
@@ -687,8 +706,17 @@ export class PriorityStateMachine {
     this.priorityPlayerId = this.activePlayerId;
     this.consecutivePassCount = 0;
 
+    if (this.tabletopState) {
+      this.tabletopState.activePlayerId = this.activePlayerId;
+      this.tabletopState.turnNumber = this.turnNumber;
+      this.tabletopState.roundNumber = this.roundNumber;
+    }
+
     const is1v1 = (this.players.length === 2);
-    const isFirstTurnOfStartingPlayer = (this.roundNumber === 1 && this.activePlayerId === this.startingPlayerId);
+    const isFirstTurnOfStartingPlayer = (
+      this.activePlayerId === this.startingPlayerId &&
+      (this.turnNumber === 1 || (this.roundNumber === 1 && (this.playerTurnCounts.get(this.activePlayerId) || 0) <= 1))
+    );
     const shouldSkipDraw = is1v1 && isFirstTurnOfStartingPlayer;
 
     this.emit('PHASE_STEP_CHANGED', {
@@ -712,7 +740,9 @@ export class PriorityStateMachine {
     } else if (this.currentPhaseStep === 'UPKEEP') {
       this.emit('UPKEEP_STEP_ENTERED', {
         activePlayerId: this.activePlayerId,
-        turnNumber: this.turnNumber
+        turnNumber: this.turnNumber,
+        roundNumber: this.roundNumber,
+        playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1
       });
     } else if (this.currentPhaseStep === 'CLEANUP') {
       this.emit('CLEANUP_STEP_ENTERED', {
@@ -740,7 +770,18 @@ export class PriorityStateMachine {
     this.checkpointJournal.captureSnapshot(`BEFORE_PHASE_ADVANCE_${this.currentPhaseStep}`, this);
 
     const previousStep = this.currentPhaseStep;
-    const nextIndex = currentIndex + 1;
+    let nextIndex = currentIndex + 1;
+
+    // MTG CR 508.8: If no creatures are declared as attackers, skip blockers and combat damage steps
+    if (this.currentPhaseStep === 'DECLARE_ATTACKERS') {
+      const attackers = this.tabletopState?.combatState?.attackers || this.combatState?.attackers || [];
+      if (attackers.length === 0) {
+        const endCombatIdx = this.phaseSteps.indexOf('END_COMBAT');
+        if (endCombatIdx !== -1) {
+          nextIndex = endCombatIdx;
+        }
+      }
+    }
 
     if (nextIndex >= this.phaseSteps.length) {
       // Turn ends -> Advance to next player's UNTAP step
@@ -756,8 +797,16 @@ export class PriorityStateMachine {
       const nextTurnCount = (this.playerTurnCounts.get(nextPlayerId) || 0) + 1;
       this.playerTurnCounts.set(nextPlayerId, nextTurnCount);
 
-      if (nextPlayerId === this.startingPlayerId) {
+      if (this.players.length === 2) {
+        this.roundNumber = Math.ceil(this.turnNumber / 2);
+      } else if (nextPlayerId === this.startingPlayerId) {
         this.roundNumber++;
+      }
+
+      if (this.tabletopState) {
+        this.tabletopState.activePlayerId = this.activePlayerId;
+        this.tabletopState.turnNumber = this.turnNumber;
+        this.tabletopState.roundNumber = this.roundNumber;
       }
 
       this.emit('TURN_ROTATED', {
@@ -781,7 +830,10 @@ export class PriorityStateMachine {
     }
 
     const is1v1 = (this.players.length === 2);
-    const isFirstTurnOfStartingPlayer = (this.roundNumber === 1 && this.activePlayerId === this.startingPlayerId);
+    const isFirstTurnOfStartingPlayer = (
+      this.activePlayerId === this.startingPlayerId &&
+      (this.turnNumber === 1 || (this.roundNumber === 1 && (this.playerTurnCounts.get(this.activePlayerId) || 0) <= 1))
+    );
     const shouldSkipDraw = is1v1 && isFirstTurnOfStartingPlayer;
 
     this.emit('PHASE_STEP_CHANGED', {
@@ -805,7 +857,9 @@ export class PriorityStateMachine {
     } else if (this.currentPhaseStep === 'UPKEEP') {
       this.emit('UPKEEP_STEP_ENTERED', {
         activePlayerId: this.activePlayerId,
-        turnNumber: this.turnNumber
+        turnNumber: this.turnNumber,
+        roundNumber: this.roundNumber,
+        playerTurnNumber: this.playerTurnCounts.get(this.activePlayerId) || 1
       });
     } else if (this.currentPhaseStep === 'CLEANUP') {
       this.emit('CLEANUP_STEP_ENTERED', {
@@ -826,19 +880,24 @@ export class PriorityStateMachine {
   _evaluateDrawStep() {
     if (this.currentPhaseStep === 'DRAW') {
       const is1v1 = (this.players.length === 2);
-      const isFirstTurnOfStartingPlayer = (this.roundNumber === 1 && this.activePlayerId === this.startingPlayerId);
+      const isFirstTurnOfStartingPlayer = (
+        this.activePlayerId === this.startingPlayerId &&
+        (this.turnNumber === 1 || (this.roundNumber === 1 && (this.playerTurnCounts.get(this.activePlayerId) || 0) <= 1))
+      );
       const shouldSkipDraw = is1v1 && isFirstTurnOfStartingPlayer;
 
       if (shouldSkipDraw) {
         this.emit('DRAW_STEP_SKIPPED', {
           activePlayerId: this.activePlayerId,
           roundNumber: this.roundNumber,
+          turnNumber: this.turnNumber,
           rule: 'CR 103.7a: Starting player in 1v1 skips first turn draw step'
         });
       } else {
         this.emit('MANDATORY_DRAW_TRIGGERED', {
           activePlayerId: this.activePlayerId,
           roundNumber: this.roundNumber,
+          turnNumber: this.turnNumber,
           rule: 'CR 504.1: Normal turn draw'
         });
       }
@@ -846,6 +905,7 @@ export class PriorityStateMachine {
       this.emit('DRAW_STEP', {
         activePlayerId: this.activePlayerId,
         roundNumber: this.roundNumber,
+        turnNumber: this.turnNumber,
         shouldSkipDraw,
         reason: shouldSkipDraw
           ? 'CR 103.7a: Starting player in 1v1 skips first turn draw step'
@@ -867,10 +927,44 @@ export class PriorityStateMachine {
     if (this.stack.length > 0) {
       throw new PriorityViolationError('Cannot advance phase while stack is not empty.');
     }
+    // When advancing from UNTAP or UPKEEP towards MAIN 1, advance through DRAW without skipping it
+    if (this.currentPhaseStep === 'UNTAP' || this.currentPhaseStep === 'UPKEEP') {
+      while (this.currentPhaseStep !== 'PRECOMBAT_MAIN' && this.currentPhaseStep !== 'MAIN 1' && this.currentPhaseStep !== 'MAIN_1') {
+        const prev = this.currentPhaseStep;
+        this.advanceStep();
+        if ((this._stack && this._stack.length > 0) || (this.stack && this.stack.length > 0)) break;
+        if (this.currentPhaseStep === prev) break;
+      }
+      return this.currentPhaseStep;
+    }
+    if (this.currentPhaseStep === 'DRAW') {
+      return this.advanceStep();
+    }
     if (this.currentPhaseStep === 'PRECOMBAT_MAIN') {
+      if (this.phaseSteps.includes('BEGIN_COMBAT')) {
+        return this.advanceStep();
+      }
       this.setPhaseStep('COMBAT');
       return this.currentPhaseStep;
     }
+    return this.advanceStep();
+  }
+
+  /**
+   * Ends current turn per MTG CR 514 (Advances directly to CLEANUP, then rotates turn to next player).
+   * Strictly enforces INV-TURN-ROTATION-1 & INV-TURN-ROTATION-2.
+   * 
+   * @param {string} [playerId]
+   * @returns {string} New phase step (typically 'UNTAP' for next active player)
+   */
+  endTurn(playerId) {
+    if (playerId && this.activePlayerId !== playerId) {
+      throw new PriorityViolationError(`Only active player '${this.activePlayerId}' may end turn.`);
+    }
+    if (this.stack.length > 0) {
+      throw new PriorityViolationError('Cannot end turn while stack is not empty.');
+    }
+    this.currentPhaseStep = 'CLEANUP';
     return this.advanceStep();
   }
 
@@ -1014,6 +1108,9 @@ export class PriorityStateMachine {
     // Cancel any active countdown timers
     if (this.alarmManager) {
       this.alarmManager.cancel();
+      if (this.stack.length > 0 && this.peekStack()) {
+        this.alarmManager.start(this.priorityPlayerId, this.peekStack().id);
+      }
     }
 
     // Restore state from snapshot
@@ -1072,6 +1169,10 @@ export class PriorityStateMachine {
 
     this._runSBAsAndTriggers();
     this.priorityPlayerId = this.activePlayerId;
+
+    if (this.alarmManager && this.stack.length > 0 && this.peekStack()) {
+      this.alarmManager.start(this.priorityPlayerId, this.peekStack().id);
+    }
 
     this.emit('STACK_RESOLVE', {
       resolvedItem,
@@ -1295,6 +1396,10 @@ export class PriorityStateMachine {
       case 'NEXT_PHASE':
       case 'ADVANCE_PHASE_STEP': {
         return this.advanceStep();
+      }
+
+      case 'END_TURN': {
+        return this.endTurn(payload.playerId);
       }
 
       case 'ROLLBACK_TO_CHECKPOINT': {

@@ -28,6 +28,9 @@
  */
 
 import { TabletopStateManager, projectState } from './TabletopStateManager.js';
+import { PregameStateMachine, PREGAME_STATES } from './PregameStateMachine.js';
+import { canDeclareAsAttacker, canBlockAssignment } from './CombatDamageEngine.js';
+import { ProcessTraceLogger, defaultProcessTraceLogger } from './ProcessTraceLogger.js';
 import { PriorityStateMachine } from './PriorityStateMachine.js';
 import { StackAlarmManager } from './StackAlarmManager.js';
 import { RandomPerkEngine, executeAuthoritativeRoll } from './RandomPerkEngine.js';
@@ -101,17 +104,29 @@ export class RPMAppController {
     this.requireAuth = Boolean(options.requireAuth);
 
     // Local player identity
-    this.myPlayerId = options.userId || options.preferredSeat || (this.authManager?.getCurrentUser()?.id || 'p1');
+    this.myPlayerId = options.myPlayerId || options.userId || options.preferredSeat || (this.authManager?.getCurrentUser()?.id || 'p1');
     this.username = options.username || (this.authManager?.getCurrentUser()?.username || 'Alice');
     this.audioEnabled = options.audioEnabled !== false;
 
-    // Seating and initial players (default: 2 players)
-    const initialPlayers = options.players || (
+    // Seating and initial players (default: 2 players, with local seat aligned to this.myPlayerId)
+    const initialPlayers = options.players || options.playerIds || (
       options.initialPlayerCount
-        ? Array.from({ length: options.initialPlayerCount }, (_, i) => `p${i + 1}`)
-        : ['p1', 'p2']
+        ? Array.from({ length: options.initialPlayerCount }, (_, i) => i === 0 ? (this.myPlayerId || 'p1') : `p${i + 1}`)
+        : [this.myPlayerId || 'p1', 'p2']
     );
     this.playerIds = [...initialPlayers];
+    this.executionLog = [];
+    this.traceLogger = options.traceLogger || defaultProcessTraceLogger;
+    this.showTraceLog = Boolean(options.showTraceLog);
+    this._selectedAttackers = new Set();
+    this._blockerAssignments = new Map();
+    this._activeAttackerTargetId = null;
+    this._lastLoggedTurnHandoverKey = null;
+    this._selectedLandId = null;
+
+    if (this.traceLogger) {
+      this._wireTraceLogger(this.traceLogger);
+    }
 
     // Accordion drawers expansion state: [playerId][zone] -> boolean
     this.drawerState = {
@@ -168,8 +183,12 @@ export class RPMAppController {
     // 5. Tabletop State Manager
     this.tabletopState = options.tabletopState || new TabletopStateManager({
       players: this.playerIds,
+      traceLogger: this.traceLogger,
       ...options
     });
+    if (this.tabletopState && !this.tabletopState.traceLogger) {
+      this.tabletopState.traceLogger = this.traceLogger;
+    }
 
     // Ensure players exist in state
     if (this.tabletopState && this.tabletopState.players) {
@@ -243,6 +262,9 @@ export class RPMAppController {
     });
 
     // 11. Feature 19, 20 & 21 Interactive Modals
+    this.pregameEnabled = options.pregame === true;
+    this.pregameActive = false;
+    this.pregameMachine = null;
     this.mulliganModal = options.mulliganModal || new MulliganModal({
       onKeep: (data) => this.handleMulliganKeep(data),
       onMulligan: (data) => this.handleMulliganTake(data),
@@ -252,7 +274,13 @@ export class RPMAppController {
     this.searchModal = options.searchModal || new SearchSelectGridModal();
 
     this.targetModal = options.targetModal || new TargetSelectorModal({
-      onSelectTarget: (data) => this.handleTargetSelected(data)
+      onSelectTarget: (data) => this.handleTargetSelected(data),
+      onCancel: () => {
+        this._pendingSpellToCast = null;
+        this._stagedCast = null;
+        this.render?.();
+        this.reconcileDOM?.();
+      }
     });
 
     this.actionDrawer = options.actionDrawer || new PermanentActionDrawer({
@@ -469,6 +497,8 @@ export class RPMAppController {
     }
 
     if (this.tabletopState) {
+      this.tabletopState.isGameOver = false;
+      this.tabletopState.winnerId = null;
       const prevPlayers = this.tabletopState.players || {};
       this.tabletopState.players = {};
       for (const pid of this.playerIds) {
@@ -506,6 +536,7 @@ export class RPMAppController {
       this.priorityMachine.activePlayerId = startId;
       this.priorityMachine.priorityPlayerId = startId;
       if (this.tabletopState) {
+        this.tabletopState.startingPlayerId = startId;
         this.tabletopState.priorityMachine = this.priorityMachine;
       }
     }
@@ -531,36 +562,51 @@ export class RPMAppController {
           const mainboard = starter.mainboard || [];
           const libCards = mainboard.flatMap(c => {
             const count = c.count || 1;
-            return Array.from({ length: count }, () => ({
-              instanceId: generateInstanceId(),
-              ownerId: slot.playerId,
-              controllerId: slot.playerId,
-              name: c.name,
-              typeLine: c.type || 'Creature',
-              manaCost: c.manaCost || '{R}',
-              cmc: c.cmc ?? 1,
-              power: c.power ?? 2,
-              toughness: c.toughness ?? 2,
-              isTapped: false,
-              isSummoningSick: false
-            }));
+            const meta = getHydratedCardMetadata(c.name);
+            return Array.from({ length: count }, () => {
+              const cardObj = {
+                instanceId: generateInstanceId(),
+                ownerId: slot.playerId,
+                controllerId: slot.playerId,
+                name: c.name,
+                typeLine: c.type || meta?.typeLine || 'Creature',
+                manaCost: c.manaCost || meta?.manaCost || '{R}',
+                cmc: c.cmc ?? meta?.cmc ?? 1,
+                power: c.power ?? meta?.power ?? 2,
+                toughness: c.toughness ?? meta?.toughness ?? 2,
+                keywords: { ...(meta?.keywords || {}), ...(c.keywords || {}) },
+                effect: meta?.effect || null,
+                isTapped: false,
+                isSummoningSick: false
+              };
+              return TabletopStateManager.hydrateCardMechanics(cardObj);
+            });
           });
           botPlayer.library = libCards;
           botPlayer.zones = botPlayer.zones || {};
           botPlayer.zones.library = [...libCards];
         }
 
-        const agent = new PerkinsAgent({
-          slotId: slot.playerId,
-          name: slot.playerName,
-          mode: 'LOCAL',
-          thinkingDelayMs: 600,
-          coachEnabled: false,
-          starterDeck: starter
-        });
-        agent.attach(this);
-        this.botAgents.set(slot.playerId, agent);
-        this.perkinsAgent = agent;
+        let agent = this.botAgents.get(slot.playerId);
+        if (!agent && this.perkinsAgent?.slotId === slot.playerId) {
+          agent = this.perkinsAgent;
+        }
+        if (!agent) {
+          agent = new PerkinsAgent({
+            slotId: slot.playerId,
+            name: slot.playerName,
+            mode: 'LOCAL',
+            thinkingDelayMs: 600,
+            coachEnabled: false,
+            starterDeck: starter
+          });
+          agent.attach(this);
+          this.botAgents.set(slot.playerId, agent);
+          this.perkinsAgent = agent;
+        } else {
+          this.botAgents.set(slot.playerId, agent);
+          this.perkinsAgent = agent;
+        }
       }
     }
 
@@ -966,30 +1012,52 @@ export class RPMAppController {
         if (!p.zones) {
           p.zones = { hand: [], library: [], graveyard: [], exile: [], battlefield: [] };
         }
+        const buildCardInstance = (name, idx, zoneName) => {
+          const meta = getHydratedCardMetadata(name);
+          const imgUri = meta?.imageUri || meta?.imageUrl || '';
+          const card = {
+            instanceId: `card_${pid}_${zoneName}_${idx}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            name: meta?.name || name,
+            typeLine: meta?.typeLine || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
+            type: meta?.type || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
+            manaCost: meta?.manaCost !== undefined ? meta.manaCost : (name.includes('Bolt') || name.includes('Spike') || name.includes('Guide') || name.includes('Swiftspear') ? '{R}' : ''),
+            cmc: meta?.cmc ?? (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 0 : 1),
+            oracleText: meta?.oracleText || '',
+            imageUri: imgUri,
+            imageUrl: imgUri,
+            power: meta?.power,
+            toughness: meta?.toughness,
+            loyalty: meta?.loyalty,
+            colors: meta?.colors || [],
+            owner: pid,
+            ownerId: pid,
+            controllerId: pid,
+            zone: zoneName,
+            isTapped: false,
+            effect: meta?.effect,
+            keywords: meta?.keywords ? { ...meta?.keywords } : undefined,
+            isShockland: meta?.isShockland,
+            hasSummoningSickness: meta?.hasSummoningSickness,
+            isSummoningSick: meta?.isSummoningSick
+          };
+          if (TabletopStateManager && typeof TabletopStateManager.hydrateCardMechanics === 'function') {
+            TabletopStateManager.hydrateCardMechanics(card);
+          }
+          return card;
+        };
         if (!p.zones.hand || p.zones.hand.length === 0) {
-          p.zones.hand = starterCardNames.map((name, idx) => {
-            const meta = getHydratedCardMetadata(name);
-            return {
-              instanceId: `card_${pid}_${idx}_${Date.now()}`,
-              name: meta?.name || name,
-              typeLine: meta?.typeLine || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
-              type: meta?.type || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
-              manaCost: meta?.manaCost !== undefined ? meta.manaCost : (name.includes('Bolt') || name.includes('Spike') || name.includes('Guide') || name.includes('Swiftspear') ? '{R}' : ''),
-              cmc: meta?.cmc ?? 1,
-              oracleText: meta?.oracleText || '',
-              imageUri: meta?.imageUri || '',
-              power: meta?.power,
-              toughness: meta?.toughness,
-              loyalty: meta?.loyalty,
-              colors: meta?.colors || [],
-              owner: pid,
-              ownerId: pid,
-              controllerId: pid,
-              zone: 'HAND',
-              isTapped: false
-            };
-          });
+          p.zones.hand = starterCardNames.map((name, idx) => buildCardInstance(name, idx, 'HAND'));
           p.hand = p.zones.hand;
+        }
+        if (!p.library || p.library.length === 0) {
+          const pool = [
+            'Mountain', 'Steam Vents', 'Lightning Bolt', 'Lava Spike',
+            'Goblin Guide', 'Monastery Swiftspear', 'Mountain', 'Lightning Bolt',
+            'Lava Spike', 'Goblin Guide', 'Monastery Swiftspear', 'Steam Vents'
+          ];
+          const libCards = Array.from({ length: 53 }, (_, idx) => buildCardInstance(pool[idx % pool.length], idx, 'LIBRARY'));
+          p.library = libCards;
+          p.zones.library = [...libCards];
         }
       }
     }
@@ -1017,14 +1085,28 @@ export class RPMAppController {
       }
     }
 
+    const isShockland = Boolean(card?.isShockland) ||
+      /steam vents|sacred foundry|watery grave|stomping ground|godless shrine|blood crypt|breeding pool|overgrown tomb|temple garden|hallowed fountain/i.test(card?.name || '') ||
+      /pay 2 life.*untapped|enters the battlefield tapped unless you pay 2 life/i.test(card?.text || card?.oracleText || '');
+
+    let payShockCost = false;
+    if (isShockland && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      payShockCost = window.confirm(`¿Pagar 2 vidas para que ${card.name || 'Steam Vents'} entre enderezada? (Sí: -2 vidas / No: entra girada)`);
+    }
+
     if (this.tabletopState && typeof this.tabletopState.playLand === 'function') {
       try {
         if (!p.hand) p.hand = [];
         if (!p.hand.some(c => c && (c.instanceId === card.instanceId || c.name === card.name))) {
           p.hand.push(card);
         }
-        this.tabletopState.playLand(this.myPlayerId, card.instanceId || card);
+        this.tabletopState.playLand(this.myPlayerId, card.instanceId || card, { payShockCost });
       } catch (err) {
+        this.tabletopState?.recordTrace?.('UI_REJECTION', 'PLAY_LAND_REJECTED', {
+          playerId: this.myPlayerId,
+          cardName: card?.name,
+          reason: err.message
+        });
         this.showWarningBanner(`⚠️ ${err.message || 'Cannot play land'}`);
         return;
       }
@@ -1037,32 +1119,103 @@ export class RPMAppController {
     const battlefieldCard = {
       ...card,
       subzone: 'lands',
-      isTapped: false,
+      isTapped: isShockland ? !payShockCost : false,
       zone: 'BATTLEFIELD'
     };
-    p.zones.battlefield.push(battlefieldCard);
+    if (!p.zones.battlefield.some(c => c && c.instanceId && c.instanceId === card.instanceId)) {
+      p.zones.battlefield.push(battlefieldCard);
+    }
     this.selectedHandCardId = null;
     this.dispatchAction({
       type: 'PLAY_LAND',
-      payload: { playerId: this.myPlayerId, cardName: card.name, cardInstanceId: card.instanceId }
+      payload: {
+        playerId: this.myPlayerId,
+        card,
+        cardName: card.name,
+        cardInstanceId: card.instanceId,
+        payShockCost,
+        pay2Life: payShockCost,
+        landAlreadyPlayed: true
+      }
     }, { origin: 'LOCAL' });
     this.reconcileDOM();
   }
 
-  castSpellToStack(card) {
+  castSpellToStack(card, chosenTarget = null) {
+    if (card && typeof TabletopStateManager?.hydrateCardMechanics === 'function') {
+      TabletopStateManager.hydrateCardMechanics(card);
+    }
     const p = this.tabletopState?.players?.[this.myPlayerId];
     if (this.tabletopState && typeof this.tabletopState.canPlayerCastOrPlay === 'function') {
       const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, card, this.priorityMachine);
       if (check && !check.allowed) {
+        this.tabletopState?.recordTrace?.('UI_REJECTION', 'CAST_SPELL_REJECTED', {
+          playerId: this.myPlayerId,
+          cardName: card?.name,
+          reason: check.message
+        });
         this.showWarningBanner(`⚠️ ${check.message || 'Cannot cast spell'}`);
         return;
       }
     }
 
+    const typeLine = String(card?.typeLine || card?.type || '').toLowerCase();
+    const isSpellWithTarget = (typeLine.includes('instant') || typeLine.includes('sorcery') || typeLine.includes('aura')) &&
+      Boolean(card?.effect?.targetType || card?.requiresTarget || /target/i.test(card?.oracleText || card?.text || ''));
+
+    if (isSpellWithTarget && !chosenTarget && !card?.targetId && (!Array.isArray(card?.targets) || card.targets.length === 0) && this.targetModal) {
+      if (!this.targetModal.element && this.container) {
+        const modalHost = this.container.querySelector('#modal-root') || this.container;
+        if (typeof this.targetModal.mount === 'function') {
+          this.targetModal.mount(modalHost);
+        } else {
+          this.targetModal.container = modalHost;
+          this.targetModal.init();
+        }
+      }
+      if (Boolean(this.container)) {
+        this._pendingSpellToCast = card;
+        this._stagedCast = card;
+        this.targetModal.onSelectTarget = (data) => this.handleTargetSelected(data);
+        this.targetModal.onCancel = () => {
+          this._pendingSpellToCast = null;
+          this._stagedCast = null;
+          this.render?.();
+          this.reconcileDOM?.();
+        };
+        this.targetModal.open(card, this.tabletopState, this.myPlayerId, {
+          onSelectTarget: (data) => this.handleTargetSelected(data),
+          onCancel: () => {
+            this._pendingSpellToCast = null;
+            this._stagedCast = null;
+            this.render?.();
+            this.reconcileDOM?.();
+          }
+        });
+        if (this.targetModal.candidateTargets && this.targetModal.candidateTargets.some(t => t.isLegal)) {
+          return;
+        } else {
+          this.targetModal.close();
+          this._pendingSpellToCast = null;
+          this._stagedCast = null;
+          this.showWarningBanner?.('⚠️ No legal targets available for this spell.');
+          return;
+        }
+      }
+    }
+
+    let manaAlreadyPaid = false;
     if (card && card.manaCost && this.tabletopState && typeof this.tabletopState.autoTapForMana === 'function') {
       try {
         this.tabletopState.autoTapForMana(this.myPlayerId, card.manaCost);
+        manaAlreadyPaid = true;
       } catch (err) {
+        this.tabletopState?.recordTrace?.('UI_REJECTION', 'CAST_SPELL_MANA_REJECTED', {
+          playerId: this.myPlayerId,
+          cardName: card?.name,
+          manaCost: card?.manaCost,
+          reason: err.message
+        });
         this.showWarningBanner(`⚠️ ${err.message || 'Insufficient mana'}`);
         return;
       }
@@ -1072,15 +1225,28 @@ export class RPMAppController {
       p.hand = p.zones.hand;
     }
     this.selectedHandCardId = null;
+
+    const targetId = chosenTarget?.targetId || chosenTarget?.id || card?.targetId || (Array.isArray(card?.targets) ? card.targets[0] : null) || null;
+    const targetName = chosenTarget?.targetName || chosenTarget?.name || null;
+    const targets = targetId ? [targetId] : (Array.isArray(card?.targets) ? card.targets : []);
+
     this.dispatchAction({
       type: 'CAST_SPELL',
+      manaAlreadyPaid,
+      targetId,
+      targetName,
+      targets,
       payload: {
         playerId: this.myPlayerId,
         controllerId: this.myPlayerId,
         controllerName: this.username || 'You',
         card,
         cardName: card.name,
-        cardInstanceId: card.instanceId
+        cardInstanceId: card.instanceId,
+        manaAlreadyPaid,
+        targetId,
+        targetName,
+        targets
       }
     }, { origin: 'LOCAL' });
     this.reconcileDOM();
@@ -1105,19 +1271,6 @@ export class RPMAppController {
     let card;
     if (idx !== -1) {
       card = hand[idx];
-      if (this.tabletopState && typeof this.tabletopState.playLand === 'function') {
-        try {
-          if (!p.hand) p.hand = [];
-          if (!p.hand.some(c => c && (c.instanceId === card.instanceId || c.name === card.name))) {
-            p.hand.push(card);
-          }
-          this.tabletopState.playLand(this.myPlayerId, card.instanceId || card);
-        } catch (err) {
-          this.showWarningBanner(`⚠️ ${err.message || 'Cannot play land'}`);
-          return;
-        }
-      }
-      hand.splice(idx, 1);
     } else {
       card = {
         instanceId: `land_${Date.now()}`,
@@ -1125,11 +1278,37 @@ export class RPMAppController {
         typeLine: 'Basic Land — ' + landName,
         zone: 'BATTLEFIELD'
       };
+    }
+
+    const isShockland = Boolean(card?.isShockland) ||
+      /steam vents|sacred foundry|watery grave|stomping ground|godless shrine|blood crypt|breeding pool|overgrown tomb|temple garden|hallowed fountain/i.test(card?.name || '') ||
+      /pay 2 life.*untapped|enters the battlefield tapped unless you pay 2 life/i.test(card?.text || card?.oracleText || '');
+
+    let payShockCost = false;
+    if (isShockland && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      payShockCost = window.confirm(`¿Pagar 2 vidas para que ${card.name || 'Steam Vents'} entre enderezada? (Sí: -2 vidas / No: entra girada)`);
+    }
+
+    if (idx !== -1) {
+      if (this.tabletopState && typeof this.tabletopState.playLand === 'function') {
+        try {
+          if (!p.hand) p.hand = [];
+          if (!p.hand.some(c => c && (c.instanceId === card.instanceId || c.name === card.name))) {
+            p.hand.push(card);
+          }
+          this.tabletopState.playLand(this.myPlayerId, card.instanceId || card, { payShockCost });
+        } catch (err) {
+          this.showWarningBanner(`⚠️ ${err.message || 'Cannot play land'}`);
+          return;
+        }
+      }
+      hand.splice(idx, 1);
+    } else {
       if (this.tabletopState && typeof this.tabletopState.playLand === 'function') {
         try {
           if (!p.hand) p.hand = [];
           p.hand.push(card);
-          this.tabletopState.playLand(this.myPlayerId, card.instanceId || card);
+          this.tabletopState.playLand(this.myPlayerId, card.instanceId || card, { payShockCost });
         } catch (err) {
           this.showWarningBanner(`⚠️ ${err.message || 'Cannot play land'}`);
           return;
@@ -1142,7 +1321,7 @@ export class RPMAppController {
     }
     if (!p.zones) p.zones = {};
     if (!p.zones.battlefield) p.zones.battlefield = [];
-    p.zones.battlefield.push({ ...card, subzone: 'lands', isTapped: false, zone: 'BATTLEFIELD' });
+    p.zones.battlefield.push({ ...card, subzone: 'lands', isTapped: isShockland ? !payShockCost : false, zone: 'BATTLEFIELD' });
     this.authManager?.dispatchTelemetry('LAND_PLAY', landName, { playerId: this.myPlayerId });
     this.reconcileDOM();
   }
@@ -1808,6 +1987,9 @@ export class RPMAppController {
     if (this.cardModal) {
       this.cardModal.mount(modalRoot);
     }
+    if (this.targetModal && typeof this.targetModal.mount === 'function') {
+      this.targetModal.mount(modalRoot);
+    }
   }
 
   // ==========================================================================
@@ -1829,9 +2011,26 @@ export class RPMAppController {
     if (this.tabletopState && typeof this.tabletopState.on === 'function') {
       const onGameOver = (data) => {
         if (this.isDestroyed) return;
+        if (this.perkinsAgent && typeof this.perkinsAgent.destroy === 'function') {
+          try { this.perkinsAgent.destroy(); } catch (_) {}
+        }
+        if (Array.isArray(this.botAgents)) {
+          for (const bot of this.botAgents) {
+            try { bot?.destroy?.(); } catch (_) {}
+          }
+        }
         this.isMatchActiveFlag = false;
         this._hasMatchStarted = false;
         this.tabRouter.unlockAll?.();
+        const winnerId = data?.winnerId || this.tabletopState?.winnerId;
+        const winnerName = (winnerId && this.tabletopState?.players?.[winnerId]?.name) || (winnerId === this.myPlayerId ? this.username : (winnerId ? `Player ${winnerId.toUpperCase()}` : null));
+        if (winnerId && typeof this.handleMatchVictory === 'function') {
+          this.handleMatchVictory({
+            winner: winnerId,
+            winnerId,
+            winnerName
+          });
+        }
         this.showGameOverModal(data);
         this.reconcileDOM();
       };
@@ -1861,16 +2060,39 @@ export class RPMAppController {
     if (this.priorityMachine && typeof this.priorityMachine.on === 'function') {
       const onStackResolve = (event) => {
         if (this.isDestroyed) return;
+        const resolvedItem = event?.item || event?.spell || event;
+        const resolvedName = resolvedItem?.cardName || resolvedItem?.name || resolvedItem?.card?.name;
+        if (resolvedName) {
+          this.appendExecutionLog('Stack', `✨ Resolved ${resolvedName}`, {
+            playerId: resolvedItem?.controllerId || resolvedItem?.sourcePlayerId || this.priorityMachine?.activePlayerId
+          });
+        }
         // handleStackResolution is now invoked authoritatively by PriorityStateMachine.resolveTop();
         // this handler only triggers a visual reconciliation.
         this.reconcileDOM();
       };
       const onTurnChange = (event) => {
         if (this.isDestroyed) return;
+        const nextActiveId = event?.activePlayerId || event?.newActivePlayerId || this.priorityMachine.activePlayerId;
+        const tNum = event?.turnNumber || this.priorityMachine?.turnNumber || 1;
+        const rNum = event?.roundNumber || this.priorityMachine?.roundNumber || 1;
+        const handoverKey = `${tNum}:${nextActiveId}`;
+        if (this._lastLoggedTurnHandoverKey === handoverKey) {
+          return;
+        }
+        this._lastLoggedTurnHandoverKey = handoverKey;
         if (this.tabletopState && typeof this.tabletopState.resetTurnQuotas === 'function') {
-          const nextActiveId = event?.activePlayerId || this.priorityMachine.activePlayerId;
           this.tabletopState.resetTurnQuotas(nextActiveId);
         }
+        this.tabletopState?.recordTrace?.('TURN_TRACE', 'TURN_HANDOVER', {
+          turnNumber: tNum,
+          roundNumber: rNum,
+          previousActivePlayerId: event?.previousPlayerId || null,
+          nextActivePlayerId: nextActiveId
+        });
+        this.appendExecutionLog(`Turn ${tNum}`, `🔄 Turn ${tNum}: ${this.getFriendlyPlayerName(nextActiveId)} is now active`, {
+          playerId: nextActiveId
+        });
         this.reconcileDOM();
       };
       const onDrawStep = (evt) => {
@@ -1878,7 +2100,10 @@ export class RPMAppController {
         if (evt.shouldSkipDraw) {
           this.showToast(evt.reason || 'CR 103.7a: Starting player in 1v1 skips first turn draw step');
         } else {
-          if (this.tabletopState && typeof this.tabletopState.drawCard === 'function') {
+          // Draw is executed authoritatively (once per turn) by TabletopStateManager.handlePhaseStepChanged;
+          // drawing here as well caused a double draw. Fallback only if the manager is not wired to the machine.
+          const wired = this.tabletopState && this.tabletopState.priorityMachine === this.priorityMachine;
+          if (!wired && this.tabletopState && typeof this.tabletopState.drawCard === 'function') {
             try {
               this.tabletopState.drawCard(evt.activePlayerId, 1);
             } catch (err) { console.error('[StackResolution Error]:', err); }
@@ -1913,16 +2138,22 @@ export class RPMAppController {
 
       this.priorityMachine.on('STACK_RESOLVE', onStackResolve);
       this.priorityMachine.on('TURN_ADVANCED', onTurnChange);
-      this.priorityMachine.on('TURN_ROTATED', onTurnChange);
       this.priorityMachine.on('DRAW_STEP', onDrawStep);
       this.priorityMachine.on('SPELL_CAST_PRIORITY_ROTATED', onSpellCastPriorityRotated);
-      this.priorityMachine.on('PHASE_STEP_CHANGED', () => {
-        if (!this.isDestroyed) this.reconcileDOM();
+      this.priorityMachine.on('PHASE_STEP_CHANGED', (evt) => {
+        if (!this.isDestroyed) {
+          this.tabletopState?.recordTrace?.('TURN_TRACE', 'PHASE_STEP_CHANGED', {
+            previousStep: evt?.previousStep || null,
+            currentPhaseStep: evt?.currentPhaseStep || this.priorityMachine?.currentPhaseStep,
+            activePlayerId: evt?.activePlayerId || this.priorityMachine?.activePlayerId,
+            priorityPlayerId: evt?.priorityPlayerId || this.priorityMachine?.priorityPlayerId
+          });
+          this.reconcileDOM();
+        }
       });
       this._unsubscribers.push(() => {
         this.priorityMachine.off('STACK_RESOLVE', onStackResolve);
         this.priorityMachine.off('TURN_ADVANCED', onTurnChange);
-        this.priorityMachine.off('TURN_ROTATED', onTurnChange);
         if (typeof this.priorityMachine.off === 'function') {
           this.priorityMachine.off('DRAW_STEP', onDrawStep);
           this.priorityMachine.off('SPELL_CAST_PRIORITY_ROTATED', onSpellCastPriorityRotated);
@@ -1942,20 +2173,54 @@ export class RPMAppController {
 
     // 4. RandomPerkEngine
     if (this.randomPerk && typeof this.randomPerk.on === 'function') {
+      const onStep1 = (data) => {
+        if (this.isDestroyed) return;
+        const pName = this.getFriendlyPlayerName(data?.activePlayerId);
+        const msg = data?.logMessage || `🔮 [RPM Step 1]: Upkeep Emblem Trigger on stack for ${pName}. Priority open.`;
+        this.addTurnCommandLog(msg, { playerId: data?.activePlayerId });
+        this.reconcileDOM();
+      };
       const onRolled = (roll) => {
         if (this.isDestroyed) return;
         this.handlePerkRolled(roll);
+        const pName = this.getFriendlyPlayerName(roll?.activePlayerId || this.priorityMachine?.activePlayerId);
+        const perkName = roll?.isMiss ? 'Miss' : (roll?.perkName || roll?.matchedKey || 'Perk');
+        const rollStr = roll?.rollString || `${roll?.tens ?? ''}${roll?.ones ?? ''}`;
+        const msg = roll?.logMessage || `🎲 [RPM Roll]: ${pName} rolled ${rollStr} (${perkName})`;
+        this.addTurnCommandLog(msg, { playerId: roll?.activePlayerId });
+        this.reconcileDOM();
       };
       const onMiss = (data) => {
         if (this.isDestroyed) return;
         const rollPayload = data?.roll ? { ...data.roll, ...data, isMiss: true } : { ...data, isMiss: true };
         this.handlePerkRolled(rollPayload);
       };
-      this.randomPerk.on('PERK_ROLLED', onRolled);
+      const onStep2 = (data) => {
+        if (this.isDestroyed) return;
+        const pName = this.getFriendlyPlayerName(data?.activePlayerId);
+        const msg = data?.logMessage || `🔮 [RPM Step 2]: Perk Effect Trigger (${data?.perkKey}) on stack for ${pName}. Priority open.`;
+        this.addTurnCommandLog(msg, { playerId: data?.activePlayerId });
+        this.reconcileDOM();
+      };
+      const onResolved = (data) => {
+        if (this.isDestroyed) return;
+        const msg = data?.logMessage || `✨ [RPM #${data?.perkKey} Resolved]: ${data?.result?.logSummary || 'Effect resolved'}`;
+        this.addTurnCommandLog(msg, { playerId: data?.activePlayerId });
+        this.reconcileDOM();
+      };
+
+      this.randomPerk.on('PERK_STEP1_TRIGGERED', onStep1);
+      this.randomPerk.on('PERK_DICE_ROLLED', onRolled);
       this.randomPerk.on('PERK_ROLL_MISS', onMiss);
+      this.randomPerk.on('PERK_STEP2_TRIGGERED', onStep2);
+      this.randomPerk.on('PERK_RESOLVED', onResolved);
+
       this._unsubscribers.push(() => {
-        this.randomPerk.off('PERK_ROLLED', onRolled);
+        this.randomPerk.off('PERK_STEP1_TRIGGERED', onStep1);
+        this.randomPerk.off('PERK_DICE_ROLLED', onRolled);
         this.randomPerk.off('PERK_ROLL_MISS', onMiss);
+        this.randomPerk.off('PERK_STEP2_TRIGGERED', onStep2);
+        this.randomPerk.off('PERK_RESOLVED', onResolved);
       });
     }
 
@@ -2171,6 +2436,8 @@ export class RPMAppController {
 
     // Ensure bot registered in TabletopStateManager
     if (this.tabletopState) {
+      this.tabletopState.isGameOver = false;
+      this.tabletopState.winnerId = null;
       // Purge any phantom players (like legacy p2) to eliminate opponent duplicate bug
       this.tabletopState.players = {};
       if (typeof this.tabletopState.registerPlayer === 'function') {
@@ -2229,19 +2496,25 @@ export class RPMAppController {
       const mainboard = starter.mainboard || [];
       const libCards = mainboard.flatMap(c => {
         const count = c.count || 1;
-        return Array.from({ length: count }, () => ({
-          instanceId: generateInstanceId(),
-          ownerId: botSeatId,
-          controllerId: botSeatId,
-          name: c.name,
-          typeLine: c.type || 'Creature',
-          manaCost: c.manaCost || (c.cmc === 0 ? '' : '{R}'),
-          cmc: c.cmc ?? 1,
-          power: c.power ?? 2,
-          toughness: c.toughness ?? 2,
-          isTapped: false,
-          isSummoningSick: false
-        }));
+        const meta = getHydratedCardMetadata(c.name);
+        return Array.from({ length: count }, () => {
+          const cardObj = {
+            instanceId: generateInstanceId(),
+            ownerId: botSeatId,
+            controllerId: botSeatId,
+            name: c.name,
+            typeLine: c.type || meta?.typeLine || 'Creature',
+            manaCost: c.manaCost || meta?.manaCost || (c.cmc === 0 ? '' : '{R}'),
+            cmc: c.cmc ?? meta?.cmc ?? 1,
+            power: c.power ?? meta?.power ?? 2,
+            toughness: c.toughness ?? meta?.toughness ?? 2,
+            keywords: { ...(meta?.keywords || {}), ...(c.keywords || {}) },
+            effect: meta?.effect || null,
+            isTapped: false,
+            isSummoningSick: false
+          };
+          return TabletopStateManager.hydrateCardMechanics(cardObj);
+        });
       });
       botPlayer.library = libCards;
       botPlayer.zones = botPlayer.zones || {};
@@ -2265,6 +2538,9 @@ export class RPMAppController {
     this.perkinsAgent = agent;
 
     this.startMatch();
+    if (this.pregameEnabled) {
+      this._beginPregame();
+    }
     return agent;
   }
 
@@ -2327,6 +2603,12 @@ export class RPMAppController {
     const origin = context?.origin || action.origin || 'LOCAL';
     const actionType = action.type === 'ACTION_SEQUENCED' ? action.actionType : (action.actionType || action.type);
     const payload = action.payload || {};
+
+    // CR 103: only pre-game actions are accepted until GAME_ACTIVE
+    if (this.pregameActive && !/^(EXECUTE_STARTING_ROLL|SELECT_PLAY_OR_DRAW|DRAW_INITIAL_HANDS|DECIDE_MULLIGAN|PUT_ON_BOTTOM)$/.test(String(actionType))) {
+      this.showToast?.('Pre-game in progress: finish the mulligan first');
+      return;
+    }
 
     // Invariant INV-HARNESS-2 & INV-PERKINS-2: Circular loop suppression
     if (origin === 'LOCAL') {
@@ -2392,7 +2674,8 @@ export class RPMAppController {
 
         // 2. Auto-Tap Mana Pool Deduction & Land Tapping (INV-BOT-CAST-1)
         const manaCost = cardObj.manaCost || payload.manaCost;
-        if (this.tabletopState && manaCost && typeof this.tabletopState.autoTapForMana === 'function') {
+        const manaAlreadyPaid = Boolean(payload.manaAlreadyPaid || action.manaAlreadyPaid);
+        if (!manaAlreadyPaid && this.tabletopState && manaCost && typeof this.tabletopState.autoTapForMana === 'function') {
           try {
             this.tabletopState.autoTapForMana(controllerId, manaCost);
           } catch (err) {
@@ -2401,6 +2684,19 @@ export class RPMAppController {
         }
 
         // 3. Stack Placement & Priority Forwarding
+        const typeLine = String(cardObj.typeLine || cardObj.type || '').toLowerCase();
+        const isTargetable = typeLine.includes('instant') || typeLine.includes('sorcery') || typeLine.includes('aura');
+        const rawTargetData = payload.targets || action.targets || payload.targetId || action.targetId;
+        const formattedTargets = isTargetable
+          ? (Array.isArray(rawTargetData) ? rawTargetData : (rawTargetData ? [rawTargetData] : []))
+          : [];
+        const explicitTargetId = isTargetable ? (payload.targetId || action.targetId || (formattedTargets.length > 0 ? formattedTargets[0] : null)) : null;
+
+        if (cardObj) {
+          cardObj.targetId = explicitTargetId;
+          cardObj.targets = formattedTargets;
+        }
+
         if (this.priorityMachine) {
           const item = {
             ...cardObj,
@@ -2409,48 +2705,108 @@ export class RPMAppController {
             sourcePlayerId,
             controllerName,
             cardName,
-            targetId: payload.targetId || action.targetId || payload.targets || action.targets,
-            targets: payload.targets || action.targets || payload.targetId || action.targetId
+            targetId: explicitTargetId,
+            targets: formattedTargets
           };
           this.priorityMachine.pushStack(item);
         }
+
+        if (this.tabletopState && Array.isArray(this.tabletopState.stack)) {
+          const alreadyOnTsm = this.tabletopState.stack.some(s => s && (
+            s === cardObj ||
+            (s.instanceId && cardObj.instanceId && s.instanceId === cardObj.instanceId)
+          ));
+          if (!alreadyOnTsm) {
+            this.tabletopState.stack.push(cardObj);
+          }
+        }
+        if (this.tabletopState && typeof this.tabletopState._checkAndFireSpellCastTriggers === 'function') {
+          this.tabletopState._checkAndFireSpellCastTriggers(controllerId, cardObj);
+        }
+
+        let resolvedTargetLabel = payload.targetName || action.targetName || null;
+        if (!resolvedTargetLabel && explicitTargetId) {
+          if (this.tabletopState?.players?.[explicitTargetId]) {
+            resolvedTargetLabel = this.getFriendlyPlayerName(explicitTargetId);
+          } else {
+            for (const p of Object.values(this.tabletopState?.players || {})) {
+              const allPerms = [
+                ...(p.battlefield?.creatures || []),
+                ...(p.battlefield?.lands || []),
+                ...(p.battlefield?.noncreatures || []),
+                ...(p.battlefield?.planeswalkers || [])
+              ];
+              const match = allPerms.find(perm => perm && (perm.instanceId === explicitTargetId || perm.id === explicitTargetId));
+              if (match) {
+                resolvedTargetLabel = match.name;
+                break;
+              }
+            }
+          }
+        }
+        const targetSuffix = resolvedTargetLabel ? ` targeting ${resolvedTargetLabel}` : '';
+        this.appendExecutionLog('Spell', `⚡ ${this.getFriendlyPlayerName(controllerId)} casts ${cardName || 'Spell'}${targetSuffix}`, {
+          playerId: controllerId
+        });
         break;
       }
 
       case 'PLAY_LAND': {
         const targetId = payload.playerId || action.playerId || this.myPlayerId;
         const card = payload.card || action.card;
-        if (this.tabletopState?.players?.[targetId] && card) {
-          const p = this.tabletopState.players[targetId];
-          if (Array.isArray(p.hand)) {
-            p.hand = p.hand.filter(c => c.instanceId !== card.instanceId && c.name !== card.name);
-          }
-          if (Array.isArray(p.zones?.hand)) {
-            p.zones.hand = p.zones.hand.filter(c => c.instanceId !== card.instanceId && c.name !== card.name);
-          }
-          p.battlefield = p.battlefield || {};
-          p.battlefield.lands = p.battlefield.lands || [];
-          p.battlefield.lands.push({ ...card, isTapped: false });
-        }
-        break;
-      }
+        const cardName = payload.cardName || action.cardName || card?.name || 'Land';
+        const landAlreadyPlayed = Boolean(payload.landAlreadyPlayed || action.landAlreadyPlayed);
+        const payShockCost = Boolean(payload.payShockCost ?? payload.pay2Life ?? action.payShockCost ?? action.pay2Life);
+        const isShockland = Boolean(card?.isShockland) ||
+          /steam vents|sacred foundry|watery grave|stomping ground|godless shrine|blood crypt|breeding pool|overgrown tomb|temple garden|hallowed fountain/i.test(cardName || '');
+        const isTapped = isShockland ? !payShockCost : false;
 
-      case 'DECLARE_ATTACKERS': {
-        const targetId = payload.playerId || action.playerId || this.myPlayerId;
-        const attackerIds = payload.attackers || action.attackers || [];
-        if (this.tabletopState?.players?.[targetId]) {
+        if (!landAlreadyPlayed && this.tabletopState?.players?.[targetId] && card) {
           const p = this.tabletopState.players[targetId];
-          const creatures = p.battlefield?.creatures || [];
-          for (const c of creatures) {
-            if (attackerIds.includes(c.instanceId)) {
-              c.isTapped = true;
+          const played = p.landsPlayedThisTurn ?? p.resources?.landsPlayedThisTurn ?? 0;
+          const baseLimit = p.maxLandsPerTurn ?? p.landsPerTurnLimit ?? p.resources?.maxLandsPerTurn ?? 1;
+          const extraLands = p.resources?.additionalLandsAllowed || 0;
+          const limit = Math.max(baseLimit, 1 + extraLands);
+          const isActive = !this.priorityMachine || this.priorityMachine.activePlayerId === targetId;
+          if (isActive && played < limit) {
+            if (Array.isArray(p.hand)) {
+              p.hand = p.hand.filter(c => c.instanceId !== card.instanceId && c.name !== card.name);
+            }
+            if (Array.isArray(p.zones?.hand)) {
+              p.zones.hand = p.zones.hand.filter(c => c.instanceId !== card.instanceId && c.name !== card.name);
+            }
+
+            p.battlefield = p.battlefield || {};
+            p.battlefield.lands = p.battlefield.lands || [];
+            if (!p.battlefield.lands.some(l => l && l.instanceId && l.instanceId === card.instanceId)) {
+              p.battlefield.lands.push({ ...card, isTapped });
+            }
+            p.landsPlayedThisTurn = played + 1;
+            if (p.resources) {
+              p.resources.landsPlayedThisTurn = p.landsPlayedThisTurn;
             }
           }
         }
+        if (this.tabletopState?.players?.[targetId] && (card || payload.cardName)) {
+          this.appendExecutionLog('Land', `⛰️ ${this.getFriendlyPlayerName(targetId)} played ${cardName}${isTapped ? ' (tapped)' : ''}`, {
+            playerId: targetId
+          });
+        }
         break;
       }
 
+      case 'DECLARE_ATTACKERS':
+        this._handleDeclareAttackers(action);
+        this.appendExecutionLog('Combat', `⚔️ ${this.getFriendlyPlayerName(payload.playerId || action.playerId || this.myPlayerId)} declared ${(payload.attackers || action.attackers || []).length} attacker(s)`, {
+          playerId: payload.playerId || action.playerId || this.myPlayerId
+        });
+        break;
+
       case 'DECLARE_BLOCKERS':
+        this._handleDeclareBlockers(action);
+        this.appendExecutionLog('Combat', `🛡️ ${this.getFriendlyPlayerName(payload.playerId || action.playerId || this.myPlayerId)} declared ${(payload.assignments || payload.blocks || payload.blockers || []).length} blocker(s)`, {
+          playerId: payload.playerId || action.playerId || this.myPlayerId
+        });
         break;
 
       case 'SEND_CHIT_CHAT':
@@ -2509,6 +2865,154 @@ export class RPMAppController {
 
     // Reconcile DOM views
     this.reconcileDOM();
+  }
+
+  _handleDeclareAttackers(action) {
+    const payload = action.payload || action;
+    const targetId = payload.playerId || action.playerId || this.myPlayerId;
+    const attackerIds = payload.attackers || action.attackers || payload.attackersList || [];
+
+    if (this.tabletopState && typeof this.tabletopState.declareAttackers === 'function') {
+      try {
+        this.tabletopState.declareAttackers(targetId, attackerIds);
+      } catch (err) {
+        console.warn('[_handleDeclareAttackers] Error declaring attackers:', err.message);
+      }
+    } else if (this.tabletopState?.players?.[targetId]) {
+      const p = this.tabletopState.players[targetId];
+      const creatures = p.battlefield?.creatures || [];
+      for (const c of creatures) {
+        const isAttacker = Array.isArray(attackerIds) && attackerIds.some(a =>
+          typeof a === 'string' ? a === c.instanceId : (a.creatureId === c.instanceId || a.id === c.instanceId)
+        );
+        if (isAttacker) {
+          c.isAttacking = true;
+          const hasVigilance = Boolean(c.keywords?.vigilance || /vigilance/i.test(c.text || c.oracleText || ''));
+          if (!hasVigilance) {
+            c.isTapped = true;
+          }
+        }
+      }
+    }
+    if (typeof this.render === 'function') {
+      this.render();
+    }
+  }
+
+  _handleDeclareBlockers(action) {
+    const payload = action.payload || action;
+    const targetId = payload.playerId || action.playerId || this.myPlayerId;
+    const assignments = payload.assignments || payload.blocks || payload.blockers || [];
+
+    if (this.tabletopState && typeof this.tabletopState.declareBlockers === 'function') {
+      try {
+        this.tabletopState.declareBlockers(targetId, assignments);
+      } catch (err) {
+        console.warn('[_handleDeclareBlockers] Error declaring blockers:', err.message);
+      }
+    } else if (this.tabletopState?.players?.[targetId]) {
+      const p = this.tabletopState.players[targetId];
+      const creatures = p.battlefield?.creatures || [];
+      for (const item of assignments) {
+        const blockerId = typeof item === 'string' ? item : (item.blockerId || item.id);
+        const blocker = creatures.find(c => c && c.instanceId === blockerId);
+        if (blocker) {
+          blocker.isBlocking = true;
+          blocker.blockingTargetId = item.attackerId;
+        }
+      }
+    }
+    if (typeof this.render === 'function') {
+      this.render();
+    }
+  }
+
+  commitHumanBlocks(assignmentsArray = null) {
+    const assignments = assignmentsArray !== null
+      ? assignmentsArray
+      : (this._blockerAssignments
+          ? Array.from(this._blockerAssignments.entries()).map(([blockerId, attackerId]) => ({ blockerId, attackerId }))
+          : []);
+
+    const pData = this.tabletopState?.getPlayer ? this.tabletopState.getPlayer(this.myPlayerId) : this.tabletopState?.players?.[this.myPlayerId];
+    const creatures = Array.isArray(pData?.battlefield?.creatures)
+      ? pData.battlefield.creatures
+      : (Array.isArray(pData?.zones?.battlefield) ? pData.zones.battlefield.filter(c => (c.typeLine || c.type || '').toLowerCase().includes('creature') || c.subzone === 'creatures') : []);
+    const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+
+    const resolveAttackerObj = (attackerId) => {
+      if (!attackerId) return null;
+      const entry = activeCombatAttackers.find(a =>
+        (typeof a === 'string' ? a : (a?.creatureId || a?.instanceId || a?.id)) === attackerId
+      );
+      if (entry && typeof entry === 'object' && entry.creature) return entry.creature;
+      if (entry && typeof entry === 'object' && entry.name) return entry;
+      return this.tabletopState?._findPermanentOnBattlefield?.(attackerId) || { instanceId: attackerId, name: 'Attacker' };
+    };
+
+    // Validate Menace / multi-blocker constraints per attacker before committing
+    const byAttacker = new Map();
+    for (const item of assignments) {
+      const aId = item.attackerId;
+      if (!byAttacker.has(aId)) byAttacker.set(aId, []);
+      const bCard = creatures.find(c => c && (c.instanceId === item.blockerId || c.id === item.blockerId));
+      if (bCard) byAttacker.get(aId).push(bCard);
+    }
+    for (const [aId, bList] of byAttacker.entries()) {
+      const attackerObj = resolveAttackerObj(aId);
+      if (attackerObj) {
+        const check = canBlockAssignment(attackerObj, bList, this.tabletopState);
+        if (!check.allowed) {
+          this.tabletopState?.recordTrace?.('UI_REJECTION', 'BLOCKER_COMMIT_REJECTED', {
+            playerId: this.myPlayerId,
+            attackerId: aId,
+            blockerIds: bList.map(b => b.instanceId),
+            reason: check.reason
+          });
+          if (typeof this.showWarningBanner === 'function') {
+            this.showWarningBanner(`⚠️ ${check.reason}`);
+          }
+          return;
+        }
+      }
+    }
+
+    // If still in DECLARE_ATTACKERS with priority on human defender, advance to DECLARE_BLOCKERS first
+    if (this.priorityMachine && this.priorityMachine.currentPhaseStep === 'DECLARE_ATTACKERS') {
+      try {
+        if (this.priorityMachine.priorityPlayerId === this.myPlayerId) {
+          this.priorityMachine.passPriority(this.myPlayerId);
+        } else {
+          this.priorityMachine.advanceStep();
+        }
+      } catch (_) {}
+    }
+
+    if (this._blockerAssignments) this._blockerAssignments.clear();
+    this.dispatchAction({
+      type: 'DECLARE_BLOCKERS',
+      playerId: this.myPlayerId,
+      blocks: assignments,
+      payload: {
+        playerId: this.myPlayerId,
+        blocks: assignments,
+        assignments: assignments
+      }
+    }, { origin: 'LOCAL' });
+
+    // Pass priority in DECLARE_BLOCKERS so combat advances to COMBAT_DAMAGE
+    if (this.priorityMachine && this.priorityMachine.currentPhaseStep === 'DECLARE_BLOCKERS') {
+      if (this.priorityMachine.priorityPlayerId !== this.myPlayerId) {
+        try { this.priorityMachine.passPriority(this.priorityMachine.priorityPlayerId); } catch (_) {}
+      }
+      if (this.priorityMachine.currentPhaseStep === 'DECLARE_BLOCKERS' && this.priorityMachine.priorityPlayerId === this.myPlayerId) {
+        this.dispatchAction({
+          type: 'PASS_PRIORITY',
+          playerId: this.myPlayerId,
+          payload: { playerId: this.myPlayerId }
+        }, { origin: 'LOCAL' });
+      }
+    }
   }
 
   /**
@@ -2617,12 +3121,26 @@ export class RPMAppController {
     );
 
     if (survivors.length === 1) {
+      if (this.perkinsAgent && typeof this.perkinsAgent.destroy === 'function') {
+        try { this.perkinsAgent.destroy(); } catch (_) {}
+      }
+      if (Array.isArray(this.botAgents)) {
+        for (const bot of this.botAgents) {
+          try { bot?.destroy?.(); } catch (_) {}
+        }
+      }
+      this.isMatchActiveFlag = false;
+      this._hasMatchStarted = false;
       const winnerId = survivors[0][0];
       const winnerName = survivors[0][1]?.name || winnerId;
       this.handleMatchVictory({
         winner: winnerId,
         winnerId,
         winnerName
+      });
+      this.showGameOverModal({
+        winnerId,
+        survivingPlayer: survivors[0][1]
       });
     }
 
@@ -2928,6 +3446,162 @@ export class RPMAppController {
     if (this.dualChat && oldId !== this.myPlayerId) {
       this.dualChat.myPlayerId = this.myPlayerId;
     }
+
+    if (this.priorityMachine && oldId !== this.myPlayerId) {
+      if (Array.isArray(this.priorityMachine.players)) {
+        this.priorityMachine.players = this.priorityMachine.players.map(p => (p === oldId || p === 'p1') ? this.myPlayerId : p);
+      }
+      if (this.priorityMachine.activePlayerId === oldId || this.priorityMachine.activePlayerId === 'p1') {
+        this.priorityMachine.activePlayerId = this.myPlayerId;
+      }
+      if (this.priorityMachine.priorityPlayerId === oldId || this.priorityMachine.priorityPlayerId === 'p1') {
+        this.priorityMachine.priorityPlayerId = this.myPlayerId;
+      }
+      if (this.priorityMachine.startingPlayerId === oldId || this.priorityMachine.startingPlayerId === 'p1') {
+        this.priorityMachine.startingPlayerId = this.myPlayerId;
+      }
+      if (this.priorityMachine.playerTurnCounts instanceof Map && this.priorityMachine.playerTurnCounts.has(oldId)) {
+        const cnt = this.priorityMachine.playerTurnCounts.get(oldId);
+        this.priorityMachine.playerTurnCounts.delete(oldId);
+        this.priorityMachine.playerTurnCounts.set(this.myPlayerId, cnt);
+      }
+    }
+
+    if (this.pregameMachine && oldId !== this.myPlayerId) {
+      const pm = this.pregameMachine;
+      if (Array.isArray(pm.players)) {
+        pm.players = pm.players.map(p => (p === oldId || p === 'p1') ? this.myPlayerId : p);
+      }
+      for (const prop of ['rollWinnerId', 'choicePriority', 'startingPlayerId', 'activePlayerId', 'currentDecidingPlayerId']) {
+        if (pm[prop] === oldId || pm[prop] === 'p1') pm[prop] = this.myPlayerId;
+      }
+      for (const dict of ['rolls', 'mulliganCount', 'mulliganStatus', 'playerSubStates', 'pendingBottomCount']) {
+        if (pm[dict] && oldId in pm[dict]) {
+          pm[dict][this.myPlayerId] = pm[dict][oldId];
+          delete pm[dict][oldId];
+        }
+      }
+    }
+  }
+
+  /**
+   * Resolves a human-friendly display label for a playerId, never exposing raw UUIDs (INV-HEADER-1).
+   * @param {string} playerId
+   * @returns {string}
+   */
+  getFriendlyPlayerName(playerId) {
+    if (!playerId) return 'Player';
+    if (playerId === this.myPlayerId || (String(playerId).toLowerCase() === 'p1' && this._isRawUuid(this.myPlayerId))) {
+      return this.username && !this._isRawUuid(this.username) ? `${this.username} (You)` : 'You (P1)';
+    }
+    if (String(playerId).toLowerCase().includes('perkins')) {
+      return 'Perkins AI (Bot)';
+    }
+    const p = this.tabletopState?.players?.[playerId];
+    if (p?.name && !this._isRawUuid(p.name)) return p.name;
+    if (this._isRawUuid(playerId)) return 'Player 1';
+    return String(playerId).toUpperCase();
+  }
+
+  /**
+   * Appends an entry specifically into Turn Command and execution log.
+   * @param {string} text
+   * @param {Object} [meta={}]
+   */
+  addTurnCommandLog(text, meta = {}) {
+    return this.appendExecutionLog('Turn Cmd', text, meta);
+  }
+
+  /**
+   * Appends a real-time execution telemetry entry to `this.executionLog` and the Turn Command feed.
+   * @param {string} category
+   * @param {string} text
+   * @param {Object} [meta={}]
+   */
+  appendExecutionLog(category, text, meta = {}) {
+    if (!this.executionLog) this.executionLog = [];
+    const turnNum = this.priorityMachine?.turnNumber || 1;
+    const step = this.priorityMachine?.currentPhaseStep || 'PREGAME';
+    const entry = {
+      id: `log_${Date.now()}_${this.executionLog.length}`,
+      timestamp: Date.now(),
+      category,
+      turnNumber: turnNum,
+      phaseStep: step,
+      senderName: `[${category}]`,
+      text,
+      ...meta
+    };
+    this.executionLog.push(entry);
+    if (this.dualChat && Array.isArray(this.dualChat.turnCommandMessages)) {
+      this.dualChat.turnCommandMessages.push({
+        id: entry.id,
+        senderId: meta.playerId || 'SYSTEM',
+        senderName: entry.senderName,
+        text: entry.text,
+        timestamp: entry.timestamp
+      });
+    }
+    return entry;
+  }
+
+  _wireTraceLogger(logger) {
+    if (!logger) return;
+    const bridge = (entry) => {
+      if (!entry) return;
+      const { category, action, payload } = entry;
+      if (action === 'COMBAT_DAMAGE_STEP' && payload?.summary) {
+        this.appendExecutionLog('Combat', payload.summary, { origin: 'COMBAT_DAMAGE' });
+      } else if (action === 'SBA_APPLIED' && Array.isArray(payload?.actions)) {
+        for (const act of payload.actions) {
+          if (act.type === 'CREATURE_DESTROYED_LETHAL_DAMAGE' || act.rule === '704.5g') {
+            this.appendExecutionLog('SBA', `💀 SBA (704.5g): ${act.cardName || 'Creature'} destroyed by lethal damage (${act.markedDamage}/${act.toughness})`, { origin: 'SBA' });
+          } else if (act.type === 'CREATURE_DIED_ZERO_TOUGHNESS' || act.rule === '704.5f') {
+            this.appendExecutionLog('SBA', `💀 SBA (704.5f): ${act.cardName || 'Creature'} put into graveyard (0 or less toughness)`, { origin: 'SBA' });
+          } else if (act.type === 'PLAYER_ELIMINATED' || act.rule === '704.5a') {
+            this.appendExecutionLog('SBA', `💀 SBA (704.5a): Player ${this.getFriendlyPlayerName(act.playerId)} loses the game (0 or less life)`, { origin: 'SBA' });
+          }
+        }
+      } else if (action === 'PROWESS_TRIGGERED') {
+        const cName = payload.creatureName || 'Monastery Swiftspear';
+        const pName = this.getFriendlyPlayerName(payload.playerId);
+        this.appendExecutionLog('Triggers', `✨ Prowess triggered on ${cName} (${pName}) (+1/+1 until end of turn, now ${payload.powerAfter || 2}/${payload.toughnessAfter || 3})`, { origin: 'TRIGGER' });
+      } else if (action === 'GOBLIN_GUIDE_ATTACK_TRIGGER') {
+        const defName = this.getFriendlyPlayerName(payload.defenderId);
+        const cardName = payload.revealedCardName || 'nothing';
+        const actionStr = payload.isLand ? 'revealed land put into hand! 🌄' : 'not a land, stays on top of library 📜';
+        this.appendExecutionLog('Triggers', `🎯 Goblin Guide attack trigger: ${defName} reveals ${cardName} — ${actionStr}`, { origin: 'ATTACK_TRIGGER' });
+      } else if (action === 'TRIGGER_QUEUED') {
+        const cond = payload?.triggerCondition || payload?.condition || 'ABILITY';
+        const name = payload?.sourceName || payload?.name || 'Permanent';
+        this.appendExecutionLog('Triggers', `⚡ Trigger Queued: [${cond}] from ${name}`, { origin: 'TRIGGER' });
+      } else if (action === 'TRIGGER_FLUSHED_APNAP') {
+        const count = payload?.flushedCount ?? (payload?.triggers?.length || 0);
+        if (count > 0) {
+          this.appendExecutionLog('Triggers', `⚡ APNAP Trigger Flush: ${count} ability(s) put onto stack`, { origin: 'TRIGGER' });
+        }
+      } else if (action === 'STACK_ITEM_RESOLVED') {
+        const name = payload?.name || payload?.itemId || 'Spell/Ability';
+        this.appendExecutionLog('Stack', `✨ Stack Item Resolved: ${name} (${payload?.type || 'SPELL'})`, { origin: 'STACK' });
+      } else if (category === 'PERK_TRACE' && payload?.summary) {
+        const existing = this.executionLog?.some(l => l.text === payload.summary);
+        if (!existing) {
+          this.addTurnCommandLog(payload.summary, { playerId: payload.activePlayerId, origin: 'PERK_TRACE' });
+        }
+      } else if (action === 'PHASE_TRANSITION') {
+        const step = payload?.currentPhaseStep || entry.step;
+        const turn = payload?.turnNumber ?? entry.turn ?? 1;
+        const active = payload?.activePlayerId ?? entry.activePlayerId;
+        const activeName = this.getFriendlyPlayerName(active);
+        this.appendExecutionLog('Phase', `⏱️ Turn ${turn} [${activeName}] entered ${step}`, { origin: 'PHASE' });
+      }
+    };
+
+    if (typeof logger.setOnRecord === 'function') {
+      logger.setOnRecord(bridge);
+    } else {
+      logger.onRecord = bridge;
+    }
   }
 
   // ==========================================================================
@@ -2938,9 +3612,61 @@ export class RPMAppController {
    * Reconciles the DOM view based on current subsystem states.
    * Executes within sub-16ms frame budget (60 FPS).
    */
+  render() {
+    return this.reconcileDOM();
+  }
+
+  /**
+   * Pre-syncs and validates combat block targets before rendering opponents and dashboard.
+   * Ensures active attacker target ID is available when opponents are rendered.
+   * @private
+   */
+  _syncCombatBlockTargetState() {
+    const psmForAttack = this.priorityMachine;
+    const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+    const isBlockWindow = !!psmForAttack &&
+      !this.isSpectator() &&
+      !this.pregameActive &&
+      psmForAttack.activePlayerId !== this.myPlayerId &&
+      activeCombatAttackers.length > 0 &&
+      !this.tabletopState?.combatState?.blockersDeclared &&
+      (psmForAttack.currentPhaseStep === 'DECLARE_BLOCKERS' ||
+       (psmForAttack.currentPhaseStep === 'DECLARE_ATTACKERS' && psmForAttack.priorityPlayerId === this.myPlayerId));
+
+    if (!this._blockerAssignments) this._blockerAssignments = new Map();
+    if (!isBlockWindow) {
+      this._blockerAssignments.clear();
+      this._activeAttackerTargetId = null;
+    } else {
+      const attackerIds = activeCombatAttackers
+        .map(a => typeof a === 'string' ? a : (a?.creatureId || a?.instanceId || a?.id))
+        .filter(Boolean);
+      if (!this._activeAttackerTargetId || !attackerIds.includes(this._activeAttackerTargetId)) {
+        this._activeAttackerTargetId = attackerIds[0] || null;
+      }
+      const p = this.tabletopState?.players?.[this.myPlayerId];
+      const creatures = p?.battlefield?.creatures || p?.zones?.battlefield || [];
+      const untappedCreatureIds = new Set(creatures.filter(c => c && !c.isTapped).map(c => c.instanceId));
+      for (const [bId, aId] of [...this._blockerAssignments.entries()]) {
+        if (!untappedCreatureIds.has(bId) || !attackerIds.includes(aId)) {
+          this._blockerAssignments.delete(bId);
+        }
+      }
+    }
+  }
+
   reconcileDOM() {
     if (!this.container || this.isDestroyed) return;
     this._syncAuthUser();
+
+    // Ensure modal host remains unblocked if target modal is currently open
+    if (this.targetModal?.isOpen) {
+      const modalRoot = this.container.querySelector('#modal-root');
+      if (modalRoot) {
+        modalRoot.setAttribute('aria-hidden', 'false');
+        modalRoot.style.pointerEvents = 'auto';
+      }
+    }
 
     // 1. Header Bar & Nav Tabs
     this._reconcileHeader();
@@ -2950,6 +3676,9 @@ export class RPMAppController {
 
     // 2.5 Phase Track Strip (INV-PHASE-1)
     this._reconcilePhaseTrack();
+
+    // 2.8 Pre-sync Combat Block Target State so Opponents render with active target
+    this._syncCombatBlockTargetState();
 
     // 3. Opponents Pod (Auto-scaling 1 to 5 opponents)
     this._reconcileOpponents();
@@ -3048,9 +3777,43 @@ export class RPMAppController {
       if (btnNext) {
         btnNext.addEventListener('click', () => {
           if (this.isSpectator()) return;
-          if (this.priorityMachine && typeof this.priorityMachine.nextPhase === 'function') {
+          if (this.tabletopState?.isGameOver) return;
+          if (this.priorityMachine) {
             try {
-              this.priorityMachine.nextPhase(this.myPlayerId);
+              const step = this.priorityMachine.currentPhaseStep;
+              const isActive = this.priorityMachine.activePlayerId === this.myPlayerId;
+              const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+
+              if (isActive) {
+                // If active player has selected attackers during DECLARE_ATTACKERS, commit them first
+                if (step === 'DECLARE_ATTACKERS' && this._selectedAttackers && this._selectedAttackers.size > 0) {
+                  const ids = Array.from(this._selectedAttackers);
+                  this._selectedAttackers.clear();
+                  this.dispatchAction({
+                    type: 'DECLARE_ATTACKERS',
+                    playerId: this.myPlayerId,
+                    attackers: ids,
+                    payload: { playerId: this.myPlayerId, attackers: ids }
+                  }, { origin: 'LOCAL' });
+                }
+                if (typeof this.priorityMachine.nextPhase === 'function') {
+                  this.priorityMachine.nextPhase(this.myPlayerId);
+                }
+              } else {
+                // Defending / non-active player: check block window
+                const isBlockWindow = !this.tabletopState?.combatState?.blockersDeclared &&
+                  (step === 'DECLARE_BLOCKERS' || (step === 'DECLARE_ATTACKERS' && this.priorityMachine.priorityPlayerId === this.myPlayerId)) &&
+                  activeCombatAttackers.length > 0;
+
+                if (isBlockWindow) {
+                  const assignments = this._blockerAssignments
+                    ? Array.from(this._blockerAssignments.entries()).map(([blockerId, attackerId]) => ({ blockerId, attackerId }))
+                    : [];
+                  this.commitHumanBlocks(assignments);
+                } else if (this.priorityMachine.priorityPlayerId === this.myPlayerId) {
+                  this.dispatchAction({ type: 'PASS_PRIORITY', payload: { playerId: this.myPlayerId } }, { origin: 'LOCAL' });
+                }
+              }
             } catch (err) {
               console.warn('[app.js] nextPhase error:', err);
             }
@@ -3061,9 +3824,11 @@ export class RPMAppController {
     }
 
     if (btnNext) {
-      if (this.isSpectator()) {
-        btnNext.style.display = 'none';
+      if (this.isSpectator() || Boolean(this.tabletopState?.isGameOver)) {
         btnNext.disabled = true;
+        if (this.isSpectator()) {
+          btnNext.style.display = 'none';
+        }
       } else {
         btnNext.style.display = 'inline-flex';
         btnNext.disabled = false;
@@ -3265,12 +4030,15 @@ export class RPMAppController {
 
       const life = oppData?.resources?.life ?? 20;
       const poison = oppData?.resources?.poison ?? 0;
-      const handCount = Array.isArray(oppData?.zones?.hand) ? oppData.zones.hand.length : 0;
-      const graveCount = Array.isArray(oppData?.zones?.graveyard) ? oppData.zones.graveyard.length : 0;
-      const exileCount = Array.isArray(oppData?.zones?.exile) ? oppData.zones.exile.length : 0;
-      const creatureCount = Array.isArray(oppData?.zones?.battlefield)
-        ? oppData.zones.battlefield.filter(c => (c.type_line || c.type || '').toLowerCase().includes('creature')).length
-        : 0;
+      const handCount = Array.isArray(oppData?.zones?.hand) ? oppData.zones.hand.length : (Array.isArray(oppData?.hand) ? oppData.hand.length : 0);
+      const graveCount = Array.isArray(oppData?.zones?.graveyard) ? oppData.zones.graveyard.length : (Array.isArray(oppData?.graveyard) ? oppData.graveyard.length : 0);
+      const exileCount = Array.isArray(oppData?.zones?.exile) ? oppData.zones.exile.length : (Array.isArray(oppData?.exile) ? oppData.exile.length : 0);
+      const bCreatures = Array.isArray(oppData?.battlefield?.creatures) ? oppData.battlefield.creatures : [];
+      const zCreatures = Array.isArray(oppData?.zones?.battlefield)
+        ? oppData.zones.battlefield.filter(c => (c.type_line || c.typeLine || c.type || '').toLowerCase().includes('creature') || c.subzone === 'creatures')
+        : [];
+      const oppCreatures = Array.isArray(oppData?.battlefield?.creatures) ? bCreatures : zCreatures;
+      const creatureCount = oppCreatures.length;
 
       // Reconcile opponent content
       let content = oppCard.querySelector('.opponent-card-content');
@@ -3306,6 +4074,42 @@ export class RPMAppController {
         `;
       }).join('');
 
+      const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+      const attackerIdSet = new Set(
+        activeCombatAttackers.map(a => typeof a === 'string' ? a : (a?.creatureId || a?.instanceId || a?.id)).filter(Boolean)
+      );
+      const isBlockWindow = Boolean(
+        this.priorityMachine &&
+        !this.isSpectator() &&
+        !this.pregameActive &&
+        this.priorityMachine.activePlayerId !== this.myPlayerId &&
+        activeCombatAttackers.length > 0 &&
+        !this.tabletopState?.combatState?.blockersDeclared &&
+        (this.priorityMachine.currentPhaseStep === 'DECLARE_BLOCKERS' ||
+         (this.priorityMachine.currentPhaseStep === 'DECLARE_ATTACKERS' && this.priorityMachine.priorityPlayerId === this.myPlayerId))
+      );
+
+      const creaturesHtml = oppCreatures.map(cr => {
+        const instId = cr.instanceId || cr.id || '';
+        const isTapped = Boolean(cr.isTapped);
+        const isAttacking = Boolean(cr.isAttacking || attackerIdSet.has(instId));
+        const isSelectedTarget = isBlockWindow && isAttacking && this._activeAttackerTargetId === instId;
+        const name = cr.name || 'Creature';
+        const stats = this.tabletopState?.abilityEngine?.evaluateCreatureStats
+          ? this.tabletopState.abilityEngine.evaluateCreatureStats(cr, this.tabletopState)
+          : { power: cr.power ?? 2, toughness: cr.toughness ?? 2 };
+        const pt = `${stats.power}/${stats.toughness}`;
+        return `
+          <div class="opponent-creature-card battlefield-card-chip ${isTapped ? 'is-tapped card-tapped' : ''} ${isAttacking ? 'is-attacking attacking' : ''} ${isSelectedTarget ? 'attacker-target-selected' : ''}"
+               data-instance-id="${instId}"
+               data-tapped="${isTapped ? 'true' : 'false'}"
+               style="${isAttacking ? 'border: 1px solid #ef4444; background: rgba(127, 29, 29, 0.35); cursor: pointer;' : ''}${isSelectedTarget ? ' box-shadow: 0 0 0 2px #f59e0b;' : ''}"
+               title="${name} (${pt})${isAttacking ? ' - Attacking! Click to target with blocker' : ' - Click to inspect'}">
+            <span class="creature-name">${name} (${pt})${isAttacking ? ' ⚔️' : ''}${isSelectedTarget ? ' <span class="badge-target" style="background:#f59e0b; color:#000; font-size:10px; font-weight:bold; padding:1px 4px; border-radius:3px; margin-left:4px;">🎯 TARGET</span>' : ''}${isTapped ? ' ↺' : ''}</span>
+          </div>
+        `;
+      }).join('');
+
       content.innerHTML = `
         <div class="opponent-header">
           <span class="opponent-name">${oppData?.name || `Opponent (${oppId.toUpperCase()})`}</span>
@@ -3321,6 +4125,16 @@ export class RPMAppController {
             ${landsHtml}
           </div>
         </div>
+        ${oppCreatures.length > 0 ? `
+        <div class="opponent-creatures-container">
+          <div class="opponent-creatures-header">
+            <span class="creatures-title">Creatures (<span class="creatures-count">${oppCreatures.length}</span>)</span>
+          </div>
+          <div class="opponent-creatures-strip" data-player-id="${oppId}">
+            ${creaturesHtml}
+          </div>
+        </div>
+        ` : ''}
         <div class="opponent-drawers-row">
           <button class="btn btn-drawer-hand" ${isEliminated ? 'disabled' : ''}>Hand (${handCount})</button>
           <button class="btn btn-drawer-creatures" ${isEliminated ? 'disabled' : ''}>Creatures (${creatureCount})</button>
@@ -3340,6 +4154,27 @@ export class RPMAppController {
             this.cardModal.show(land);
           } else if (typeof this.openModal === 'function') {
             this.openModal('CARD_OVERLAY', land);
+          }
+        });
+      });
+
+      // Bind click on opponent creatures to select attacker target in block window or inspect card
+      const creatureCards = oppCard.querySelectorAll('.opponent-creature-card');
+      creatureCards.forEach((el, idx) => {
+        const cr = oppCreatures[idx];
+        if (!cr) return;
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const instId = cr.instanceId || cr.id;
+          if (isBlockWindow && (cr.isAttacking || attackerIdSet.has(instId))) {
+            this._activeAttackerTargetId = instId;
+            this.reconcileDOM();
+            return;
+          }
+          if (this.cardModal && typeof this.cardModal.show === 'function') {
+            this.cardModal.show(cr);
+          } else if (typeof this.openModal === 'function') {
+            this.openModal('CARD_OVERLAY', cr);
           }
         });
       });
@@ -3380,6 +4215,8 @@ export class RPMAppController {
       stackControls.style.display = isSpec ? 'none' : 'flex';
     }
 
+    const isGameOver = Boolean(this.tabletopState?.isGameOver);
+
     const btnPass = this.container.querySelector('#btn-pass-priority');
     if (btnPass) {
       if (isSpec) {
@@ -3387,7 +4224,7 @@ export class RPMAppController {
         btnPass.disabled = true;
       } else {
         btnPass.style.display = '';
-        btnPass.disabled = false;
+        btnPass.disabled = isGameOver;
       }
     }
 
@@ -3398,7 +4235,7 @@ export class RPMAppController {
         btnHold.disabled = true;
       } else {
         btnHold.style.display = '';
-        btnHold.disabled = false;
+        btnHold.disabled = isGameOver;
       }
     }
 
@@ -3495,11 +4332,14 @@ export class RPMAppController {
     const hand = Array.isArray(pData?.zones?.hand) ? pData.zones.hand : (Array.isArray(pData?.hand) ? pData.hand : []);
 
     // Random Perk Upkeep Dormancy (INV-PERK-UI-1)
-    const unlockTurn = (this.playerIds.length <= 2 ? 4 : 2);
-    const currentTurn = this.priorityMachine?.turnNumber || 1;
-    const isDormant = currentTurn < unlockTurn;
+    const unlockRound = (this.playerIds.length <= 2 ? 4 : 2);
+    const roundNumber = this.priorityMachine?.roundNumber ?? this.tabletopState?.roundNumber;
+    const currentRound = (typeof roundNumber === 'number')
+      ? roundNumber
+      : (this.priorityMachine?.turnNumber && this.priorityMachine.turnNumber >= 7 ? 4 : Math.ceil((this.priorityMachine?.turnNumber || 1) / (this.playerIds?.length || 2)));
+    const isDormant = currentRound < unlockRound;
     const emblemText = isDormant
-      ? `🔮 Perk: Dormant until Turn ${unlockTurn}`
+      ? `🔮 Perk: Dormant until Round ${unlockRound}`
       : `🔮 Perk Emblem: Active`;
 
     // Battlefield cards
@@ -3511,7 +4351,70 @@ export class RPMAppController {
     const zLands = battlefieldCards.filter(c => (c.typeLine || c.type || '').toLowerCase().includes('land') || c.subzone === 'lands');
     const zCreatures = battlefieldCards.filter(c => (c.typeLine || c.type || '').toLowerCase().includes('creature') || c.subzone === 'creatures');
     const lands = bLands.length >= zLands.length ? bLands : zLands;
-    const creatures = bCreatures.length >= zCreatures.length ? bCreatures : zCreatures;
+    const creatures = Array.isArray(pData?.battlefield?.creatures) ? bCreatures : zCreatures;
+
+    const psmForAttack = this.priorityMachine;
+    const isAttackWindow = !!psmForAttack &&
+      !this.isSpectator() &&
+      !this.pregameActive &&
+      psmForAttack.currentPhaseStep === 'DECLARE_ATTACKERS' &&
+      psmForAttack.activePlayerId === this.myPlayerId;
+    const attackState = { activePlayerId: psmForAttack?.activePlayerId, currentPhaseStep: psmForAttack?.currentPhaseStep };
+    if (!isAttackWindow) this._selectedAttackers = new Set();
+    if (!this._selectedAttackers) this._selectedAttackers = new Set();
+    const attackCandidateIds = new Set(
+      isAttackWindow
+        ? creatures.filter(c => c && canDeclareAsAttacker({ ...c, controllerId: c.controllerId || this.myPlayerId }, attackState)).map(c => c.instanceId)
+        : []
+    );
+    for (const sel of [...this._selectedAttackers]) {
+      if (!attackCandidateIds.has(sel)) this._selectedAttackers.delete(sel);
+    }
+
+    // Interactive Blocker Window (CR 509.1) when defending against opponent/bot attackers
+    const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+    const isBlockWindow = !!psmForAttack &&
+      !this.isSpectator() &&
+      !this.pregameActive &&
+      psmForAttack.activePlayerId !== this.myPlayerId &&
+      activeCombatAttackers.length > 0 &&
+      !this.tabletopState?.combatState?.blockersDeclared &&
+      (psmForAttack.currentPhaseStep === 'DECLARE_BLOCKERS' ||
+       (psmForAttack.currentPhaseStep === 'DECLARE_ATTACKERS' && psmForAttack.priorityPlayerId === this.myPlayerId));
+    if (!this._blockerAssignments) this._blockerAssignments = new Map();
+    let attackerIds = [];
+    if (!isBlockWindow) {
+      this._blockerAssignments.clear();
+      this._activeAttackerTargetId = null;
+    } else {
+      attackerIds = activeCombatAttackers
+        .map(a => typeof a === 'string' ? a : (a?.creatureId || a?.instanceId || a?.id))
+        .filter(Boolean);
+      if (!this._activeAttackerTargetId || !attackerIds.includes(this._activeAttackerTargetId)) {
+        this._activeAttackerTargetId = attackerIds[0] || null;
+      }
+      const untappedCreatureIds = new Set(creatures.filter(c => c && !c.isTapped).map(c => c.instanceId));
+      for (const [bId, aId] of [...this._blockerAssignments.entries()]) {
+        if (!untappedCreatureIds.has(bId) || !attackerIds.includes(aId)) {
+          this._blockerAssignments.delete(bId);
+        }
+      }
+    }
+    const blockerCandidateIds = new Set(
+      isBlockWindow
+        ? creatures.filter(c => c && !c.isTapped).map(c => c.instanceId)
+        : []
+    );
+
+    const resolveAttackerObj = (attackerId) => {
+      if (!attackerId) return null;
+      const entry = activeCombatAttackers.find(a =>
+        (typeof a === 'string' ? a : (a?.creatureId || a?.instanceId || a?.id)) === attackerId
+      );
+      if (entry && typeof entry === 'object' && entry.creature) return entry.creature;
+      if (entry && typeof entry === 'object' && entry.name) return entry;
+      return this.tabletopState?._findPermanentOnBattlefield?.(attackerId) || { instanceId: attackerId, name: 'Attacker' };
+    };
 
     dashboard.innerHTML = `
       <div class="player-stats-row">
@@ -3541,15 +4444,139 @@ export class RPMAppController {
       <div id="battlefield-strips" class="player-battlefield-strips">
         <div id="battlefield-lands" class="battlefield-strip battlefield-lands">
           <div class="strip-label">Lands (<span class="lands-count">${lands.length}</span>)</div>
-          <div class="strip-cards">${lands.map(c => `<span class="battlefield-card-chip land-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" style="${c.isTapped ? 'transform: rotate(90deg); opacity: 0.58;' : ''}" title="${c.name} (${c.isTapped ? 'Tapped' : 'Untapped - Click to tap for mana'})">${c.name}</span>`).join('')}</div>
+          <div class="strip-cards">${lands.map(c => {
+            const profile = this.tabletopState?._getLandManaProfile ? this.tabletopState._getLandManaProfile(c) : [];
+            const isMulti = profile.length > 1;
+            const isSelected = this._selectedLandId === (c.instanceId || c.id);
+            return `<span class="battlefield-card-chip land-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''} ${isSelected ? 'selected-land' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" style="${c.isTapped ? 'opacity: 0.62;' : ''}" title="${c.name} (${c.isTapped ? 'Tapped' : 'Untapped - Click to tap for mana'})">${c.name} ${c.isTapped ? '(Tapped) ↺' : ''}${isSelected && !c.isTapped && isMulti ? ` <span class="land-color-selector" style="display:inline-flex; gap:4px; margin-left:6px;">${profile.map(col => `<button class="btn btn-xs btn-color-choice" data-color="${col}" data-instance-id="${c.instanceId || c.id}" style="padding:1px 6px; font-size:0.75rem; border-radius:3px; background:${col === 'R' ? '#ef4444' : col === 'U' ? '#3b82f6' : '#64748b'}; color:#fff; border:none; cursor:pointer;">{${col}}</button>`).join('')}</span>` : ''}</span>`;
+          }).join('')}</div>
         </div>
         <div id="battlefield-creatures" class="battlefield-strip battlefield-creatures">
           <div class="strip-label">Creatures (<span class="creatures-count">${creatures.length}</span>)</div>
-          <div class="strip-cards">${creatures.map(c => `<span class="battlefield-card-chip creature-chip ${c.isTapped ? 'tapped' : ''}">${c.name}</span>`).join('')}</div>
+          <div class="strip-cards">${creatures.map(c => {
+            const isAssignedBlocker = this._blockerAssignments.has(c.instanceId);
+            const assignedAttacker = isAssignedBlocker ? resolveAttackerObj(this._blockerAssignments.get(c.instanceId)) : null;
+            const stats = this.tabletopState?.abilityEngine?.evaluateCreatureStats
+              ? this.tabletopState.abilityEngine.evaluateCreatureStats(c, this.tabletopState)
+              : { power: c.power ?? 1, toughness: c.toughness ?? 1 };
+            const pt = ` (${stats.power}/${stats.toughness})`;
+            return `<span class="battlefield-card-chip creature-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''} ${c.isAttacking ? 'is-attacking attacking' : ''} ${c.isBlocking || isAssignedBlocker ? 'is-blocking blocking' : ''} ${attackCandidateIds.has(c.instanceId) ? 'attack-candidate' : ''} ${this._selectedAttackers.has(c.instanceId) ? 'attack-selected' : ''} ${blockerCandidateIds.has(c.instanceId) ? 'blocker-candidate' : ''} ${isAssignedBlocker ? 'blocker-selected' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" title="${c.name}${pt}${attackCandidateIds.has(c.instanceId) ? ' - Click to select as attacker' : ''}${blockerCandidateIds.has(c.instanceId) ? ' - Click to assign as blocker' : ''}">${c.name}${pt}${c.isAttacking ? ' ⚔️' : ''}${c.isBlocking || isAssignedBlocker ? ` 🛡️${assignedAttacker ? ` → ${assignedAttacker.name}` : ''}` : ''}${c.isTapped ? ' ↺' : ''}</span>`;
+          }).join('')}</div>
+          ${isAttackWindow ? `<div class="attack-confirm-bar"><button id="btn-confirm-attackers" class="btn btn-primary" ${this._selectedAttackers.size === 0 ? 'disabled' : ''}>⚔️ Confirm Attackers (${this._selectedAttackers.size})</button><span class="attack-hint">${attackCandidateIds.size === 0 ? 'No creatures can attack - press Next Phase' : 'Select attackers, then confirm (or press Next Phase to skip combat)'}</span></div>` : ''}
+          ${isBlockWindow ? `
+            <div class="block-confirm-bar" style="display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+              <button id="btn-confirm-blockers" class="btn btn-primary">🛡️ Confirm Blockers (${this._blockerAssignments.size})</button>
+              <button id="btn-no-blocks" class="btn btn-secondary">⏭️ No Blocks (Take Damage)</button>
+              <div class="attacker-target-selector-group" style="display: inline-flex; align-items: center; gap: 4px;">
+                <span style="font-size: 0.78rem; font-weight: bold; color: #f59e0b;">🎯 Target:</span>
+                ${attackerIds.map(atkId => {
+                  const atkObj = resolveAttackerObj(atkId);
+                  const isSel = atkId === this._activeAttackerTargetId;
+                  return `<button type="button" class="btn btn-sm btn-select-attacker-target" data-attacker-id="${atkId}" style="padding: 2px 8px; font-size: 0.75rem; border-radius: 4px; border: 1px solid ${isSel ? '#f59e0b' : '#475569'}; background: ${isSel ? '#78350f' : '#1e293b'}; color: ${isSel ? '#fef3c7' : '#cbd5e1'}; cursor: pointer;">${atkObj?.name || 'Attacker'}${isSel ? ' (Active)' : ''}</button>`;
+                }).join('')}
+              </div>
+              <span class="block-hint" style="font-size: 0.78rem; color: #cbd5e1;">${blockerCandidateIds.size === 0 ? 'No untapped creatures to block — click No Blocks' : `Click your creature to block ${resolveAttackerObj(this._activeAttackerTargetId)?.name || 'attacker'}, then confirm`}</span>
+            </div>
+          ` : ''}
         </div>
       </div>
       <div id="player-hand" class="player-hand-grid"></div>
     `;
+
+    // Attack declaration: candidate selection + explicit confirmation (CR 508.1)
+    if (isAttackWindow) {
+      dashboard.querySelectorAll('.attack-candidate').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const id = chip.getAttribute('data-instance-id');
+          if (!id) return;
+          if (this._selectedAttackers.has(id)) this._selectedAttackers.delete(id);
+          else this._selectedAttackers.add(id);
+          this.reconcileDOM();
+        });
+      });
+      const confirmBtn = dashboard.querySelector('#btn-confirm-attackers');
+      if (confirmBtn) {
+        confirmBtn.addEventListener('click', () => {
+          const ids = [...this._selectedAttackers];
+          if (ids.length === 0) return;
+          this._selectedAttackers = new Set();
+          this.dispatchAction({
+            type: 'DECLARE_ATTACKERS',
+            playerId: this.myPlayerId,
+            attackers: ids,
+            payload: { playerId: this.myPlayerId, attackers: ids }
+          }, { origin: 'LOCAL' });
+        });
+      }
+    }
+
+    // Blocker declaration: candidate selection + explicit confirmation (CR 509.1)
+    if (isBlockWindow) {
+      dashboard.querySelectorAll('.btn-select-attacker-target').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const atkId = btn.getAttribute('data-attacker-id');
+          if (atkId) {
+            this._activeAttackerTargetId = atkId;
+            this.reconcileDOM();
+          }
+        });
+      });
+
+      dashboard.querySelectorAll('.blocker-candidate').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const blockerId = chip.getAttribute('data-instance-id');
+          if (!blockerId) return;
+          if (this._blockerAssignments.has(blockerId)) {
+            const prevTargetId = this._blockerAssignments.get(blockerId);
+            if (prevTargetId === this._activeAttackerTargetId) {
+              this._blockerAssignments.delete(blockerId);
+              this.reconcileDOM();
+              return;
+            }
+          }
+          const targetAttackerId = this._activeAttackerTargetId;
+          const attackerObj = resolveAttackerObj(targetAttackerId);
+          const blockerObj = creatures.find(c => c && c.instanceId === blockerId);
+          if (attackerObj && blockerObj) {
+            const check = canBlockAssignment(attackerObj, [blockerObj], this.tabletopState);
+            if (!check.allowed) {
+              this.tabletopState?.recordTrace?.('UI_REJECTION', 'BLOCKER_ASSIGNMENT_REJECTED', {
+                playerId: this.myPlayerId,
+                blockerId,
+                attackerId: targetAttackerId,
+                reason: check.reason
+              });
+              this.showWarningBanner(`⚠️ ${check.reason}`);
+              return;
+            }
+          }
+          if (targetAttackerId) {
+            this._blockerAssignments.set(blockerId, targetAttackerId);
+            this.reconcileDOM();
+          }
+        });
+      });
+
+      const commitHumanBlocks = (assignmentsArray) => this.commitHumanBlocks(assignmentsArray);
+
+      const btnConfirmBlockers = dashboard.querySelector('#btn-confirm-blockers');
+      if (btnConfirmBlockers) {
+        btnConfirmBlockers.addEventListener('click', () => {
+          const assignments = Array.from(this._blockerAssignments.entries()).map(([blockerId, attackerId]) => ({
+            blockerId,
+            attackerId
+          }));
+          commitHumanBlocks(assignments);
+        });
+      }
+
+      const btnNoBlocks = dashboard.querySelector('#btn-no-blocks');
+      if (btnNoBlocks) {
+        btnNoBlocks.addEventListener('click', () => {
+          commitHumanBlocks([]);
+        });
+      }
+    }
 
     // Bind life modifier buttons
     if (this.isSpectator()) {
@@ -3679,12 +4706,42 @@ export class RPMAppController {
         if (!land) return;
         chip.addEventListener('click', (e) => {
           e.stopPropagation();
+          const colorBtn = e.target.closest('.btn-color-choice');
+          if (colorBtn) {
+            const chosenColor = colorBtn.getAttribute('data-color');
+            try {
+              if (this.tabletopState && typeof this.tabletopState.tapLandForMana === 'function') {
+                this.tabletopState.tapLandForMana(this.myPlayerId, land.instanceId, chosenColor);
+                this._selectedLandId = null;
+                this.reconcileDOM();
+              }
+            } catch (err) {
+              this.showToast(err.message || 'Cannot tap land');
+            }
+            return;
+          }
+
+          if (land.isTapped) return;
+
+          const profile = this.tabletopState?._getLandManaProfile ? this.tabletopState._getLandManaProfile(land) : [];
+          if (profile.length > 1) {
+            this._selectedLandId = this._selectedLandId === (land.instanceId || land.id) ? null : (land.instanceId || land.id);
+            this.reconcileDOM();
+            return;
+          }
+
           try {
             if (this.tabletopState && typeof this.tabletopState.tapLandForMana === 'function') {
               this.tabletopState.tapLandForMana(this.myPlayerId, land.instanceId);
               this.reconcileDOM();
             }
           } catch (err) {
+            this.tabletopState?.recordTrace?.('UI_REJECTION', 'TAP_LAND_REJECTED', {
+              playerId: this.myPlayerId,
+              landId: land.instanceId,
+              landName: land.name,
+              reason: err.message
+            });
             this.showToast(err.message || 'Cannot tap land');
           }
         });
@@ -3714,19 +4771,30 @@ export class RPMAppController {
 
     const isSpectator = this.isSpectator();
     const isTurnTab = this.activeChatTab === 'TURN_COMMAND' || this.activeChatTab === 'TURN';
+    const traceCount = this.traceLogger?.entries?.length || 0;
 
     chatDrawer.innerHTML = `
       <div class="chat-tab-bar">
-        <button class="chat-tab-btn tab-turn-command ${isTurnTab ? 'active' : ''}">
+        <button class="chat-tab-btn tab-turn-command ${isTurnTab && !this.showTraceLog ? 'active' : ''}">
           Turn Cmd ${isSpectator ? '<span class="priority-lock-pill lock-badge">🔒 (Spectator)</span>' : (!holdsPriority ? '<span class="priority-lock-pill lock-badge">🔒</span>' : '')}
         </button>
-        <button class="chat-tab-btn tab-chit-chat ${!isTurnTab ? 'active' : ''}">
+        <button class="chat-tab-btn tab-chit-chat ${!isTurnTab && !this.showTraceLog ? 'active' : ''}">
           Chit-Chat
+        </button>
+        <button id="btn-toggle-trace-log" class="btn-badge ${this.showTraceLog ? 'active' : ''}" title="Toggle Deterministic Process Trace Log">
+          📋 Trace (${traceCount})
         </button>
         <button id="btn-toggle-coach" class="btn-badge btn-coach-toggle ${this.perkinsAgent?.coachEnabled !== false ? 'active' : ''}" title="Toggle Perkins Coach Tips">
           ${this.perkinsAgent?.coachEnabled === false ? '🎓 Coach: OFF' : '🎓 Coach: ON'}
         </button>
       </div>
+      ${this.showTraceLog ? `
+      <div class="trace-toolbar" style="display: flex; gap: 6px; padding: 6px 8px; background: rgba(15, 23, 42, 0.9); border-bottom: 1px solid #334155;">
+        <button id="btn-copy-trace" class="btn btn-secondary" style="font-size: 0.72rem; padding: 3px 8px;">📋 Copy Full Trace</button>
+        <button id="btn-download-trace" class="btn btn-secondary" style="font-size: 0.72rem; padding: 3px 8px;">💾 Download .log</button>
+        <button id="btn-clear-trace" class="btn btn-secondary" style="font-size: 0.72rem; padding: 3px 8px;">🧹 Clear</button>
+      </div>
+      ` : ''}
       <div id="chat-messages" class="chat-feed"></div>
       <div id="chat-staged-chips" class="staged-chips-container" style="${isTurnTab && holdsPriority && !isSpectator ? '' : 'display: none;'}">
         <button class="action-chip btn-chip-pass">Pass Priority</button>
@@ -3745,6 +4813,7 @@ export class RPMAppController {
     const btnTurnTab = chatDrawer.querySelector('.tab-turn-command');
     if (btnTurnTab) {
       btnTurnTab.addEventListener('click', () => {
+        this.showTraceLog = false;
         this.activeChatTab = 'TURN_COMMAND';
         this._reconcileChat();
       });
@@ -3753,7 +4822,54 @@ export class RPMAppController {
     const btnChitTab = chatDrawer.querySelector('.tab-chit-chat');
     if (btnChitTab) {
       btnChitTab.addEventListener('click', () => {
+        this.showTraceLog = false;
         this.activeChatTab = 'CHIT_CHAT';
+        this._reconcileChat();
+      });
+    }
+
+    const btnToggleTrace = chatDrawer.querySelector('#btn-toggle-trace-log');
+    if (btnToggleTrace) {
+      btnToggleTrace.addEventListener('click', () => {
+        this.showTraceLog = !this.showTraceLog;
+        this._reconcileChat();
+      });
+    }
+
+    const btnCopyTrace = chatDrawer.querySelector('#btn-copy-trace');
+    if (btnCopyTrace) {
+      btnCopyTrace.addEventListener('click', () => {
+        const text = this.traceLogger?.formatAsText?.() || '';
+        if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          navigator.clipboard.writeText(text).catch(() => {});
+        }
+        this.showToast('Process trace copied to clipboard');
+      });
+    }
+
+    const btnDownloadTrace = chatDrawer.querySelector('#btn-download-trace');
+    if (btnDownloadTrace) {
+      btnDownloadTrace.addEventListener('click', () => {
+        const isJSON = typeof this.traceLogger?.exportAsJSON === 'function';
+        const text = isJSON ? this.traceLogger.exportAsJSON() : (this.traceLogger?.formatAsText?.() || '');
+        const filename = isJSON ? `rpm-process-trace-${Date.now()}.json` : `rpm-process-trace-${Date.now()}.log`;
+        const mime = isJSON ? 'application/json;charset=utf-8' : 'text/plain;charset=utf-8';
+        if (typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function' && typeof document !== 'undefined') {
+          const blob = new Blob([text], { type: mime });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      });
+    }
+
+    const btnClearTrace = chatDrawer.querySelector('#btn-clear-trace');
+    if (btnClearTrace) {
+      btnClearTrace.addEventListener('click', () => {
+        this.traceLogger?.clear?.();
         this._reconcileChat();
       });
     }
@@ -3816,6 +4932,24 @@ export class RPMAppController {
     // Populate chat feed messages
     const chatFeed = chatDrawer.querySelector('#chat-messages');
     if (chatFeed) {
+      if (this.showTraceLog) {
+        const traceEntries = this.traceLogger?.entries || [];
+        if (traceEntries.length === 0) {
+          chatFeed.innerHTML = '<div style="color: #64748b; font-size: 0.78rem; font-family: monospace;">No process trace entries yet.</div>';
+        } else {
+          chatFeed.innerHTML = traceEntries.map(e => `
+            <div class="chat-msg trace-log-entry" style="font-family: monospace; font-size: 0.72rem; line-height: 1.35; border-bottom: 1px solid rgba(51,65,85,0.4); padding: 3px 0;">
+              <span style="color: #38bdf8;">#${e.seq}</span>
+              <span style="color: #94a3b8;">[T${e.turn}/R${e.round} ${e.step}]</span>
+              <span style="color: #f59e0b;">[${e.category}:${e.action}]</span>
+              <span style="color: #e2e8f0; word-break: break-all;">${JSON.stringify(e.payload)}</span>
+            </div>
+          `).join('');
+          chatFeed.scrollTop = chatFeed.scrollHeight;
+        }
+        return;
+      }
+
       const messages = isTurnTab
         ? (this.dualChat?.turnCommandMessages || [])
         : (this.dualChat?.chitChatMessages || []);
@@ -4708,12 +5842,107 @@ export class RPMAppController {
 
     const modalRoot = this.container?.querySelector('#modal-root');
     if (modalRoot) {
-      modalRoot.innerHTML = '';
+      const temporaryModals = modalRoot.querySelectorAll('.modal-dialog-box, .game-over-modal-backdrop, #concede-modal, #contextual-auth-modal, #contextual-deck-modal');
+      for (const m of temporaryModals) {
+        try { m.remove(); } catch (_) {}
+      }
       modalRoot.setAttribute('aria-hidden', 'true');
     }
   }
 
+  /**
+   * Starts the CR 103 pre-game sequence (roll -> play/draw -> London mulligan -> GAME_ACTIVE) for a 1v1 match.
+   * Opt-in via `options.pregame === true` (enabled by index.html); headless harnesses keep the deterministic start.
+   */
+  _beginPregame() {
+    if (!this.tabletopState || !this.priorityMachine || !Array.isArray(this.playerIds) || this.playerIds.length !== 2) return null;
+    const machine = new PregameStateMachine({
+      players: [...this.playerIds],
+      tabletopState: this.tabletopState,
+      priorityMachine: this.priorityMachine
+    });
+    this.pregameMachine = machine;
+    this.tabletopState.pregameMachine = machine;
+    this.pregameActive = true;
+
+    const roll = machine.dispatch('EXECUTE_STARTING_ROLL');
+    const nameOf = (pid) => this.getFriendlyPlayerName(pid);
+    const [a, b] = this.playerIds;
+    const rollMsg = `Starting roll (d20): ${nameOf(a)} rolled ${roll.rolls[a]} vs ${nameOf(b)} rolled ${roll.rolls[b]} — ${nameOf(roll.winnerId)} wins choice`;
+    this.showToast?.(rollMsg);
+    this.appendExecutionLog('Pre-Game', `🎲 ${rollMsg}`, { playerId: roll.winnerId });
+
+    let choice = 'PLAY';
+    if (roll.winnerId === this.myPlayerId && typeof window !== 'undefined' && typeof window.confirm === 'function') {
+      choice = window.confirm(`You won the roll (${roll.rolls[this.myPlayerId]} vs ${roll.rolls[roll.winnerId === a ? b : a]}).\nOK = PLAY first, Cancel = DRAW first`) ? 'PLAY' : 'DRAW';
+    }
+    machine.dispatch('SELECT_PLAY_OR_DRAW', { playerId: roll.winnerId, choice });
+    this.appendExecutionLog('Pre-Game', `⚡ ${nameOf(roll.winnerId)} chose to ${choice} (${nameOf(machine.startingPlayerId)} goes first)`, { playerId: roll.winnerId });
+    this._advanceMulligans();
+    return machine;
+  }
+
+  /**
+   * Drives mulligan decisions in turn order: bots decide automatically, the local player via MulliganModal.
+   * @private
+   */
+  _advanceMulligans() {
+    const machine = this.pregameMachine;
+    if (!machine) return;
+    let guard = 0;
+    while (machine.state === PREGAME_STATES.PREGAME_MULLIGAN && guard++ < 50) {
+      const pid = machine.currentDecidingPlayerId;
+      if (!pid) break;
+      if (pid === this.myPlayerId) {
+        const me = this.tabletopState.getPlayer(pid);
+        this.mulliganModal?.open({ cards: me?.hand || [], mulliganCount: machine.mulliganCount[pid] || 0 });
+        return;
+      }
+      const bot = this.botAgents?.get(pid) || this.perkinsAgent;
+      const player = this.tabletopState.getPlayer(pid);
+      const count = machine.mulliganCount[pid] || 0;
+      const ev = bot && typeof bot.evaluateOpeningHand === 'function'
+        ? bot.evaluateOpeningHand(player?.hand || [], count)
+        : { keep: true, bottomCards: [] };
+      if (!ev.keep && count < 3) {
+        machine.dispatch('DECIDE_MULLIGAN', { playerId: pid, keep: false });
+        this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(pid)} took mulligan #${machine.mulliganCount[pid]}`, { playerId: pid });
+        continue;
+      }
+      const pending = machine.pendingBottomCount?.[pid] || 0;
+      if (pending > 0) {
+        const hand = player?.hand || [];
+        const bottom = (bot?.evaluateOpeningHand?.(hand, pending)?.bottomCards || []).slice(0, pending);
+        const ids = bottom.map(c => c.instanceId);
+        for (const c of [...hand].reverse()) {
+          if (ids.length >= pending) break;
+          if (!ids.includes(c.instanceId)) ids.push(c.instanceId);
+        }
+        machine.dispatch('PUT_ON_BOTTOM', { playerId: pid, cardIds: ids.slice(0, pending) });
+      }
+      machine.dispatch('DECIDE_MULLIGAN', { playerId: pid, keep: true });
+      this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(pid)} kept ${7 - pending}-card hand`, { playerId: pid });
+    }
+    if (machine.state === PREGAME_STATES.GAME_ACTIVE) this._finishPregame();
+  }
+
+  _finishPregame() {
+    this.pregameActive = false;
+    this.mulliganModal?.close?.();
+    const starterName = this.getFriendlyPlayerName(this.pregameMachine?.startingPlayerId);
+    this.showToast?.(`Game start: ${starterName} goes first`);
+    this.appendExecutionLog('Turn 1', `🚀 Match active! ${starterName} begins Turn 1 (${this.priorityMachine?.currentPhaseStep || 'PRECOMBAT_MAIN'})`, { playerId: this.pregameMachine?.startingPlayerId });
+    this.reconcileDOM();
+  }
+
   handleMulliganKeep(data) {
+    if (this.pregameMachine && this.pregameActive) {
+      this.pregameMachine.dispatch('DECIDE_MULLIGAN', { playerId: this.myPlayerId, keep: true });
+      this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(this.myPlayerId)} kept 7-card opening hand`, { playerId: this.myPlayerId });
+      this._advanceMulligans();
+      this.render();
+      return;
+    }
     if (this.priorityMachine && typeof this.priorityMachine.completeMulliganPhase === 'function') {
       this.priorityMachine.completeMulliganPhase();
     }
@@ -4721,6 +5950,15 @@ export class RPMAppController {
   }
 
   handleMulliganTake(data) {
+    if (this.pregameMachine && this.pregameActive) {
+      this.pregameMachine.dispatch('DECIDE_MULLIGAN', { playerId: this.myPlayerId, keep: false });
+      const count = this.pregameMachine.mulliganCount[this.myPlayerId];
+      this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(this.myPlayerId)} took mulligan #${count} (drawing 7 cards)`, { playerId: this.myPlayerId });
+      const me = this.tabletopState.getPlayer(this.myPlayerId);
+      this.mulliganModal?.open({ cards: me?.hand || [], mulliganCount: count });
+      this.reconcileDOM();
+      return;
+    }
     const player = this.tabletopState?.getPlayer?.(this.myPlayerId);
     if (!player) return;
     player.library = [...(player.library || []), ...(player.hand || [])];
@@ -4733,6 +5971,15 @@ export class RPMAppController {
   }
 
   handleMulliganConfirmBottom(data) {
+    if (this.pregameMachine && this.pregameActive) {
+      const ids = (data?.bottomedCards || []).map(c => c.instanceId);
+      this.pregameMachine.dispatch('PUT_ON_BOTTOM', { playerId: this.myPlayerId, cardIds: ids });
+      this.pregameMachine.dispatch('DECIDE_MULLIGAN', { playerId: this.myPlayerId, keep: true });
+      this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(this.myPlayerId)} kept ${7 - ids.length}-card hand (bottomed ${ids.length})`, { playerId: this.myPlayerId });
+      this._advanceMulligans();
+      this.render();
+      return;
+    }
     const player = this.tabletopState?.getPlayer?.(this.myPlayerId);
     if (!player || !data.bottomedCards) return;
     for (const card of data.bottomedCards) {
@@ -4749,16 +5996,24 @@ export class RPMAppController {
   }
 
   handleTargetSelected(data) {
-    if (this._stagedCast) {
-      const { instanceId, autoTap } = this._stagedCast;
+    if (this._stagedCast || this._pendingSpellToCast) {
+      const staged = this._stagedCast || this._pendingSpellToCast;
       this._stagedCast = null;
-      this.tabletopState?.dispatch?.('CAST_SPELL', {
-        playerId: this.myPlayerId,
-        instanceId,
-        autoTap,
-        targets: [data.targetId]
-      });
-      this.render();
+      this._pendingSpellToCast = null;
+      const card = staged.card || staged;
+
+      if (card && card.name) {
+        this.castSpellToStack(card, data);
+      } else if (staged.instanceId) {
+        this.tabletopState?.dispatch?.('CAST_SPELL', {
+          playerId: this.myPlayerId,
+          instanceId: staged.instanceId,
+          autoTap: staged.autoTap,
+          targets: [data.targetId]
+        });
+        this.render?.();
+        this.reconcileDOM?.();
+      }
     }
   }
 
