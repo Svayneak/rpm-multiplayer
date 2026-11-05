@@ -20,7 +20,7 @@
 | **Perkins AI & Precon Decks** | 🟢 **CERTIFIED** | Perkins AI operates all 6 preconstructed archetypes (`AMERICAN_GADGETS` + 5 starter decks) with `{W}{U}{B}{R}{G}{C}` multi-color mana solvers, Hexproof target awareness, dynamic X spells, and Class Level Up actions. |
 | **Email/Password & Cross-Device Auth** | 🟢 **CERTIFIED** | `/api/auth/register`, `/api/auth/login`, `/api/auth/me`, `/api/auth/decks` with scrypt hashing, 90-day tokens, and cross-session deck sync (`ADV-38`). |
 | **Live USB/ADB Dual-Device Harness** | 🟢 **CERTIFIED** | `scripts/run_usb_phone_match.js` verified live on physical Android device `ZL7324RJHL` over `adb reverse tcp:3000 tcp:3000` with 0-2ms latency and deterministic `STATE_HASH_MATCH: [99947d05]`. |
-| **Production Deployment (Render)** | 🔴 **DRIFT DETECTED** | Production is serving HTTP 200 via Cloudflare, but is running commit `afbcb43` (Oct 22, 2026). It is behind `origin/main` because Render deploys require manual triggers. |
+| **Production Deployment (Render)** | 🟢 **SYNCHRONIZED & LIVE** | Live on commit `271767a` (Deploy `dep-dbme70ec6qcc73ej2th0`). All API endpoints (`/api/auth/me`, `/api/auth/register`) and updated client bundle verified HTTP 200 via Cloudflare proxy. |
 
 ---
 
