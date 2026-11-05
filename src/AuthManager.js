@@ -18,6 +18,7 @@ export const SUPABASE_URL = 'https://naacgdwtglvcumaccime.supabase.co';
 export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hYWNnZHd0Z2x2Y3VtYWNjaW1lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5Nzc2NDUsImV4cCI6MjEwMzU1MzY0NX0.QzVkPr7-aKYLTxVc6RzB_maVBykHBUvtvIIZm-522JE';
 
 export const AUTH_STORAGE_KEY = 'rpm_auth_session';
+export const AUTH_TOKEN_STORAGE_KEY = 'rpm_auth_token_v1';
 export const TELEMETRY_STORAGE_KEY = 'rpm_telemetry_buffer';
 export const MAX_TELEMETRY_BUFFER_SIZE = 100;
 
@@ -246,6 +247,9 @@ export class AuthManager extends EventEmitter {
    * @param {string} [options.telemetryStorageKey]
    * @param {Object} [options.storage]
    * @param {Function} [options.fetch]
+   * @param {Function} [options.fetchImpl]
+   * @param {string} [options.apiBaseUrl]
+   * @param {string} [options.authTokenKey]
    */
   constructor(options = {}) {
     super();
@@ -254,12 +258,62 @@ export class AuthManager extends EventEmitter {
     this.storageKey = options.storageKey || AUTH_STORAGE_KEY;
     this.telemetryStorageKey = options.telemetryStorageKey || TELEMETRY_STORAGE_KEY;
     this.storage = options.storage || (typeof localStorage !== 'undefined' ? localStorage : new MemoryStorage());
-    this.fetch = options.fetch || (typeof globalThis !== 'undefined' && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null);
+    this.apiBaseUrl = options.apiBaseUrl ?? '';
+    this.fetchImpl = options.fetchImpl || options.fetch || (typeof globalThis !== 'undefined' && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null);
+    this.fetch = this.fetchImpl;
+    this.authTokenKey = options.authTokenKey || AUTH_TOKEN_STORAGE_KEY;
 
     this.session = null;
     this.user = null;
 
     this._loadSession();
+  }
+
+  /**
+   * Safe getter for stored auth token across storage engines.
+   * @private
+   */
+  _getStoredToken() {
+    try {
+      if (this.storage && typeof this.storage.getItem === 'function') {
+        const t = this.storage.getItem(this.authTokenKey);
+        if (t) return t;
+      }
+      if (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function') {
+        return localStorage.getItem(this.authTokenKey);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /**
+   * Safe setter for stored auth token across storage engines.
+   * @private
+   */
+  _setStoredToken(token) {
+    try {
+      if (this.storage && typeof this.storage.setItem === 'function') {
+        this.storage.setItem(this.authTokenKey, token);
+      }
+      if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+        localStorage.setItem(this.authTokenKey, token);
+      }
+    } catch (_) {}
+  }
+
+  /**
+   * Safe remover for stored auth token across storage engines.
+   * @private
+   */
+  _removeStoredToken() {
+    try {
+      if (this.storage && typeof this.storage.removeItem === 'function') {
+        this.storage.removeItem(this.authTokenKey);
+      }
+      if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+        localStorage.removeItem(this.authTokenKey);
+      }
+    } catch (_) {}
   }
 
   /**
@@ -559,9 +613,343 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
+   * Registers a new Planeswalker account with Email + Password.
+   * Relay endpoint is authoritative; Supabase is secondary (never fatal).
+   *
+   * @param {string} email
+   * @param {string} password
+   * @param {string} [displayName='']
+   * @returns {Promise<{ success: boolean, token: string, user: Object, session: Object }>}
+   */
+  async signUpWithPassword(email, password, displayName = '') {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(String(email).trim())) {
+      throw new Error('Invalid email format');
+    }
+    if (!password || String(password).length < 6) {
+      throw new Error('Password must be at least 6 characters');
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanDisplayName = String(displayName || '').trim() || cleanEmail.split('@')[0];
+
+    if (!this.fetchImpl) {
+      throw new Error('Fetch API is not available.');
+    }
+
+    // 1. Relay endpoint first
+    const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: cleanEmail,
+        password: String(password),
+        displayName: cleanDisplayName
+      })
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || errJson.message || `Registration failed: ${res.status}`);
+    }
+
+    const resData = await res.json();
+    const token = resData.token;
+    const user = resData.user;
+
+    // Secondary Supabase signup attempt (never fatal)
+    try {
+      this.fetchImpl(`${this.supabaseUrl}/auth/v1/signup`, {
+        method: 'POST',
+        headers: {
+          'apikey': this.supabaseAnonKey,
+          'Authorization': `Bearer ${this.supabaseAnonKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: cleanEmail, password: String(password) })
+      }).catch(() => {});
+    } catch (_) {}
+
+    const profile = {
+      id: user.id,
+      email: user.email,
+      username: user.displayName || cleanDisplayName,
+      displayName: user.displayName || cleanDisplayName,
+      dob: '2000-01-01',
+      elo: 1200,
+      activeDeckId: user.activeDeckId || null,
+      onboarded: Boolean(user.activeDeckId),
+      unlockedSlots: user.unlockedSlots || ['slot_1', 'slot_2'],
+      decks: user.decks || {},
+      createdAt: user.createdAt || new Date().toISOString(),
+      updatedAt: user.updatedAt || new Date().toISOString()
+    };
+
+    const session = {
+      accessToken: token,
+      user: profile,
+      isDevBypass: false,
+      expiresAt: Date.now() + 86400000 * 90
+    };
+
+    this._setStoredToken(token);
+    this.session = session;
+    this.user = profile;
+    this._persistSession();
+
+    this.emit('auth_state_changed', { session, user: profile });
+    this.emit('login', { session, user: profile });
+
+    return { success: true, token, user: profile, session };
+  }
+
+  /**
+   * Signs in an existing Planeswalker account with Email + Password.
+   * Relay endpoint is authoritative; Supabase is secondary (never fatal).
+   *
+   * @param {string} email
+   * @param {string} password
+   * @returns {Promise<{ success: boolean, token: string, user: Object, session: Object }>}
+   */
+  async signInWithPassword(email, password) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(String(email).trim())) {
+      throw new Error('Invalid email format');
+    }
+    if (!password) {
+      throw new Error('Password is required');
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    if (!this.fetchImpl) {
+      throw new Error('Fetch API is not available.');
+    }
+
+    const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: cleanEmail, password: String(password) })
+    });
+
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({}));
+      throw new Error(errJson.error || errJson.message || 'Invalid credentials');
+    }
+
+    const resData = await res.json();
+    const token = resData.token;
+    const user = resData.user;
+
+    // Secondary Supabase token attempt (never fatal)
+    try {
+      this.fetchImpl(`${this.supabaseUrl}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: {
+          'apikey': this.supabaseAnonKey,
+          'Authorization': `Bearer ${this.supabaseAnonKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: cleanEmail, password: String(password) })
+      }).catch(() => {});
+    } catch (_) {}
+
+    const profile = {
+      id: user.id,
+      email: user.email,
+      username: user.displayName || cleanEmail.split('@')[0],
+      displayName: user.displayName || cleanEmail.split('@')[0],
+      dob: '2000-01-01',
+      elo: 1200,
+      activeDeckId: user.activeDeckId || null,
+      onboarded: Boolean(user.activeDeckId),
+      unlockedSlots: user.unlockedSlots || ['slot_1', 'slot_2'],
+      decks: user.decks || {},
+      createdAt: user.createdAt || new Date().toISOString(),
+      updatedAt: user.updatedAt || new Date().toISOString()
+    };
+
+    const session = {
+      accessToken: token,
+      user: profile,
+      isDevBypass: false,
+      expiresAt: Date.now() + 86400000 * 90
+    };
+
+    this._setStoredToken(token);
+    this.session = session;
+    this.user = profile;
+    this._persistSession();
+
+    this.emit('auth_state_changed', { session, user: profile });
+    this.emit('login', { session, user: profile });
+
+    return { success: true, token, user: profile, session };
+  }
+
+  /**
+   * Attempts to restore active session automatically from stored token.
+   *
+   * @returns {Promise<Object|null>} Restored user profile or null
+   */
+  async autoRestoreSession() {
+    const token = this._getStoredToken() || this.session?.accessToken;
+    if (!token) {
+      this._loadSession();
+      return this.user;
+    }
+
+    if (this.fetchImpl) {
+      try {
+        const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/me`, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.user) {
+            const u = data.user;
+            const profile = {
+              id: u.id,
+              email: u.email,
+              username: u.displayName || u.email?.split('@')[0] || 'Planeswalker',
+              displayName: u.displayName || u.email?.split('@')[0] || 'Planeswalker',
+              dob: '2000-01-01',
+              elo: 1200,
+              activeDeckId: u.activeDeckId || null,
+              onboarded: Boolean(u.activeDeckId),
+              unlockedSlots: u.unlockedSlots || ['slot_1', 'slot_2'],
+              decks: u.decks || {},
+              createdAt: u.createdAt || new Date().toISOString(),
+              updatedAt: u.updatedAt || new Date().toISOString()
+            };
+
+            const session = {
+              accessToken: token,
+              user: profile,
+              isDevBypass: false,
+              expiresAt: Date.now() + 86400000 * 90
+            };
+
+            this._setStoredToken(token);
+            this.session = session;
+            this.user = profile;
+            this._persistSession();
+            this.emit('auth_state_changed', { session, user: profile });
+            return this.user;
+          }
+        } else if (res.status === 401) {
+          // Token expired or invalid
+          this._removeStoredToken();
+          if (this.session && this.session.accessToken === token) {
+            this.session = null;
+            this.user = null;
+            this._persistSession();
+          }
+        }
+      } catch (_) {
+        // Network offline or error - keep existing cached session if valid
+      }
+    }
+
+    this._loadSession();
+    return this.user;
+  }
+
+  /**
+   * Synchronizes saved deck slots with the relay server.
+   *
+   * @param {Object} decks
+   * @returns {Promise<{ success: boolean, decks: Object }>}
+   */
+  async syncDecks(decks) {
+    const token = this._getStoredToken() || this.session?.accessToken;
+    if (!token || !this.fetchImpl) {
+      if (this.user) {
+        this.user.decks = decks;
+        this._persistSession();
+      }
+      return { success: true, decks };
+    }
+
+    try {
+      const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/decks`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ decks })
+      });
+
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const updatedDecks = data.decks || decks;
+        if (this.user) {
+          this.user.decks = updatedDecks;
+          this._persistSession();
+        }
+        return { success: true, decks: updatedDecks };
+      }
+    } catch (_) {}
+
+    if (this.user) {
+      this.user.decks = decks;
+      this._persistSession();
+    }
+    return { success: true, decks };
+  }
+
+  /**
+   * Fetches saved deck slots from the relay server.
+   *
+   * @returns {Promise<Object>}
+   */
+  async fetchDecks() {
+    const token = this._getStoredToken() || this.session?.accessToken;
+    if (!token || !this.fetchImpl) {
+      return this.user?.decks || {};
+    }
+
+    try {
+      const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/decks`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const decks = data.decks || {};
+        if (this.user) {
+          this.user.decks = decks;
+          this._persistSession();
+        }
+        return decks;
+      }
+    } catch (_) {}
+
+    return this.user?.decks || {};
+  }
+
+  /**
    * Clears session and local credentials.
    */
   logout() {
+    const token = this._getStoredToken() || this.session?.accessToken;
+    if (token && this.fetchImpl) {
+      try {
+        this.fetchImpl(`${this.apiBaseUrl}/api/auth/logout`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(() => {});
+      } catch (_) {}
+    }
+    this._removeStoredToken();
     this.session = null;
     this.user = null;
     try {

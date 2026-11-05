@@ -3,6 +3,8 @@
  * Manages 6 unlockable deck slots and compatibility review requests (INV-ARCH-HEADLESS compliant).
  */
 
+import { groundDeckForEngine, normalizeCardName } from '../OracleEffectCompiler.js';
+
 const STORAGE_KEY_SLOTS = 'rpm_unlocked_deck_slots';
 const STORAGE_KEY_DECKS = 'rpm_deck_slots_data';
 const STORAGE_KEY_REVIEW = 'rpm_compatibility_review_queue';
@@ -116,6 +118,11 @@ export class DeckSlotManager {
       slotId,
       savedAt: Date.now()
     };
+    try {
+      if (deckRecord.cards && deckRecord.cards.length > 0) {
+        groundDeckForEngine(deckRecord.cards);
+      }
+    } catch (_) {}
     this._deckData[slotId] = deckRecord;
     this._save();
     return deckRecord;
@@ -128,6 +135,10 @@ export class DeckSlotManager {
     if (slot.deck.rawText) return slot.deck.rawText;
     const cards = slot.deck.cards || slot.deck.mainboard || [];
     return cards.map(c => `${c.count || 1} ${c.name}`).join('\n');
+  }
+
+  static importDeckText(rawText, options = {}) {
+    return new DeckSlotManager().importDeckText(rawText, options);
   }
 
   importDeckText(rawText, options = {}) {
@@ -143,13 +154,19 @@ export class DeckSlotManager {
       }
       const match = line.match(/^(\d+)\s+(.+)$/);
       if (match) {
-        const item = { count: parseInt(match[1], 10) || 1, name: match[2].trim() };
+        const normalizedName = normalizeCardName(match[2].trim());
+        const item = { count: parseInt(match[1], 10) || 1, name: normalizedName };
         if (isSideboard) sideboard.push(item);
         else cards.push(item);
       }
     }
 
     const totalCount = cards.reduce((sum, c) => sum + c.count, 0);
+    try {
+      if (cards && cards.length > 0) {
+        groundDeckForEngine(cards);
+      }
+    } catch (_) {}
     return {
       name: options.name || 'Imported Deck',
       cards,

@@ -22,8 +22,257 @@
 export const STANDARD_KEYWORDS = Object.freeze([
   'flying', 'haste', 'vigilance', 'trample', 'lifelink',
   'deathtouch', 'reach', 'flash', 'prowess', 'firstStrike',
-  'doubleStrike', 'menace', 'hexproof', 'indestructible'
+  'doubleStrike', 'menace', 'hexproof', 'indestructible',
+  'ascend', 'battleCry'
 ]);
+
+/**
+ * Spanish-to-English MTG Card Name Dictionary & Typo Normalizations.
+ */
+export const CARD_NAME_NORMALIZATIONS = Object.freeze({
+  "llanura": "Plains",
+  "llanuras": "Plains",
+  "resistir los elementos": "Brave the Elements",
+  "ocelot profe": "Ocelot Pride",
+  "orgullo de ocelotes": "Ocelot Pride",
+  "defender los termos": "Secure the Wastes",
+  "defender los yermos": "Secure the Wastes",
+  "dar la alarma": "Raise the Alarm",
+  "reunir a los aldeanos": "Gather the Townsfolk",
+  "virtud intangible": "Intangible Virtue",
+  "honor de los puros": "Honor of the Pure",
+  "anuncio de boda": "Wedding Announcement // Wedding Festivity",
+  "anuncio de boda // festejo de boda": "Wedding Announcement // Wedding Festivity",
+  "festejo de boda": "Wedding Announcement // Wedding Festivity",
+  "talento del cuidador": "Caretaker's Talent",
+  "heroina de fuerteespada": "Hero of Bladehold",
+  "hero of bladehold": "Hero of Bladehold",
+  "linea mistica de la santidad": "Leyline of Sanctity",
+  "castillo ardenvale": "Castle Ardenvale",
+  "castillo de ardenvale": "Castle Ardenvale",
+  "camino al exilio": "Path to Exile",
+  "guardian del alma": "Soul Warden",
+  "guardiana de las almas": "Soul Warden",
+  "empujon fatal": "Fatal Push",
+  "incautar el pensamiento": "Thoughtseize",
+  "despojar los pensamientos": "Thoughtseize",
+  "contrahechizo": "Counterspell",
+  "rayo": "Lightning Bolt",
+  "pica de lava": "Lava Spike",
+  "isla": "Island",
+  "islas": "Island",
+  "pantano": "Swamp",
+  "pantanos": "Swamp",
+  "montana": "Mountain",
+  "montanas": "Mountain",
+  "bosque": "Forest",
+  "bosques": "Forest"
+});
+
+export const CARD_NAME_DICTIONARY = CARD_NAME_NORMALIZATIONS;
+
+/**
+ * Normalizes card names from Spanish, common community typos, diacritics, and extra spaces.
+ * 
+ * @param {string} rawName 
+ * @returns {string} Official English MTG card name
+ */
+export function normalizeCardName(rawName) {
+  if (!rawName || typeof rawName !== 'string') return '';
+  const deaccented = rawName.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const cleaned = deaccented
+    .replace(/[¡!¿?"'«»\[\]{}()]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+  if (CARD_NAME_NORMALIZATIONS[cleaned]) {
+    return CARD_NAME_NORMALIZATIONS[cleaned];
+  }
+
+  const noSlashCleaned = cleaned.replace(/\s*\/\/\s*/g, ' ').replace(/\s+/g, ' ').trim();
+  if (CARD_NAME_NORMALIZATIONS[noSlashCleaned]) {
+    return CARD_NAME_NORMALIZATIONS[noSlashCleaned];
+  }
+
+  const canonicalMap = {
+    "plains": "Plains",
+    "island": "Island",
+    "swamp": "Swamp",
+    "mountain": "Mountain",
+    "forest": "Forest",
+    "castle ardenvale": "Castle Ardenvale",
+    "brave the elements": "Brave the Elements",
+    "path to exile": "Path to Exile",
+    "ocelot pride": "Ocelot Pride",
+    "secure the wastes": "Secure the Wastes",
+    "soul warden": "Soul Warden",
+    "raise the alarm": "Raise the Alarm",
+    "honor of the pure": "Honor of the Pure",
+    "gather the townsfolk": "Gather the Townsfolk",
+    "intangible virtue": "Intangible Virtue",
+    "wedding announcement // wedding festivity": "Wedding Announcement // Wedding Festivity",
+    "wedding announcement": "Wedding Announcement // Wedding Festivity",
+    "caretakers talent": "Caretaker's Talent",
+    "caretaker's talent": "Caretaker's Talent",
+    "hero of bladehold": "Hero of Bladehold",
+    "leyline of sanctity": "Leyline of Sanctity"
+  };
+
+  const lookupKey = cleaned.replace(/'/g, '');
+  if (canonicalMap[cleaned]) return canonicalMap[cleaned];
+  if (canonicalMap[lookupKey]) return canonicalMap[lookupKey];
+
+  return rawName.replace(/[¡!¿?"«»]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+export const KNOWN_CARD_ORACLE_MAP = Object.freeze({
+  "plains": {
+    name: "Plains",
+    typeLine: "Basic Land — Plains",
+    oracleText: "({T}: Add {W}.)",
+    manaCost: "",
+    cmc: 0,
+    colors: []
+  },
+  "castle ardenvale": {
+    name: "Castle Ardenvale",
+    typeLine: "Land",
+    oracleText: "Castle Ardenvale enters the battlefield tapped unless you control a Plains.\n{T}: Add {W}.\n{2}{W}{W}, {T}: Create a 1/1 white Human creature token.",
+    manaCost: "",
+    cmc: 0,
+    colors: []
+  },
+  "brave the elements": {
+    name: "Brave the Elements",
+    typeLine: "Instant",
+    oracleText: "Choose a color. White creatures you control gain protection from the chosen color until end of turn.",
+    manaCost: "{W}",
+    cmc: 1,
+    colors: ["W"]
+  },
+  "path to exile": {
+    name: "Path to Exile",
+    typeLine: "Instant",
+    oracleText: "Exile target creature. Its controller may search their library for a basic land card, put that card onto the battlefield tapped, then shuffle.",
+    manaCost: "{W}",
+    cmc: 1,
+    colors: ["W"]
+  },
+  "ocelot pride": {
+    name: "Ocelot Pride",
+    typeLine: "Creature — Cat",
+    oracleText: "First strike, lifelink\nAscend\nAt the beginning of your end step, if you gained life this turn, create a 1/1 white Cat creature token. Then if you have the city's blessing, for each token you control, create a token that's a copy of that token.",
+    manaCost: "{W}",
+    cmc: 1,
+    power: 1,
+    toughness: 1,
+    colors: ["W"],
+    keywords: ["firstStrike", "lifelink", "ascend"]
+  },
+  "secure the wastes": {
+    name: "Secure the Wastes",
+    typeLine: "Instant",
+    oracleText: "Create X 1/1 white Warrior creature tokens.",
+    manaCost: "{X}{W}",
+    cmc: 1,
+    colors: ["W"]
+  },
+  "soul warden": {
+    name: "Soul Warden",
+    typeLine: "Creature — Human Cleric",
+    oracleText: "Whenever another creature enters the battlefield, you gain 1 life.",
+    manaCost: "{W}",
+    cmc: 1,
+    power: 1,
+    toughness: 1,
+    colors: ["W"]
+  },
+  "raise the alarm": {
+    name: "Raise the Alarm",
+    typeLine: "Instant",
+    oracleText: "Create two 1/1 white Soldier creature tokens.",
+    manaCost: "{1}{W}",
+    cmc: 2,
+    colors: ["W"]
+  },
+  "honor of the pure": {
+    name: "Honor of the Pure",
+    typeLine: "Enchantment",
+    oracleText: "White creatures you control get +1/+1.",
+    manaCost: "{1}{W}",
+    cmc: 2,
+    colors: ["W"]
+  },
+  "gather the townsfolk": {
+    name: "Gather the Townsfolk",
+    typeLine: "Sorcery",
+    oracleText: "Create two 1/1 white Human creature tokens.\nFateful hour — If you have 5 or less life, create five of those tokens instead.",
+    manaCost: "{1}{W}",
+    cmc: 2,
+    colors: ["W"]
+  },
+  "intangible virtue": {
+    name: "Intangible Virtue",
+    typeLine: "Enchantment",
+    oracleText: "Creature tokens you control get +1/+1 and have vigilance.",
+    manaCost: "{1}{W}",
+    cmc: 2,
+    colors: ["W"]
+  },
+  "wedding announcement // wedding festivity": {
+    name: "Wedding Announcement // Wedding Festivity",
+    typeLine: "Enchantment // Enchantment",
+    oracleText: "At the beginning of your end step, put an invitation counter on Wedding Announcement. If you attacked with two or more creatures this turn, draw a card. Otherwise, create a 1/1 white Human creature token. Then if Wedding Announcement has three or more invitation counters on it, transform it.",
+    manaCost: "{2}{W}",
+    cmc: 3,
+    colors: ["W"]
+  },
+  "wedding announcement": {
+    name: "Wedding Announcement // Wedding Festivity",
+    typeLine: "Enchantment // Enchantment",
+    oracleText: "At the beginning of your end step, put an invitation counter on Wedding Announcement. If you attacked with two or more creatures this turn, draw a card. Otherwise, create a 1/1 white Human creature token. Then if Wedding Announcement has three or more invitation counters on it, transform it.",
+    manaCost: "{2}{W}",
+    cmc: 3,
+    colors: ["W"]
+  },
+  "caretaker's talent": {
+    name: "Caretaker's Talent",
+    typeLine: "Enchantment — Class",
+    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{1}{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
+    manaCost: "{2}{W}",
+    cmc: 3,
+    colors: ["W"]
+  },
+  "caretakers talent": {
+    name: "Caretaker's Talent",
+    typeLine: "Enchantment — Class",
+    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{1}{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
+    manaCost: "{2}{W}",
+    cmc: 3,
+    colors: ["W"]
+  },
+  "hero of bladehold": {
+    name: "Hero of Bladehold",
+    typeLine: "Creature — Human Knight",
+    oracleText: "Battle cry\nWhenever Hero of Bladehold attacks, create two 1/1 white Soldier creature tokens tapped and attacking.",
+    manaCost: "{2}{W}{W}",
+    cmc: 4,
+    power: 3,
+    toughness: 4,
+    colors: ["W"],
+    keywords: ["battleCry"]
+  },
+  "leyline of sanctity": {
+    name: "Leyline of Sanctity",
+    typeLine: "Enchantment",
+    oracleText: "If Leyline of Sanctity is in your opening hand, you may begin the game with it on the battlefield.\nYou have hexproof.",
+    manaCost: "{2}{W}{W}",
+    cmc: 4,
+    colors: ["W"],
+    keywords: ["hexproof"]
+  }
+});
 
 /**
  * Compiles a card's type line into its canonical category, tabletop subzone, and permanence flag.
@@ -1011,6 +1260,285 @@ export function compileActivatedAbilities(typeLine = '', oracleText = '') {
   return abilities;
 }
 
+function parseWordNumber(val) {
+  if (val === undefined || val === null) return 1;
+  const s = String(val).trim().toLowerCase();
+  const words = { 'a': 1, 'an': 1, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10, 'x': 'X' };
+  if (words[s] !== undefined) return words[s];
+  const num = parseInt(s, 10);
+  return isNaN(num) ? s : num;
+}
+
+export function extractFullOracleText(card) {
+  if (!card) return '';
+  if (Array.isArray(card.card_faces) && card.card_faces.length > 0) {
+    return card.card_faces.map(f => f.oracle_text || f.oracleText || f.text || '').filter(Boolean).join('\n');
+  }
+  const text = card.oracleText || card.oracle_text || card.text || '';
+  if (text) return text;
+  const norm = String(card.name || '').trim().toLowerCase();
+  return KNOWN_CARD_ORACLE_MAP[norm]?.oracleText || KNOWN_CARD_ORACLE_MAP[norm.replace(/'/g, '')]?.oracleText || '';
+}
+
+export function extractFullTypeLine(card) {
+  if (!card) return '';
+  if (Array.isArray(card.card_faces) && card.card_faces.length > 0) {
+    return card.card_faces.map(f => f.type_line || f.typeLine || '').filter(Boolean).join(' // ');
+  }
+  const tl = card.typeLine || card.type_line || card.type || '';
+  if (tl) return tl;
+  const norm = String(card.name || '').trim().toLowerCase();
+  return KNOWN_CARD_ORACLE_MAP[norm]?.typeLine || KNOWN_CARD_ORACLE_MAP[norm.replace(/'/g, '')]?.typeLine || '';
+}
+
+export function compileGroundedEffects(card, oracleText = '', typeLine = '') {
+  const ot = String(oracleText || '');
+  const tl = String(typeLine || '');
+  const effects = [];
+
+  // DEAL_DAMAGE
+  const damageRegex = /(?:deals?|deals?\s+damage\s+equal\s+to.*?to)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|x)?\s*(?:damage)?\s+to\s+(any target|target\s+[a-zA-Z0-9\s/]+?|each opponent|each player|each creature|any other target)(?=[.,;\n]|\band\b|$)/gi;
+  let dmgMatch;
+  while ((dmgMatch = damageRegex.exec(ot)) !== null) {
+    const rawAmt = dmgMatch[1];
+    const targetDesc = dmgMatch[2].trim().toLowerCase();
+    const amount = rawAmt ? parseWordNumber(rawAmt) : 1;
+    let targetType = 'ANY';
+    let scope = 'SINGLE';
+    if (targetDesc.includes('each opponent')) { targetType = 'OPPONENTS'; scope = 'ALL_OPPONENTS'; }
+    else if (targetDesc.includes('each creature')) { targetType = 'CREATURES'; scope = 'ALL_CREATURES'; }
+    else if (targetDesc.includes('each player')) { targetType = 'PLAYERS'; scope = 'ALL_PLAYERS'; }
+    else if (targetDesc.includes('creature')) { targetType = 'CREATURE'; }
+    else if (targetDesc.includes('player') || targetDesc.includes('opponent') || targetDesc.includes('planeswalker')) { targetType = 'PLAYER'; }
+    effects.push({ primitive: 'DEAL_DAMAGE', amount, target: dmgMatch[2].trim(), targetType, scope, raw: dmgMatch[0].trim() });
+  }
+
+  // DESTROY_TARGET
+  const destroyRegex = /destroy\s+target\s+([a-zA-Z0-9\s/'-]+?)(?=[.,;\n]|\bif\b|\bunless\b|$)/gi;
+  let destMatch;
+  while ((destMatch = destroyRegex.exec(ot)) !== null) {
+    const target = destMatch[1].trim();
+    let targetType = 'PERMANENT';
+    const tLower = target.toLowerCase();
+    if (tLower.includes('creature')) targetType = 'CREATURE';
+    else if (tLower.includes('artifact')) targetType = 'ARTIFACT';
+    else if (tLower.includes('enchantment')) targetType = 'ENCHANTMENT';
+    else if (tLower.includes('land')) targetType = 'LAND';
+    else if (tLower.includes('planeswalker')) targetType = 'PLANESWALKER';
+    effects.push({ primitive: 'DESTROY_TARGET', target: 'target ' + target, targetType, raw: destMatch[0].trim() });
+  }
+
+  // EXILE_TARGET
+  const exileRegex = /exile\s+target\s+([a-zA-Z0-9\s/'-]+?)(?=[.,;\n]|\bif\b|\bunless\b|$)/gi;
+  let exileMatch;
+  while ((exileMatch = exileRegex.exec(ot)) !== null) {
+    const target = exileMatch[1].trim();
+    let targetType = 'PERMANENT';
+    const tLower = target.toLowerCase();
+    if (tLower.includes('graveyard')) targetType = 'GRAVEYARD';
+    else if (tLower.includes('creature')) targetType = 'CREATURE';
+    else if (tLower.includes('spell')) targetType = 'SPELL';
+    effects.push({ primitive: 'EXILE_TARGET', target: 'target ' + target, targetType, raw: exileMatch[0].trim() });
+  }
+
+  // SEARCH_LIBRARY
+  const searchLibRegex = /(?:its\s+controller\s+may\s+search\s+their\s+library|search\s+(?:their|your)\s+library)[^.!?\n]*/gi;
+  let searchMatch;
+  while ((searchMatch = searchLibRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'SEARCH_LIBRARY',
+      targetZone: /battlefield\s+tapped/i.test(searchMatch[0]) ? 'BATTLEFIELD_TAPPED' : (/battlefield/i.test(searchMatch[0]) ? 'BATTLEFIELD' : 'HAND'),
+      cardFilter: ot.match(/for\s+(?:a\s+|an\s+)?([^.,\n]+?)(?:,\s*put|\s+and)/i)?.[1]?.trim() || 'card',
+      raw: searchMatch[0].trim()
+    });
+  }
+
+  // COUNTER_SPELL
+  const counterRegex = /counter\s+target\s+(?:[a-zA-Z0-9\s/'-]+?\s+)?spell(?=[.,;\n]|\bunless\b|$)/gi;
+  let cntMatch;
+  while ((cntMatch = counterRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'COUNTER_SPELL', target: cntMatch[0].replace(/^counter\s+/i, '').trim(), targetType: 'SPELL', raw: cntMatch[0].trim() });
+  }
+
+  // PUMP_PT_EOT
+  const pumpRegex = /(target creature(?:\s+you control)?|creatures you control|white creatures you control|creature tokens you control)\s+gets?\s+([+-]?\d+|[+-]?x)\/([+-]?\d+|[+-]?x)\s*(?:until\s+end\s+of\s+turn)?/gi;
+  let pumpMatch;
+  while ((pumpMatch = pumpRegex.exec(ot)) !== null) {
+    const scope = pumpMatch[1].toLowerCase().includes('creatures you control') || pumpMatch[1].toLowerCase().includes('creature tokens you control') ? 'ALL_YOURS' : 'SINGLE';
+    effects.push({ primitive: 'PUMP_PT_EOT', power: parseWordNumber(pumpMatch[2]), toughness: parseWordNumber(pumpMatch[3]), scope, duration: 'END_OF_TURN', target: pumpMatch[1].trim(), targetType: scope === 'ALL_YOURS' ? 'CONTROLLED_CREATURES' : 'CREATURE', raw: pumpMatch[0].trim() });
+  }
+
+  // STATIC_ANTHEM
+  const anthemRegex = /(white\s+creatures\s+you\s+control|creature\s+tokens\s+you\s+control|creatures\s+you\s+control)\s+get\s+([+-]?\d+)\/([+-]?\d+)(?:\s+and\s+have\s+([a-zA-Z\s]+))?/gi;
+  let antMatch;
+  while ((antMatch = anthemRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'STATIC_ANTHEM',
+      filter: antMatch[1].trim(),
+      power: parseWordNumber(antMatch[2]),
+      toughness: parseWordNumber(antMatch[3]),
+      grantedKeywords: antMatch[4] ? antMatch[4].trim().split(/\s*,\s*|\s+and\s+/i) : [],
+      raw: antMatch[0].trim()
+    });
+  }
+
+  // ADD_COUNTER
+  const counterAddRegex = /put\s+(a|an|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+([+-]?\d+\/[+-]?\d+|\w+)?\s*counters?\s+on\s+([^.,\n]+)/gi;
+  let cAddMatch;
+  while ((cAddMatch = counterAddRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'ADD_COUNTER', amount: parseWordNumber(cAddMatch[1]), counterType: cAddMatch[2] || '+1/+1', target: cAddMatch[3].trim(), raw: cAddMatch[0].trim() });
+  }
+
+  // DRAW_CARDS
+  const drawRegex = /draws?\s+(a|\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+cards?/gi;
+  let drawMatch;
+  while ((drawMatch = drawRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'DRAW_CARDS', amount: parseWordNumber(drawMatch[1]), raw: drawMatch[0].trim() });
+  }
+
+  // SCRY
+  const scryRegex = /scry\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)/gi;
+  let scryMatch;
+  while ((scryMatch = scryRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'SCRY', amount: parseWordNumber(scryMatch[1]), raw: scryMatch[0].trim() });
+  }
+
+  // GAIN_LIFE
+  const gainLifeRegex = /(?:you\s+)?gains?\s+(?:(\d+|one|two|three|four|five|six|seven|eight|nine|ten|x)\s+life|life equal to([^.,\n]+))/gi;
+  let gainMatch;
+  while ((gainMatch = gainLifeRegex.exec(ot)) !== null) {
+    const amt = gainMatch[1] ? parseWordNumber(gainMatch[1]) : 'VARIABLE';
+    effects.push({ primitive: 'GAIN_LIFE', amount: amt, raw: gainMatch[0].trim() });
+  }
+
+  // LOSE_LIFE
+  const loseLifeRegex = /(?:(target player|each opponent|target opponent|you)\s+(?:[^.,\n]*?\s+)?)?loses?\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten|x)\s+life/gi;
+  let loseMatch;
+  while ((loseMatch = loseLifeRegex.exec(ot)) !== null) {
+    const rawTarget = loseMatch[1] || 'each opponent';
+    effects.push({ primitive: 'LOSE_LIFE', amount: parseWordNumber(loseMatch[2]), target: rawTarget, scope: rawTarget.toLowerCase().includes('each opponent') ? 'ALL_OPPONENTS' : 'SINGLE', raw: loseMatch[0].trim() });
+  }
+
+  // CREATE_TOKEN
+  const tokenRegex = /create\s+(a|\d+|x|one|two|three|four|five|six|seven|eight|nine|ten)\s+(\d+\/\d+)?\s*(.*?)\s*creature\s+tokens?(?:\s+tapped\s+and\s+attacking)?/gi;
+  let tokMatch;
+  while ((tokMatch = tokenRegex.exec(ot)) !== null) {
+    const pt = tokMatch[2] ? tokMatch[2].split('/') : [1, 1];
+    const rawAmt = tokMatch[1];
+    const amount = (String(rawAmt).toLowerCase() === 'x') ? 'X' : parseWordNumber(rawAmt);
+    effects.push({
+      primitive: 'CREATE_TOKEN',
+      amount,
+      power: parseInt(pt[0], 10) || 1,
+      toughness: parseInt(pt[1], 10) || 1,
+      tokenType: tokMatch[3]?.trim() || 'Creature',
+      tappedAndAttacking: /tapped\s+and\s+attacking/i.test(tokMatch[0]),
+      raw: tokMatch[0].trim()
+    });
+  }
+
+  // POPULATE / COPY TOKEN
+  const copyTokenRegex = /(?:create\s+a\s+token\s+that's\s+a\s+copy\s+of\s+[^.,\n]+|for\s+each\s+token\s+you\s+control,\s*create\s+a\s+token\s+that's\s+a\s+copy\s+of\s+that\s+token)/gi;
+  let cpyMatch;
+  while ((cpyMatch = copyTokenRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'POPULATE',
+      scope: cpyMatch[0].includes('for each token') ? 'ALL_TOKENS' : 'SINGLE_TOKEN',
+      raw: cpyMatch[0].trim()
+    });
+  }
+
+  // FATEFUL_HOUR / CONDITIONAL_TOKEN
+  const condTokenRegex = /(?:fateful\s+hour\s*—\s*)?(?:if\s+you\s+have\s+\d+\s+or\s+less\s+life,\s*)?create\s+(five|\d+)\s+of\s+those\s+tokens\s+instead/gi;
+  let fMatch;
+  while ((fMatch = condTokenRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'CREATE_TOKEN',
+      amount: parseWordNumber(fMatch[1]),
+      condition: 'FATEFUL_HOUR',
+      raw: fMatch[0].trim()
+    });
+  }
+
+  // CHOOSE_COLOR
+  const chooseColorRegex = /(?:choose|choice of)\s+a\s+color/gi;
+  let colMatch;
+  while ((colMatch = chooseColorRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'CHOOSE_COLOR', options: ['White', 'Blue', 'Black', 'Red', 'Green'], raw: colMatch[0].trim() });
+  }
+
+  // GRANT_PROTECTION
+  const protRegex = /([a-zA-Z0-9\s/'-]+?)\s+(?:gain|gains|have|has)\s+protection\s+from\s+([a-zA-Z0-9\s/'-]+?)(?:\s+until\s+end\s+of\s+turn)?(?=[.,;\n]|$)/gi;
+  let protMatch;
+  while ((protMatch = protRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'GRANT_PROTECTION',
+      target: protMatch[1].trim(),
+      protectionFrom: protMatch[2].trim(),
+      duration: /until\s+end\s+of\s+turn/i.test(protMatch[0]) ? 'END_OF_TURN' : 'STATIC',
+      raw: protMatch[0].trim()
+    });
+  }
+
+  // CLASS_LEVEL_UP
+  const classLevelRegex = /(\{[^{}]+\}):\s*Level\s*(\d+)/gi;
+  let clMatch;
+  while ((clMatch = classLevelRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'CLASS_LEVEL_UP',
+      level: parseInt(clMatch[2], 10),
+      cost: clMatch[1],
+      raw: clMatch[0].trim()
+    });
+  }
+
+  // TRANSFORM
+  const transformRegex = /(?:then\s+if\s+.*?\s+has\s+.*?\s+counters.*?,\s*)?transform\s+(?:it|this\s+permanent)/gi;
+  let trMatch;
+  while ((trMatch = transformRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'TRANSFORM',
+      raw: trMatch[0].trim()
+    });
+  }
+
+  // OPENING_HAND_ACTION
+  const openingHandRegex = /if\s+.*?\s+is\s+in\s+your\s+opening\s+hand,\s*you\s+may\s+begin\s+the\s+game\s+with\s+it\s+on\s+the\s+battlefield/gi;
+  let ohMatch;
+  while ((ohMatch = openingHandRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'OPENING_HAND_ACTION',
+      action: 'START_ON_BATTLEFIELD',
+      raw: ohMatch[0].trim()
+    });
+  }
+
+  // GRANT_HEXPROOF
+  const hexproofRegex = /you\s+have\s+hexproof/gi;
+  let hxMatch;
+  while ((hxMatch = hexproofRegex.exec(ot)) !== null) {
+    effects.push({
+      primitive: 'GRANT_HEXPROOF',
+      target: 'YOU',
+      raw: hxMatch[0].trim()
+    });
+  }
+
+  // ATTACH_EQUIPMENT / EQUIP
+  const equipRegex = /equip\s*\{?(\d+|x)\}?/gi;
+  let eqMatch;
+  while ((eqMatch = equipRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'EQUIP', amount: parseWordNumber(eqMatch[1]), equipCost: '{' + eqMatch[1].toUpperCase() + '}', raw: eqMatch[0].trim() });
+  }
+  const attachRegex = /attach\s+.*?\s+to\s+target\s+creature/gi;
+  let attMatch;
+  while ((attMatch = attachRegex.exec(ot)) !== null) {
+    effects.push({ primitive: 'ATTACH_EQUIPMENT', target: 'target creature', raw: attMatch[0].trim() });
+  }
+
+  return effects;
+}
+
 /**
  * Main compilation entry point.
  * Given a card or card metadata object, compiles rules text and properties into
@@ -1025,6 +1553,10 @@ export function compileCardMechanics(card) {
   const typeLine = card.typeLine || card.type_line || card.type || '';
   const oracleText = card.oracleText || card.oracle_text || card.text || '';
   const colors = Array.isArray(card.colors) ? card.colors : [];
+
+  const fullOracle = extractFullOracleText(card) || oracleText;
+  const fullType = extractFullTypeLine(card) || typeLine;
+  const groundedEffects = compileGroundedEffects(card, fullOracle, fullType);
 
   // 1. Category & Subzone
   const { category, subzone, isPermanent } = compileCardCategory(typeLine, card.isPermanent);
@@ -1111,10 +1643,12 @@ export function compileCardMechanics(card) {
     grantsFlashTo,
     grantsFlashToEquipment: Boolean(staticPermissions.equipment),
     grantsFlashToAura: Boolean(staticPermissions.aura),
+    groundedEffects,
     compiledAt: Date.now()
   };
 
   card.compiledMechanics = compiled;
+  card.groundedEffects = groundedEffects;
   card.subzone = subzone;
   card.isPermanent = isPermanent;
 
@@ -1205,6 +1739,195 @@ export function smokeTestCard(card) {
   return result;
 }
 
+export function groundCard(card) {
+  if (!card) {
+    return {
+      primitives: [],
+      targetRequirements: [],
+      keywords: [],
+      baseStats: { power: 0, toughness: 0, cmc: 0 },
+      isFullyAutomated: true
+    };
+  }
+  const normName = String(card.name || '').trim().toLowerCase();
+  const known = KNOWN_CARD_ORACLE_MAP[normName] || KNOWN_CARD_ORACLE_MAP[normName.replace(/'/g, '')];
+  if (known) {
+    if (!card.oracleText && !card.oracle_text) card.oracleText = known.oracleText;
+    if (!card.typeLine && !card.type_line) card.typeLine = known.typeLine;
+    if (card.power === undefined && known.power !== undefined) card.power = known.power;
+    if (card.toughness === undefined && known.toughness !== undefined) card.toughness = known.toughness;
+    if (card.cmc === undefined && known.cmc !== undefined) card.cmc = known.cmc;
+    if (!card.manaCost && known.manaCost) card.manaCost = known.manaCost;
+  }
+  const ot = extractFullOracleText(card);
+  const tl = extractFullTypeLine(card);
+  const primitives = compileGroundedEffects(card, ot, tl);
+  const targetMatches = ot.match(/target\s+([a-zA-Z0-9\s/'-]+?)(?=[.,;]|\band\b|\bwith\b|\bthat\b|\bin\b|\bfrom\b|$)/gi) || [];
+  const targetRequirements = Array.from(new Set(targetMatches.map(t => t.trim())));
+  const foundKeywords = new Set();
+  const cardKw = card.keywords;
+  if (Array.isArray(cardKw)) {
+    cardKw.forEach(k => foundKeywords.add(String(k).toLowerCase()));
+  } else if (cardKw && typeof cardKw === 'object') {
+    Object.keys(cardKw).forEach(k => { if (cardKw[k]) foundKeywords.add(k.toLowerCase()); });
+  }
+  for (const kw of STANDARD_KEYWORDS) {
+    const kwRegex = new RegExp(`\\b${kw.replace(/([A-Z])/g, ' $1').toLowerCase()}\\b`, 'i');
+    if (kwRegex.test(ot) || kwRegex.test(tl)) {
+      foundKeywords.add(kw.toLowerCase());
+    }
+  }
+  const baseStats = {
+    power: Number(card.power) || (card.basePower !== undefined ? Number(card.basePower) : 0),
+    toughness: Number(card.toughness) || (card.baseToughness !== undefined ? Number(card.baseToughness) : 0),
+    cmc: Number(card.cmc ?? card.manaValue ?? 0)
+  };
+  const sentences = ot.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(s => s && !s.startsWith('('));
+  let isFullyAutomated = true;
+  if (sentences.length > 0) {
+    for (const sent of sentences) {
+      const matchesPrimitive = primitives.some(p => p.raw && (sent.toLowerCase().includes(p.raw.toLowerCase()) || p.raw.toLowerCase().includes(sent.toLowerCase())));
+      const matchesKnown = /flying|haste|vigilance|trample|lifelink|deathtouch|reach|flash|prowess|first strike|double strike|menace|hexproof|indestructible|toxic|infect|defender|equip|companion|enters the battlefield tapped|add\s*\{|ascend|battle cry|fateful hour|city's blessing|invitation counter|transform|level \d+|triggers only once each turn|begin the game with it on the battlefield|protection from|choose a color|search their library|tapped and attacking|copy of a token|you have hexproof/i.test(sent);
+      if (!matchesPrimitive && !matchesKnown) {
+        isFullyAutomated = false;
+        break;
+      }
+    }
+  }
+  const spec = { primitives, targetRequirements, keywords: Array.from(foundKeywords), baseStats, isFullyAutomated };
+  card.groundedSpec = spec;
+  card.groundedEffects = primitives;
+  return spec;
+}
+
+const groundingCache = new Map();
+
+export function getGroundedSpec(name) {
+  if (!name) return null;
+  return groundingCache.get(String(name).toLowerCase()) || null;
+}
+
+export function clearGroundingCache() {
+  groundingCache.clear();
+}
+
+export function groundDeckForEngine(deckList) {
+  if (!deckList) return { cards: [], dictionary: {}, unresolvedClauses: [] };
+  const rawCards = Array.isArray(deckList)
+    ? deckList
+    : (Array.isArray(deckList.cards)
+      ? deckList.cards
+      : (Array.isArray(deckList.mainboard) ? deckList.mainboard : []));
+  if (!Array.isArray(rawCards)) return { cards: [], dictionary: {}, unresolvedClauses: [] };
+
+  const dictionary = {};
+  const unresolvedClauses = [];
+  const processedCards = [];
+
+  for (const item of rawCards) {
+    if (!item) continue;
+    const cardObj = typeof item === 'string' ? { name: item } : { ...item };
+    const cardName = cardObj.name || 'Unknown';
+    const normName = String(cardName).toLowerCase();
+
+    let spec = groundingCache.get(normName);
+    if (!spec) {
+      try {
+        spec = groundCard(cardObj);
+        groundingCache.set(normName, spec);
+      } catch (_) {
+        spec = {
+          primitives: [],
+          targetRequirements: [],
+          keywords: [],
+          baseStats: { power: 0, toughness: 0, cmc: 0 },
+          isFullyAutomated: false
+        };
+      }
+    }
+
+    cardObj.groundedSpec = spec;
+    cardObj.groundedEffects = spec.primitives || [];
+    dictionary[cardName] = spec;
+    processedCards.push(cardObj);
+
+    if (spec && !spec.isFullyAutomated) {
+      unresolvedClauses.push({
+        cardName,
+        primitives: spec.primitives || [],
+        oracleText: cardObj.oracleText || ''
+      });
+    }
+  }
+
+  return { cards: processedCards, dictionary, unresolvedClauses };
+}
+
+/**
+ * Audits a collection of deck cards or decklist text against supported CR primitives.
+ * 
+ * @param {Array<Object>|Object|string} deckCards 
+ * @returns {{ supportPercentage: number, supportedCount: number, totalCount: number, unsupportedCards: Array<string>, isFullyAutomated: boolean }}
+ */
+export function auditDeckSupport(deckCards) {
+  let rawCards = [];
+  if (typeof deckCards === 'string') {
+    const lines = deckCards.split('\n').map(l => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      if (line.toLowerCase().startsWith('sideboard')) break;
+      const match = line.match(/^(\d+)\s+(.+)$/);
+      if (match) {
+        rawCards.push({ count: parseInt(match[1], 10) || 1, name: normalizeCardName(match[2].trim()) });
+      }
+    }
+  } else if (Array.isArray(deckCards)) {
+    rawCards = deckCards;
+  } else if (deckCards && typeof deckCards === 'object') {
+    rawCards = Array.isArray(deckCards.cards)
+      ? deckCards.cards
+      : (Array.isArray(deckCards.mainboard) ? deckCards.mainboard : []);
+  }
+
+  const unsupportedCards = [];
+  let supportedCount = 0;
+  let totalCount = 0;
+
+  for (const item of rawCards) {
+    if (!item) continue;
+    const cardObj = typeof item === 'string'
+      ? { name: normalizeCardName(item) }
+      : { ...item, name: normalizeCardName(item.name) };
+    const cardCount = Number(item.count) || 1;
+    totalCount += cardCount;
+    const spec = groundCard(cardObj);
+    if (spec && spec.isFullyAutomated) {
+      supportedCount += cardCount;
+    } else {
+      unsupportedCards.push(cardObj.name || 'Unknown');
+    }
+  }
+
+  const supportPercentage = totalCount > 0 ? (supportedCount / totalCount) * 100 : 100;
+  return {
+    supportPercentage,
+    supportedCount,
+    totalCount,
+    unsupportedCards,
+    isFullyAutomated: unsupportedCards.length === 0
+  };
+}
+
+/**
+ * Evaluates deck support percentage across all cards in deckList.
+ * 
+ * @param {Array<Object>|Object|string} deckList 
+ * @returns {number} Percentage from 0 to 100
+ */
+export function evaluateDeckSupportPercentage(deckList) {
+  const audit = auditDeckSupport(deckList);
+  return audit.supportPercentage;
+}
+
 export const compileCard = compileCardMechanics;
 
 export const OracleEffectCompiler = {
@@ -1218,7 +1941,17 @@ export const OracleEffectCompiler = {
   compileStaticPermissions,
   compileActivatedAbilities,
   smokeTestCard,
-  STANDARD_KEYWORDS
+  STANDARD_KEYWORDS,
+  compileGroundedEffects,
+  groundCard,
+  groundDeckForEngine,
+  getGroundedSpec,
+  clearGroundingCache,
+  CARD_NAME_NORMALIZATIONS,
+  CARD_NAME_DICTIONARY,
+  normalizeCardName,
+  auditDeckSupport,
+  evaluateDeckSupportPercentage
 };
 
 export default OracleEffectCompiler;

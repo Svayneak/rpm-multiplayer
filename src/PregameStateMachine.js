@@ -171,12 +171,16 @@ export class PregameStateMachine extends EventEmitter {
       }
     }
 
-    let winnerId = this.players[0];
-    let maxRoll = -1;
-    for (const p of this.players) {
-      if ((rolls[p] ?? -1) > maxRoll) {
-        maxRoll = rolls[p];
-        winnerId = p;
+    let winnerId = (payload.winnerId && this.players.includes(payload.winnerId))
+      ? payload.winnerId
+      : this.players[0];
+    if (!payload.winnerId || !this.players.includes(payload.winnerId)) {
+      let maxRoll = -1;
+      for (const p of this.players) {
+        if ((rolls[p] ?? -1) > maxRoll) {
+          maxRoll = rolls[p];
+          winnerId = p;
+        }
       }
     }
 

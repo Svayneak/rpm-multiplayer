@@ -31,6 +31,7 @@ export class MulliganModal {
     this.element = null;
     this.cards = [];
     this.mulliganCount = 0;
+    this.cardsToBottomCount = null;
     this.mode = 'DECISION'; // 'DECISION' | 'BOTTOMING'
     this.selectedBottomCards = []; // Array of instanceIds in bottoming order
 
@@ -91,10 +92,12 @@ export class MulliganModal {
    * @param {Object} payload
    * @param {Array<Object>} payload.cards
    * @param {number} [payload.mulliganCount=0]
+   * @param {number} [payload.cardsToBottomCount]
    */
-  open({ cards = [], mulliganCount = 0 }) {
+  open({ cards = [], mulliganCount = 0, cardsToBottomCount } = {}) {
     this.cards = Array.isArray(cards) ? [...cards] : [];
     this.mulliganCount = mulliganCount;
+    this.cardsToBottomCount = typeof cardsToBottomCount === 'number' ? cardsToBottomCount : null;
     this.selectedBottomCards = [];
     this.mode = 'DECISION';
     this.isOpen = true;
@@ -114,6 +117,10 @@ export class MulliganModal {
     this.render();
   }
 
+  _getRequiredBottomCount() {
+    return typeof this.cardsToBottomCount === 'number' ? this.cardsToBottomCount : this.mulliganCount;
+  }
+
   close() {
     this.isOpen = false;
     if (this.element) {
@@ -123,14 +130,15 @@ export class MulliganModal {
   }
 
   handleKeepClick() {
-    if (this.mulliganCount > 0) {
+    const requiredBottom = this._getRequiredBottomCount();
+    if (requiredBottom > 0) {
       // Shift to bottoming selection mode
       this.mode = 'BOTTOMING';
       this.selectedBottomCards = [];
       this.render();
     } else {
       this.close();
-      this.onKeep({ mulliganCount: 0, bottomedCards: [] });
+      this.onKeep({ mulliganCount: this.mulliganCount, bottomedCards: [] });
     }
   }
 
@@ -142,13 +150,14 @@ export class MulliganModal {
   handleCardClick(instanceId) {
     if (this.mode !== 'BOTTOMING') return;
 
+    const requiredBottom = this._getRequiredBottomCount();
     const idx = this.selectedBottomCards.indexOf(instanceId);
     if (idx !== -1) {
       // Deselect
       this.selectedBottomCards.splice(idx, 1);
     } else {
       // Select if under quota
-      if (this.selectedBottomCards.length < this.mulliganCount) {
+      if (this.selectedBottomCards.length < requiredBottom) {
         this.selectedBottomCards.push(instanceId);
       }
     }
@@ -156,12 +165,14 @@ export class MulliganModal {
   }
 
   handleConfirmBottomClick() {
-    if (this.selectedBottomCards.length !== this.mulliganCount) return;
+    const requiredBottom = this._getRequiredBottomCount();
+    if (this.selectedBottomCards.length !== requiredBottom) return;
 
     const bottomed = this.selectedBottomCards.map(id => this.cards.find(c => c && c.instanceId === id)).filter(Boolean);
     this.close();
     this.onConfirmBottom({
       mulliganCount: this.mulliganCount,
+      cardsToBottomCount: requiredBottom,
       bottomedCards: bottomed
     });
   }
@@ -176,21 +187,27 @@ export class MulliganModal {
 
     if (!grid || !actions) return;
 
+    const requiredBottom = this._getRequiredBottomCount();
+    const isFreeFirst = this.mulliganCount > requiredBottom;
+    const nextKeepSize = Math.max(0, 7 - (isFreeFirst ? requiredBottom + 1 : this.mulliganCount + 1));
+
     if (this.mode === 'DECISION') {
       badge.textContent = this.mulliganCount === 0
         ? 'Opening Hand (7 Cards)'
-        : `Mulligan #${this.mulliganCount} (Keep ${7 - this.mulliganCount})`;
+        : `Mulligan #${this.mulliganCount} (Keep ${7 - requiredBottom})`;
 
       instructions.textContent = this.mulliganCount === 0
         ? 'Review your opening hand. Choose to Keep or take a London Mulligan.'
-        : `You have taken ${this.mulliganCount} mulligan(s). If you keep, you must bottom ${this.mulliganCount} card(s).`;
+        : (requiredBottom === 0
+          ? `Free Multiplayer Mulligan #${this.mulliganCount} (CR 103.5c): You may keep all 7 cards without bottoming.`
+          : `You have taken ${this.mulliganCount} mulligan(s). If you keep, you must bottom ${requiredBottom} card(s).`);
 
       actions.innerHTML = `
         <button class="btn btn-primary mulligan-btn-keep" id="mulligan-btn-keep">
           ✓ Keep Hand
         </button>
         <button class="btn btn-secondary mulligan-btn-mulligan" id="mulligan-btn-mulligan">
-          🔄 Mulligan (to ${Math.max(0, 7 - (this.mulliganCount + 1))})
+          🔄 Mulligan (to ${nextKeepSize})
         </button>
       `;
 
@@ -198,8 +215,8 @@ export class MulliganModal {
       this.element.querySelector('#mulligan-btn-mulligan')?.addEventListener('click', () => this.handleMulliganClick());
     } else {
       // BOTTOMING mode
-      const needed = this.mulliganCount - this.selectedBottomCards.length;
-      badge.textContent = `Bottom Selection (${this.selectedBottomCards.length}/${this.mulliganCount})`;
+      const needed = requiredBottom - this.selectedBottomCards.length;
+      badge.textContent = `Bottom Selection (${this.selectedBottomCards.length}/${requiredBottom})`;
       instructions.textContent = needed > 0
         ? `Select ${needed} more card(s) to place on the bottom of your library in order.`
         : 'All cards selected. Click Confirm to place them on the bottom of your library.';

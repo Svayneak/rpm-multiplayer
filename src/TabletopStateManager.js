@@ -26,7 +26,7 @@ import { AbilityEngine, CONTINUOUS_LAYERS } from './AbilityEngine.js';
 import { CostModificationEngine } from './CostModificationEngine.js';
 import { PregameStateMachine, PREGAME_STATES } from './PregameStateMachine.js';
 import { ProcessTraceLogger, defaultProcessTraceLogger } from './ProcessTraceLogger.js';
-import { OracleEffectCompiler, compileCardMechanics } from './OracleEffectCompiler.js';
+import { OracleEffectCompiler, compileCardMechanics, groundCard } from './OracleEffectCompiler.js';
 import { CastAvailabilityManager } from './CastAvailabilityManager.js';
 
 export { canDeclareAsAttacker, PregameStateMachine, PREGAME_STATES, ProcessTraceLogger, CastAvailabilityManager };
@@ -1082,6 +1082,23 @@ export class TabletopStateManager extends EventEmitter {
       }
     }
 
+    // Castle Ardenvale / Plains checkland ETB Condition
+    const isCastleArdenvale = /castle ardenvale/i.test(card.name || '') ||
+      /enters(?:\s+the\s+battlefield)?\s+tapped\s+unless\s+you\s+control\s+a\s+plains/i.test(card.oracleText || card.text || '');
+    if (isCastleArdenvale) {
+      const controlsPlains = (player.battlefield?.lands || []).some(l =>
+        l && (l.instanceId !== card.instanceId && l.id !== card.instanceId) &&
+        (/plains/i.test(l.typeLine || '') || /plains/i.test(l.name || ''))
+      );
+      if (!controlsPlains) {
+        card.isTapped = true;
+        this.emit('CASTLE_ARDENVALE_ETB_RESOLVED', { playerId, card, enteredTapped: true });
+      } else {
+        card.isTapped = false;
+        this.emit('CASTLE_ARDENVALE_ETB_RESOLVED', { playerId, card, enteredTapped: false });
+      }
+    }
+
     player.battlefield.lands.push(card);
     if (player.zones && Array.isArray(player.zones.battlefield)) {
       if (!player.zones.battlefield.includes(card) && !player.zones.battlefield.some(c => c && c.instanceId === card.instanceId)) {
@@ -1652,11 +1669,23 @@ export class TabletopStateManager extends EventEmitter {
     const player = this.getPlayer(playerId);
 
     if (targetValue !== undefined) {
+      const prevLife = player.resources.life;
       player.resources.life = Number(targetValue);
+      if (player.resources.life > prevLife) {
+        player.lifeGainedThisTurn = (player.lifeGainedThisTurn || 0) + (player.resources.life - prevLife);
+      }
     } else if (target !== undefined) {
+      const prevLife = player.resources.life;
       player.resources.life = Number(target);
+      if (player.resources.life > prevLife) {
+        player.lifeGainedThisTurn = (player.lifeGainedThisTurn || 0) + (player.resources.life - prevLife);
+      }
     } else if (delta !== undefined) {
-      player.resources.life += Number(delta);
+      const d = Number(delta);
+      player.resources.life += d;
+      if (d > 0) {
+        player.lifeGainedThisTurn = (player.lifeGainedThisTurn || 0) + d;
+      }
     }
 
     return { life: player.resources.life };
@@ -2078,6 +2107,8 @@ export class TabletopStateManager extends EventEmitter {
       declaredAttackers.push(card);
     }
 
+    player.attackersDeclaredThisTurn = (player.attackersDeclaredThisTurn || 0) + declaredAttackers.length;
+
     const defendingPlayerIds = [...new Set(declaredAttackers.map(a => a.defendingPlayerId).filter(Boolean))];
     const finalDefenderId = defendingPlayerIds[0] || defaultDefenderId || null;
     this.combatState = {
@@ -2138,6 +2169,48 @@ export class TabletopStateManager extends EventEmitter {
         playerId: controllerId,
         attackerId: attacker.instanceId || attacker.id,
         attackerName: attacker.name
+      });
+    }
+
+    if (/hero of bladehold/i.test(attacker.name || '')) {
+      const otherAttackers = (player?.battlefield?.creatures || []).filter(c =>
+        c && (c.instanceId !== attacker.instanceId && c.id !== attacker.id) &&
+        c.isAttacking
+      );
+      for (const other of otherAttackers) {
+        const cId = other.instanceId || other.id;
+        if (this.abilityEngine) {
+          this.abilityEngine.registerStaticEffect({
+            id: `hero_battle_cry_${cId}_${Date.now()}`,
+            sourceId: attacker.instanceId || attacker.id,
+            layer: CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT,
+            powerMod: 1,
+            toughnessMod: 0,
+            duration: 'END_OF_TURN',
+            appliesTo: (p) => p && (p.instanceId === cId || p.id === cId)
+          });
+        } else {
+          other.power = (other.power || 0) + 1;
+        }
+        this.emit('CREATURE_BUFFED', { creature: other, powerDelta: 1, toughnessDelta: 0, reason: 'BATTLE_CRY' });
+      }
+
+      this.createCreatureTokens(controllerId, 2, {
+        name: 'Soldier Token',
+        power: 1,
+        toughness: 1,
+        colors: ['W'],
+        isWhite: true,
+        isToken: true,
+        subtypes: ['Soldier']
+      }, {
+        tappedAndAttacking: true,
+        defendingPlayerId: attacker.defendingPlayerId || this.combatState?.defendingPlayerId
+      });
+
+      this.recordTrace('TRIGGER_TRACE', 'HERO_OF_BLADEHOLD_ATTACK_TRIGGER', {
+        attackerId: attacker.instanceId || attacker.id,
+        controllerId
       });
     }
     if (/fervent champion/i.test(attacker.name || '')) {
@@ -3655,14 +3728,18 @@ export class TabletopStateManager extends EventEmitter {
     });
   }
 
-  _isTargetLegal(target) {
+  _isTargetLegal(target, sourceControllerId = null) {
     if (target === null || target === undefined) return false;
 
     // Check if target is explicitly a player object
     if (typeof target === 'object' && (target.playerId || target.type === 'PLAYER')) {
       const pid = target.playerId || target.id;
       const player = this.players[pid];
-      return Boolean(player && !player.isEliminated);
+      if (!player || player.isEliminated) return false;
+      if (sourceControllerId && sourceControllerId !== pid && this.playerHasHexproof(pid)) {
+        return false;
+      }
+      return true;
     }
 
     const targetId = typeof target === 'string'
@@ -3701,6 +3778,9 @@ export class TabletopStateManager extends EventEmitter {
     // Check if targetId matches an active player
     const player = this.players[targetId];
     if (player && !player.isEliminated) {
+      if (sourceControllerId && sourceControllerId !== targetId && this.playerHasHexproof(targetId)) {
+        return false;
+      }
       return true;
     }
 
@@ -3728,6 +3808,57 @@ export class TabletopStateManager extends EventEmitter {
           id: effect.id || `static_${card.instanceId}_${i}`,
           sourceId: card.instanceId
         });
+      }
+    }
+
+    // Soul Warden Trigger for entering creatures
+    const isEnteringCreature = /creature/i.test(card.typeLine || card.type || '');
+    if (isEnteringCreature) {
+      for (const [wPid, wPlayer] of Object.entries(this.players || {})) {
+        if (!wPlayer || wPlayer.isEliminated) continue;
+        const allWardenPerms = [
+          ...(wPlayer.battlefield?.creatures || []),
+          ...(wPlayer.battlefield?.noncreatures || []),
+          ...(Array.isArray(wPlayer.battlefield) ? wPlayer.battlefield : []),
+          ...(wPlayer.zones?.battlefield || [])
+        ];
+        const seenWardens = new Set();
+        for (const perm of allWardenPerms) {
+          if (!perm) continue;
+          const wId = perm.instanceId || perm.id;
+          if (seenWardens.has(wId)) continue;
+          if (/soul warden/i.test(perm.name || '')) {
+            seenWardens.add(wId);
+            if (wId !== card.instanceId && wId !== card.id) {
+              const wardenControllerId = perm.controllerId || wPid;
+              this.gainLife(wardenControllerId, 1);
+            }
+          }
+        }
+      }
+    }
+
+    // Caretaker's Talent Level 1 Trigger for entering tokens
+    if (card.isToken) {
+      const cPlayer = this.getPlayer(controllerId);
+      if (cPlayer) {
+        const allControlled = [
+          ...(cPlayer.battlefield?.noncreatures || []),
+          ...(cPlayer.battlefield?.creatures || []),
+          ...(Array.isArray(cPlayer.battlefield) ? cPlayer.battlefield : []),
+          ...(cPlayer.zones?.battlefield || [])
+        ];
+        for (const perm of allControlled) {
+          if (!perm) continue;
+          if (/caretaker'?s talent/i.test(perm.name || '')) {
+            if (!perm._triggeredTokenDrawThisTurn) {
+              perm._triggeredTokenDrawThisTurn = true;
+              this.drawCard(controllerId, 1);
+              this.emit('CARETAKERS_TALENT_DRAW', { playerId: controllerId, card: perm });
+              break;
+            }
+          }
+        }
       }
     }
 
@@ -4525,13 +4656,16 @@ export class TabletopStateManager extends EventEmitter {
       originalCard?.isEmblemTrigger
     );
 
-    const topItem = resolvedItem;
-    this.recordTrace('STACK_TRACE', 'STACK_ITEM_RESOLVED', {
-      itemId: topItem.id || topItem.instanceId || originalCard.instanceId,
-      name: topItem.name || topItem.card?.name || originalCard.name || topItem.type,
-      type: topItem.type || 'SPELL',
-      controllerId: topItem.controllerId || topItem.ownerId || controllerId
-    });
+    const cardName = resolvedItem.name || resolvedItem.card?.name || originalCard?.name || resolvedItem.type || 'Spell';
+
+    try {
+      const topItem = resolvedItem;
+      this.recordTrace('STACK_TRACE', 'STACK_ITEM_RESOLVED', {
+        itemId: topItem.id || topItem.instanceId || originalCard.instanceId,
+        name: topItem.name || topItem.card?.name || originalCard.name || topItem.type,
+        type: topItem.type || 'SPELL',
+        controllerId: topItem.controllerId || topItem.ownerId || controllerId
+      });
 
     // ── Idempotency guard ──────────────────────────────────────────────
     // Prevent duplicate zone placement when handleStackResolution is
@@ -4586,7 +4720,7 @@ export class TabletopStateManager extends EventEmitter {
     let legalTargets = [];
 
     if (hasTargets) {
-      legalTargets = rawTargets.filter(t => this._isTargetLegal(t));
+      legalTargets = rawTargets.filter(t => this._isTargetLegal(t, controllerId));
       if (legalTargets.length === 0) {
         // All targets are illegal: Spell Fizzles per CR 608.2b
         if (isTargetableSpell) {
@@ -4634,11 +4768,14 @@ export class TabletopStateManager extends EventEmitter {
     }
 
     // ── CR 608.2 — Effect Execution ─────────────────────────────────────
+    let effectHandled = false;
     const effect = resolvedItem.effect || originalCard.effect;
     if (typeof effect === 'function') {
       effect(this, resolvedItem);
+      effectHandled = true;
     } else if (typeof resolvedItem.onResolve === 'function') {
       resolvedItem.onResolve(this, resolvedItem);
+      effectHandled = true;
     } else if (effect && typeof effect === 'object') {
       const effectType = String(effect.type || effect.action || '').toUpperCase();
       const firstTarget = rawTargets && rawTargets[0];
@@ -4646,6 +4783,7 @@ export class TabletopStateManager extends EventEmitter {
 
       switch (effectType) {
         case 'DEAL_DAMAGE': {
+          effectHandled = true;
           const amount = Number(effect.amount ?? effect.damage ?? effect.value ?? 0);
           let oppPid = null;
           if (this.combatState?.defendingPlayerId && !this.players[this.combatState.defendingPlayerId]?.isEliminated) {
@@ -4717,6 +4855,7 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'DRAW_CARD': {
+          effectHandled = true;
           const drawPid = effect.playerId || effect.targetPlayerId || (typeof defaultTargetId === 'string' && this.players[defaultTargetId] ? defaultTargetId : null) || controllerId;
           const drawCount = Number(effect.amount ?? effect.count ?? effect.value ?? 1);
           this.drawCard(drawPid, drawCount);
@@ -4724,6 +4863,7 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'DESTROY_TARGET': {
+          effectHandled = true;
           const targetsToDestroy = effect.targetId ? [effect.targetId] : (legalTargets && legalTargets.length > 0 ? legalTargets : [defaultTargetId]);
           for (const t of targetsToDestroy) {
             const tid = typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId);
@@ -4745,6 +4885,7 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'COUNTER_TARGET': {
+          effectHandled = true;
           const targetsToCounter = effect.targetId ? [effect.targetId] : (legalTargets && legalTargets.length > 0 ? legalTargets : [defaultTargetId]);
           for (const t of targetsToCounter) {
             const tid = typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId);
@@ -4767,6 +4908,7 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'MODIFY_LIFE': {
+          effectHandled = true;
           const targetPid = effect.playerId || effect.targetPlayerId || (typeof defaultTargetId === 'string' && this.players[defaultTargetId] ? defaultTargetId : null) || controllerId;
           const targetPlayer = this.players[targetPid];
           if (targetPlayer) {
@@ -4781,6 +4923,7 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'PUMP_PT_AND_KEYWORDS': {
+          effectHandled = true;
           if (originalCard.compiledMechanics?.isEquipment || /equipment/i.test(typeLine)) {
             break;
           }
@@ -4877,6 +5020,7 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'GAIN_CONTROL_ATTACH_EQUIPMENT': {
+          effectHandled = true;
           const comb = resolvedItem.selectedCombination || resolvedItem.options?.selectedCombination || originalCard?.selectedCombination || resolvedItem.options || {};
           const targetIds = (Array.isArray(rawTargets) ? rawTargets : [])
             .map(t => (typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId)))
@@ -4896,17 +5040,20 @@ export class TabletopStateManager extends EventEmitter {
         }
 
         case 'PREVENT_COLOR_DAMAGE': {
+          effectHandled = true;
           this.resolveSpellEffect(controllerId, originalCard, {});
           break;
         }
 
         case 'SURGICAL_EXTRACT_NAME': {
+          effectHandled = true;
           const targetId = effect.targetCardId || defaultTargetId;
           this.resolveSpellEffect(controllerId, originalCard, { targetCardId: targetId });
           break;
         }
 
         case 'FLING_SACRIFICE_DAMAGE': {
+          effectHandled = true;
           const isCallousSellSword = /callous sell-sword/i.test(originalCard.name || '');
           const isMainCast = resolvedItem.castMode === 'MAIN' || originalCard.activeCastMode === 'MAIN' || originalCard.selectedCastMode === 'MAIN' || (isCallousSellSword && resolvedItem.castMode !== 'ADVENTURE' && originalCard.activeCastMode !== 'ADVENTURE' && originalCard.selectedCastMode !== 'ADVENTURE');
           if (isMainCast) {
@@ -4931,22 +5078,367 @@ export class TabletopStateManager extends EventEmitter {
     if (isAdventureResolution && !originalCard._flingAlreadyResolved && /burn together|sacrifice.*creature|deals damage equal to.*power/i.test(originalCard.oracleText || originalCard.name || '')) {
       this._resolveFlingSacrificeDamage(controllerId, originalCard, rawTargets, legalTargets, originalCard.effect || {}, resolvedItem);
       originalCard._flingAlreadyResolved = true;
+      effectHandled = true;
+    }
+
+    // Mono-White spells resolution in handleStackResolution
+    const nameLowerCard = (originalCard.name || '').toLowerCase();
+    if (
+      !effectHandled && (
+        nameLowerCard === 'raise the alarm' ||
+        nameLowerCard === 'gather the townsfolk' ||
+        nameLowerCard === 'secure the wastes' ||
+        nameLowerCard === 'path to exile' ||
+        nameLowerCard === 'brave the elements'
+      )
+    ) {
+      effectHandled = true;
+      const targetIds = (Array.isArray(rawTargets) ? rawTargets : [])
+        .map(t => (typeof t === 'string' ? t : (t?.instanceId || t?.id || t?.targetId)))
+        .filter(Boolean);
+      this.resolveSpellEffect(controllerId, originalCard, {
+        ...(resolvedItem.options || {}),
+        selectedCombination: resolvedItem.selectedCombination || originalCard.selectedCombination,
+        targets: targetIds,
+        targetId: targetIds[0],
+        targetCreatureId: targetIds[0],
+        xValue: resolvedItem.xValue ?? originalCard.xValue ?? resolvedItem.options?.xValue
+      });
+    }
+
+    // ── Grounded Effects Fallback (when no hardcoded card branch / existing effect handled the spell) ──
+    if (!effectHandled && !isNonCardTriggerOrAbility && isTargetableSpell) {
+      const grounded = (Array.isArray(originalCard.groundedEffects) && originalCard.groundedEffects.length > 0)
+        ? originalCard.groundedEffects
+        : (groundCard(originalCard)?.primitives || []);
+
+      if (grounded.length > 0) {
+        let oppPid = null;
+        if (this.combatState?.defendingPlayerId && !this.players[this.combatState.defendingPlayerId]?.isEliminated) {
+          oppPid = this.combatState.defendingPlayerId;
+        } else {
+          const playerList = Object.keys(this.players || {});
+          oppPid = playerList.find(pid => pid !== controllerId && !this.players[pid]?.isEliminated)
+            || this._priorityMachine?.players?.find(pid => pid !== controllerId && !this.players[pid]?.isEliminated);
+        }
+
+        const firstTarget = rawTargets && rawTargets[0];
+        let defaultTargetId = (typeof firstTarget === 'string' ? firstTarget : (firstTarget?.instanceId || firstTarget?.id || firstTarget?.targetId));
+
+        for (const gEff of grounded) {
+          switch (gEff.primitive) {
+            case 'DEAL_DAMAGE': {
+              const amt = typeof gEff.amount === 'number' ? gEff.amount : (gEff.amount === 'X' ? (player?.resources?.devotionToBlack || 1) : 1);
+              if (gEff.scope === 'ALL_OPPONENTS' || gEff.targetType === 'OPPONENTS') {
+                for (const [pid, p] of Object.entries(this.players || {})) {
+                  if (pid !== controllerId && !p.isEliminated) {
+                    this.adjustLife(pid, { delta: -amt });
+                    this.emit('LIFE_LOST', { playerId: pid, amount: amt });
+                    this.emit('DAMAGE_DEALT', { sourceId: originalCard.instanceId, sourceControllerId: controllerId, targetId: pid, targetType: 'PLAYER', amount: amt });
+                  }
+                }
+              } else if (gEff.scope === 'ALL_PLAYERS' || gEff.targetType === 'PLAYERS') {
+                for (const [pid, p] of Object.entries(this.players || {})) {
+                  if (!p.isEliminated) {
+                    this.adjustLife(pid, { delta: -amt });
+                    this.emit('LIFE_LOST', { playerId: pid, amount: amt });
+                    this.emit('DAMAGE_DEALT', { sourceId: originalCard.instanceId, sourceControllerId: controllerId, targetId: pid, targetType: 'PLAYER', amount: amt });
+                  }
+                }
+              } else {
+                const tid = legalTargets?.[0] || rawTargets?.[0] || defaultTargetId;
+                const targetId = typeof tid === 'string' ? tid : (tid?.instanceId || tid?.id || tid?.targetId || tid?.playerId);
+                let targetPerm = null;
+                if (targetId) {
+                  for (const p of Object.values(this.players || {})) {
+                    const bf = [
+                      ...(p.battlefield?.creatures || []),
+                      ...(p.battlefield?.lands || []),
+                      ...(p.battlefield?.noncreatures || []),
+                      ...(p.battlefield?.planeswalkers || [])
+                    ];
+                    const found = bf.find(c => c && (c.instanceId === targetId || c.id === targetId));
+                    if (found) { targetPerm = found; break; }
+                  }
+                }
+                if (targetPerm) {
+                  targetPerm.damageMarked = (targetPerm.damageMarked || 0) + amt;
+                  this.emit('DAMAGE_DEALT', { sourceId: originalCard.instanceId, sourceControllerId: controllerId, targetId: targetPerm.instanceId, targetType: 'PERMANENT', amount: amt });
+                } else {
+                  const targetPlayerId = (targetId && this.players[targetId]) ? targetId : oppPid;
+                  if (targetPlayerId && this.players[targetPlayerId]) {
+                    this.adjustLife(targetPlayerId, { delta: -amt });
+                    this.emit('LIFE_LOST', { playerId: targetPlayerId, amount: amt });
+                    this.emit('DAMAGE_DEALT', { sourceId: originalCard.instanceId, sourceControllerId: controllerId, targetId: targetPlayerId, targetType: 'PLAYER', amount: amt });
+                  } else {
+                    this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: DEAL_DAMAGE missing target for ${cardName}` });
+                  }
+                }
+              }
+              break;
+            }
+
+            case 'DESTROY_TARGET': {
+              const tid = legalTargets?.[0] || rawTargets?.[0] || defaultTargetId;
+              const targetId = typeof tid === 'string' ? tid : (tid?.instanceId || tid?.id || tid?.targetId);
+              let destroyed = false;
+              if (targetId) {
+                for (const [pid, p] of Object.entries(this.players || {})) {
+                  const found = ZoneModel.findCard(p, targetId);
+                  if (found && found.zone === 'battlefield') {
+                    if (/creature/i.test(found.card.typeLine || found.card.type || '')) {
+                      this.handleCreatureDeath(found.card, pid);
+                    }
+                    this.abilityEngine?.unregisterEffectsFromSource(targetId);
+                    ZoneTransitionMatrix.moveCard(p, targetId, 'battlefield', 'graveyard');
+                    this.emit('PERMANENT_DESTROYED', { playerId: pid, cardId: targetId });
+                    destroyed = true;
+                    break;
+                  }
+                }
+              }
+              if (!destroyed) {
+                this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: DESTROY_TARGET skipped (target not found) for ${cardName}` });
+              }
+              break;
+            }
+
+            case 'EXILE_TARGET': {
+              const tid = legalTargets?.[0] || rawTargets?.[0] || defaultTargetId;
+              const targetId = typeof tid === 'string' ? tid : (tid?.instanceId || tid?.id || tid?.targetId);
+              let exiled = false;
+              if (targetId) {
+                for (const [pid, p] of Object.entries(this.players || {})) {
+                  const found = ZoneModel.findCard(p, targetId);
+                  if (found && found.zone === 'battlefield') {
+                    this.abilityEngine?.unregisterEffectsFromSource(targetId);
+                    ZoneTransitionMatrix.moveCard(p, targetId, 'battlefield', 'exile');
+                    this.emit('CARD_EXILED', { playerId: pid, cardId: targetId });
+                    exiled = true;
+                    break;
+                  } else if (found && found.zone === 'graveyard') {
+                    p.graveyard = p.graveyard.filter(c => c && (c.instanceId !== targetId && c.id !== targetId));
+                    if (p.zones?.graveyard) p.zones.graveyard = p.graveyard;
+                    p.exile = p.exile || [];
+                    p.exile.push(found.card);
+                    if (p.zones) p.zones.exile = p.exile;
+                    this.emit('CARD_EXILED', { playerId: pid, cardId: targetId });
+                    exiled = true;
+                    break;
+                  }
+                }
+              }
+              if (!exiled) {
+                this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: EXILE_TARGET skipped (target not found) for ${cardName}` });
+              }
+              break;
+            }
+
+            case 'COUNTER_SPELL': {
+              const tid = legalTargets?.[0] || rawTargets?.[0] || defaultTargetId;
+              const targetId = typeof tid === 'string' ? tid : (tid?.instanceId || tid?.id || tid?.targetId);
+              let targetStackIdx = -1;
+              if (targetId) {
+                targetStackIdx = this.stack.findIndex(s => s && (s.instanceId === targetId || s.id === targetId || s.card?.instanceId === targetId));
+              } else if (this.stack.length > 0) {
+                targetStackIdx = this.stack.length - 1;
+              }
+              if (targetStackIdx !== -1) {
+                const [removedItem] = this.stack.splice(targetStackIdx, 1);
+                const targetCard = removedItem.card || removedItem;
+                const ownerId = targetCard.ownerId || targetCard.controllerId || removedItem.controllerId;
+                const owner = this.players[ownerId] || this.getPlayer(this.activePlayerId);
+                if (owner) {
+                  const gyCard = ZoneTransitionMatrix.createZoneChangedObject(targetCard, 'graveyard');
+                  owner.graveyard.push(gyCard);
+                  if (owner.zones?.graveyard) owner.zones.graveyard.push(gyCard);
+                  this.emit('SPELL_COUNTERED', { card: targetCard, ownerId });
+                }
+              } else {
+                this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: COUNTER_SPELL skipped (no target spell) for ${cardName}` });
+              }
+              break;
+            }
+
+            case 'PUMP_PT_EOT': {
+              const powerDelta = Number(gEff.power || 0);
+              const toughnessDelta = Number(gEff.toughness || 0);
+              if (gEff.scope === 'ALL_YOURS') {
+                const targetPerms = player?.battlefield?.creatures || [];
+                for (const targetCr of targetPerms) {
+                  if (this.abilityEngine) {
+                    this.abilityEngine.registerStaticEffect({
+                      id: `pump_${Date.now()}_${targetCr.instanceId}`,
+                      sourceId: originalCard.instanceId,
+                      layer: CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT,
+                      powerMod: powerDelta,
+                      toughnessMod: toughnessDelta,
+                      duration: 'END_OF_TURN',
+                      appliesTo: (perm) => perm && (perm.instanceId === targetCr.instanceId || perm.id === targetCr.instanceId)
+                    });
+                  } else {
+                    targetCr.power = (targetCr.power || 0) + powerDelta;
+                    targetCr.toughness = (targetCr.toughness || 0) + toughnessDelta;
+                  }
+                  this.emit('CREATURE_BUFFED', { creature: targetCr, powerDelta, toughnessDelta });
+                }
+              } else {
+                const tid = legalTargets?.[0] || rawTargets?.[0] || defaultTargetId;
+                const targetId = typeof tid === 'string' ? tid : (tid?.instanceId || tid?.id || tid?.targetId);
+                let targetCr = null;
+                if (targetId) {
+                  for (const p of Object.values(this.players || {})) {
+                    targetCr = (p.battlefield?.creatures || []).find(c => c && (c.instanceId === targetId || c.id === targetId));
+                    if (targetCr) break;
+                  }
+                }
+                if (targetCr) {
+                  if (this.abilityEngine) {
+                    this.abilityEngine.registerStaticEffect({
+                      id: `pump_${Date.now()}_${targetCr.instanceId}`,
+                      sourceId: originalCard.instanceId,
+                      layer: CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT,
+                      powerMod: powerDelta,
+                      toughnessMod: toughnessDelta,
+                      duration: 'END_OF_TURN',
+                      appliesTo: (perm) => perm && (perm.instanceId === targetCr.instanceId || perm.id === targetCr.instanceId)
+                    });
+                  } else {
+                    targetCr.power = (targetCr.power || 0) + powerDelta;
+                    targetCr.toughness = (targetCr.toughness || 0) + toughnessDelta;
+                  }
+                  this.emit('CREATURE_BUFFED', { creature: targetCr, powerDelta, toughnessDelta });
+                } else {
+                  this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: PUMP_PT_EOT skipped (no creature target) for ${cardName}` });
+                }
+              }
+              break;
+            }
+
+            case 'ADD_COUNTER': {
+              const cAmt = Number(gEff.amount || 1);
+              const cType = gEff.counterType || '+1/+1';
+              const tid = legalTargets?.[0] || rawTargets?.[0] || defaultTargetId;
+              const targetId = typeof tid === 'string' ? tid : (tid?.instanceId || tid?.id || tid?.targetId);
+              let targetCr = null;
+              if (targetId) {
+                for (const p of Object.values(this.players || {})) {
+                  targetCr = (p.battlefield?.creatures || []).find(c => c && (c.instanceId === targetId || c.id === targetId));
+                  if (targetCr) break;
+                }
+              }
+              if (targetCr) {
+                targetCr.counters = targetCr.counters || {};
+                targetCr.counters[cType] = (targetCr.counters[cType] || 0) + cAmt;
+                this.emit('COUNTER_ADDED', { card: targetCr, counterType: cType, count: cAmt });
+              } else {
+                this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: ADD_COUNTER skipped (no target) for ${cardName}` });
+              }
+              break;
+            }
+
+            case 'DRAW_CARDS': {
+              const drawCount = Number(gEff.amount) || 1;
+              this.drawCard(controllerId, drawCount);
+              break;
+            }
+
+            case 'SCRY': {
+              const scryCount = Number(gEff.amount) || 1;
+              this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: Scry ${scryCount} for ${cardName}` });
+              break;
+            }
+
+            case 'GAIN_LIFE': {
+              const gAmt = Number(gEff.amount) || 0;
+              if (gAmt > 0) {
+                this.adjustLife(controllerId, { delta: gAmt });
+                this.emit('LIFE_GAINED', { playerId: controllerId, amount: gAmt });
+              }
+              break;
+            }
+
+            case 'LOSE_LIFE': {
+              const lAmt = Number(gEff.amount) || 0;
+              if (lAmt > 0) {
+                if (gEff.scope === 'ALL_OPPONENTS') {
+                  for (const [pid, p] of Object.entries(this.players || {})) {
+                    if (pid !== controllerId && !p.isEliminated) {
+                      this.adjustLife(pid, { delta: -lAmt });
+                      this.emit('LIFE_LOST', { playerId: pid, amount: lAmt });
+                    }
+                  }
+                } else {
+                  const targetPid = (gEff.target?.toLowerCase().includes('you')) ? controllerId : (defaultTargetId || oppPid);
+                  if (targetPid && this.players[targetPid]) {
+                    this.adjustLife(targetPid, { delta: -lAmt });
+                    this.emit('LIFE_LOST', { playerId: targetPid, amount: lAmt });
+                  }
+                }
+              }
+              break;
+            }
+
+            case 'CREATE_TOKEN': {
+              const tokCount = Number(gEff.amount) || 1;
+              for (let i = 0; i < tokCount; i++) {
+                const tokenCard = {
+                  instanceId: `token_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                  name: `${gEff.tokenType || 'Creature'} Token`,
+                  typeLine: `Creature — ${gEff.tokenType || 'Token'}`,
+                  power: gEff.power || 1,
+                  toughness: gEff.toughness || 1,
+                  basePower: gEff.power || 1,
+                  baseToughness: gEff.toughness || 1,
+                  isToken: true,
+                  hasSummoningSickness: true,
+                  isSummoningSick: true,
+                  summoningSickness: true,
+                  isTapped: false,
+                  ownerId: controllerId,
+                  controllerId
+                };
+                if (player?.battlefield?.creatures) player.battlefield.creatures.push(tokenCard);
+                if (player?.zones?.battlefield) player.zones.battlefield.push(tokenCard);
+                this.emit('TOKEN_CREATED', { card: tokenCard, controllerId });
+              }
+              break;
+            }
+
+            case 'ATTACH_EQUIPMENT':
+            case 'EQUIP': {
+              this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: Equip/Attach handled for ${cardName}` });
+              break;
+            }
+
+            default: {
+              this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: `🟡 [Assisted Clause]: Unmapped clause '${gEff.primitive}' for ${cardName}` });
+              break;
+            }
+          }
+        }
+      }
     }
 
     // ── Non-card triggers & abilities cease to exist upon resolving (CR 113.3b / CR 608.2) ──
     // Never move triggers or abilities to player.graveyard or battlefield.
     if (isNonCardTriggerOrAbility) {
-      this._notifySubscribers({
-        sequenceId: ++this.sequenceCounter,
-        actionType: 'TRIGGER_RESOLVED',
-        playerId: controllerId,
-        payload: { item: resolvedItem },
-        timestamp: Date.now()
-      }, { item: resolvedItem });
+      try {
+        this._notifySubscribers({
+          sequenceId: ++this.sequenceCounter,
+          actionType: 'TRIGGER_RESOLVED',
+          playerId: controllerId,
+          payload: { item: resolvedItem },
+          timestamp: Date.now()
+        }, { item: resolvedItem });
 
-      this.emit('STACK_RESOLVE', { item: resolvedItem, controllerId });
-      this.emit('STACK_RESOLVED', { item: resolvedItem, controllerId });
-      this.emit('TRIGGER_RESOLVED', { item: resolvedItem, controllerId });
+        this.emit('STACK_RESOLVE', { item: resolvedItem, controllerId });
+        this.emit('STACK_RESOLVED', { item: resolvedItem, controllerId });
+        this.emit('TRIGGER_RESOLVED', { item: resolvedItem, controllerId });
+      } catch (triggerErr) {
+        const assistedMsg = `🟡 [Assisted Clause]: ${cardName} resolved trigger state`;
+        this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: assistedMsg, card: cardName, error: triggerErr?.message });
+      }
 
       this.runSBACheck();
       return { item: resolvedItem, destinationZone: null, destinationSubzone: null };
@@ -5138,6 +5630,74 @@ export class TabletopStateManager extends EventEmitter {
     this.runSBACheck();
 
     return { card, destinationZone, destinationSubzone };
+    } catch (err) {
+      const assistedMsg = `🟡 [Assisted Clause]: ${cardName} resolved base permanent/spell state`;
+      this.recordTrace('STACK_TRACE', 'ASSISTED_CLAUSE', { message: assistedMsg, card: cardName, error: err?.message });
+      const logEntry = {
+        sequenceId: ++this.sequenceCounter,
+        actionType: 'ASSISTED_CLAUSE',
+        message: assistedMsg,
+        playerId: controllerId,
+        card: originalCard,
+        error: err?.message,
+        timestamp: Date.now()
+      };
+      if (Array.isArray(this.actionLog)) this.actionLog.push(logEntry);
+      if (Array.isArray(this.executionLog)) this.executionLog.push({ id: `log_${Date.now()}`, text: assistedMsg, timestamp: Date.now() });
+      this._notifySubscribers(logEntry, { message: assistedMsg });
+
+      // Cleanly remove from stack if still there
+      const sIdx = this.stack.findIndex(c => c && (c === originalCard || c === resolvedItem || (originalCard?.instanceId && c.instanceId === originalCard.instanceId)));
+      if (sIdx !== -1) this.stack.splice(sIdx, 1);
+
+      if (isNonCardTriggerOrAbility) {
+        if (typeof this.runSBACheck === 'function') this.runSBACheck();
+        return { item: resolvedItem, destinationZone: null, destinationSubzone: null };
+      }
+
+      // Still move the card to the correct zone (permanent -> battlefield, instant/sorcery -> graveyard)
+      const typeLine = String(originalCard?.typeLine || originalCard?.type || '').toLowerCase();
+      const isInstantOrSorcery = typeLine.includes('instant') || typeLine.includes('sorcery');
+      const targetZone = isInstantOrSorcery ? 'graveyard' : 'battlefield';
+      const card = ZoneTransitionMatrix.createZoneChangedObject(originalCard, targetZone);
+      let destinationZone = targetZone;
+      let destinationSubzone = null;
+
+      if (player) {
+        if (typeLine.includes('creature')) {
+          destinationSubzone = 'creatures';
+          card.subzone = 'creatures';
+          card.isTapped = false;
+          if (Array.isArray(player.battlefield?.creatures)) player.battlefield.creatures.push(card);
+        } else if (typeLine.includes('land')) {
+          destinationSubzone = 'lands';
+          card.subzone = 'lands';
+          card.isTapped = false;
+          if (Array.isArray(player.battlefield?.lands)) player.battlefield.lands.push(card);
+        } else if (typeLine.includes('planeswalker')) {
+          destinationSubzone = 'planeswalkers';
+          card.subzone = 'planeswalkers';
+          card.isTapped = false;
+          if (Array.isArray(player.battlefield?.planeswalkers)) player.battlefield.planeswalkers.push(card);
+        } else if (typeLine.includes('artifact') || typeLine.includes('enchantment') || typeLine.includes('battle') || originalCard?.isPermanent) {
+          destinationSubzone = 'noncreatures';
+          card.subzone = 'noncreatures';
+          card.isTapped = false;
+          if (Array.isArray(player.battlefield?.noncreatures)) player.battlefield.noncreatures.push(card);
+        } else {
+          destinationZone = 'graveyard';
+          if (Array.isArray(player.graveyard)) player.graveyard.push(card);
+        }
+
+        if (player.zones) {
+          if (destinationZone === 'battlefield' && Array.isArray(player.zones.battlefield)) player.zones.battlefield.push(card);
+          else if (destinationZone === 'graveyard' && Array.isArray(player.zones.graveyard)) player.zones.graveyard.push(card);
+        }
+      }
+
+      if (typeof this.runSBACheck === 'function') this.runSBACheck();
+      return { card, destinationZone, destinationSubzone };
+    }
   }
 
   /**
@@ -5197,6 +5757,280 @@ export class TabletopStateManager extends EventEmitter {
 
   setPlayerLife(playerId, life) {
     return this.adjustLife(playerId, { targetValue: life });
+  }
+
+  gainLife(playerId, amount = 1) {
+    const amt = Math.max(0, Number(amount) || 0);
+    if (amt <= 0) return 0;
+    this.adjustLife(playerId, { delta: amt });
+    this.emit('LIFE_GAINED', { playerId, amount: amt });
+    return amt;
+  }
+
+  createCreatureTokens(playerId, count, tokenSpec = {}, options = {}) {
+    const player = this.getPlayer(playerId);
+    if (!player) throw new PlayerNotFoundError(`Player '${playerId}' not found`);
+    const numTokens = Math.max(0, Number(count) || 0);
+    if (numTokens === 0) return [];
+
+    const createdTokens = [];
+    player.battlefield = player.battlefield || {};
+    player.battlefield.creatures = player.battlefield.creatures || [];
+    if (player.zones) {
+      player.zones.battlefield = player.zones.battlefield || [];
+    }
+
+    const basePower = tokenSpec.power ?? 1;
+    const baseToughness = tokenSpec.toughness ?? 1;
+    const subtypes = Array.isArray(tokenSpec.subtypes) ? [...tokenSpec.subtypes] : (tokenSpec.subtype ? [tokenSpec.subtype] : []);
+    const colors = Array.isArray(tokenSpec.colors) ? [...tokenSpec.colors] : (tokenSpec.color ? [tokenSpec.color] : ['W']);
+    const isWhite = tokenSpec.isWhite ?? colors.includes('W');
+    const tokenName = tokenSpec.name || (subtypes.length > 0 ? `${subtypes.join(' ')} Token` : 'Creature Token');
+    const typeLine = tokenSpec.typeLine || `Creature — ${subtypes.length > 0 ? subtypes.join(' ') : 'Token'}`;
+
+    for (let i = 0; i < numTokens; i++) {
+      const instanceId = 'token_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+      const token = {
+        instanceId,
+        id: instanceId,
+        name: tokenName,
+        typeLine,
+        type: 'Creature',
+        power: basePower,
+        toughness: baseToughness,
+        basePower,
+        baseToughness,
+        colors,
+        isWhite,
+        isToken: true,
+        subtypes,
+        controllerId: playerId,
+        ownerId: playerId,
+        hasSummoningSickness: true,
+        isSummoningSick: true,
+        summoningSickness: true,
+        isTapped: false,
+        isAttacking: false,
+        zone: 'battlefield',
+        subzone: 'creatures',
+        counters: {},
+        keywords: { ...(tokenSpec.keywords || {}) }
+      };
+
+      if (options.tappedAndAttacking === true) {
+        token.isTapped = true;
+        token.isAttacking = true;
+        token.defendingPlayerId = options.defendingPlayerId || this.combatState?.defendingPlayerId || null;
+        if (!this.combatState) {
+          this.combatState = { attackers: [], blockers: [], defendingPlayerId: token.defendingPlayerId, defendingPlayerIds: [] };
+        }
+        this.combatState.attackers = this.combatState.attackers || [];
+        this.combatState.attackers.push(token);
+      }
+
+      player.battlefield.creatures.push(token);
+      if (player.zones && Array.isArray(player.zones.battlefield)) {
+        player.zones.battlefield.push(token);
+      }
+      createdTokens.push(token);
+
+      this.emit('TOKEN_CREATED', { card: token, controllerId: playerId, playerId });
+      this.emit('CREATURE_ENTERED_BATTLEFIELD', { card: token, controllerId: playerId, playerId });
+
+      // Soul Warden Trigger:
+      // Whenever any creature or creature token enters the battlefield for any player,
+      // find all Soul Warden permanents across ALL players. For each Soul Warden whose instanceId !== creature.instanceId:
+      // Its controller gains 1 life
+      for (const [wPid, wPlayer] of Object.entries(this.players || {})) {
+        if (!wPlayer || wPlayer.isEliminated) continue;
+        const allWardenPerms = [
+          ...(wPlayer.battlefield?.creatures || []),
+          ...(wPlayer.battlefield?.noncreatures || []),
+          ...(Array.isArray(wPlayer.battlefield) ? wPlayer.battlefield : []),
+          ...(wPlayer.zones?.battlefield || [])
+        ];
+        const seenWardens = new Set();
+        for (const perm of allWardenPerms) {
+          if (!perm) continue;
+          const wId = perm.instanceId || perm.id;
+          if (seenWardens.has(wId)) continue;
+          if (/soul warden/i.test(perm.name || '')) {
+            seenWardens.add(wId);
+            if (wId !== token.instanceId && wId !== token.id) {
+              const wardenControllerId = perm.controllerId || wPid;
+              this.gainLife(wardenControllerId, 1);
+            }
+          }
+        }
+      }
+    }
+
+    // Track tokens created this turn and record templates
+    player.tokensCreatedThisTurn = (player.tokensCreatedThisTurn || 0) + numTokens;
+    player.tokensCreatedTemplatesThisTurn = player.tokensCreatedTemplatesThisTurn || [];
+    for (let i = 0; i < numTokens; i++) {
+      player.tokensCreatedTemplatesThisTurn.push({
+        name: tokenName,
+        power: basePower,
+        toughness: baseToughness,
+        colors: [...colors],
+        isWhite,
+        isToken: true,
+        subtypes: [...subtypes]
+      });
+    }
+
+    // Caretaker's Talent Level 1 Trigger:
+    // When 1+ tokens enter under a player's control, if that player controls Caretaker's Talent and !talent._triggeredTokenDrawThisTurn:
+    // Set talent._triggeredTokenDrawThisTurn = true and this.drawCard(playerId, 1).
+    if (numTokens > 0) {
+      const allControlled = [
+        ...(player.battlefield?.noncreatures || []),
+        ...(player.battlefield?.creatures || []),
+        ...(Array.isArray(player.battlefield) ? player.battlefield : []),
+        ...(player.zones?.battlefield || [])
+      ];
+      for (const perm of allControlled) {
+        if (!perm) continue;
+        if (/caretaker'?s talent/i.test(perm.name || '')) {
+          if (!perm._triggeredTokenDrawThisTurn) {
+            perm._triggeredTokenDrawThisTurn = true;
+            this.drawCard(playerId, 1);
+            this.emit('CARETAKERS_TALENT_DRAW', { playerId, card: perm });
+            break;
+          }
+        }
+      }
+    }
+
+    return createdTokens;
+  }
+
+  moveToZone(card, targetZone, playerId = null) {
+    if (!card) return null;
+    const toZone = String(targetZone).toLowerCase();
+    const pid = playerId || card.controllerId || card.ownerId;
+    const player = this.getPlayer(pid);
+    if (!player) return null;
+
+    this._removePermanentFromBattlefield(player, card);
+    this.abilityEngine?.unregisterEffectsFromSource(card.instanceId || card.id);
+
+    card.zone = toZone;
+    card.subzone = null;
+    player[toZone] = player[toZone] || [];
+    player[toZone].push(card);
+    if (player.zones) {
+      player.zones[toZone] = player.zones[toZone] || [];
+      player.zones[toZone].push(card);
+    }
+    return card;
+  }
+
+  playerHasHexproof(playerId) {
+    const player = this.getPlayer(playerId);
+    if (!player) return false;
+    if (player.hasHexproofUntilEOT || player.hexproofUntilEOT) return true;
+    const perms = [
+      ...(player.battlefield?.noncreatures || []),
+      ...(player.battlefield?.creatures || []),
+      ...(player.battlefield?.lands || []),
+      ...(player.battlefield?.planeswalkers || []),
+      ...(Array.isArray(player.battlefield) ? player.battlefield : []),
+      ...(player.zones?.battlefield || [])
+    ];
+    return perms.some(p => p && /leyline of sanctity/i.test(p.name || ''));
+  }
+
+  isValidTarget(target, source = null) {
+    if (!this._isTargetLegal(target)) return false;
+    const targetPid = typeof target === 'string'
+      ? (this.players[target] ? target : null)
+      : (target?.playerId || (target?.type === 'PLAYER' ? target.id : null));
+    if (targetPid && this.playerHasHexproof(targetPid)) {
+      const sourceControllerId = typeof source === 'string'
+        ? (this.players[source] ? source : this.findPermanentById(source)?.playerId)
+        : (source?.controllerId || source?.playerId);
+      if (sourceControllerId && sourceControllerId !== targetPid) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  levelUpClass(playerId, cardId, options = {}) {
+    const player = this.getPlayer(playerId);
+    if (!player) throw new PlayerNotFoundError(`Player ${playerId} not found`);
+    const found = this.findPermanentById(cardId);
+    const card = found?.card;
+    if (!card) {
+      throw new CardNotFoundError(`Class card ${cardId} not found on battlefield`);
+    }
+
+    const currentLevel = Number(card.classLevel ?? card.level ?? 1);
+    if (currentLevel === 1) {
+      // Pay {W}
+      const pool = player.resources?.manaPool;
+      if (pool && pool.W > 0) {
+        pool.W -= 1;
+      } else {
+        try { this.autoTapForMana(playerId, '{W}'); } catch (e) {}
+      }
+      card.classLevel = 2;
+      card.level = 2;
+
+      // Create a token that's a copy of a token you control
+      const controlledTokens = (player.battlefield?.creatures || []).filter(c => c && c.isToken);
+      const chosenToken = (options.targetTokenId && controlledTokens.find(t => (t.instanceId === options.targetTokenId || t.id === options.targetTokenId)))
+        || controlledTokens[0];
+
+      const tokenSpec = chosenToken ? {
+        name: chosenToken.name,
+        power: chosenToken.power ?? chosenToken.basePower ?? 1,
+        toughness: chosenToken.toughness ?? chosenToken.baseToughness ?? 1,
+        colors: chosenToken.colors ? [...chosenToken.colors] : ['W'],
+        isWhite: chosenToken.isWhite ?? true,
+        isToken: true,
+        subtypes: chosenToken.subtypes ? [...chosenToken.subtypes] : []
+      } : {
+        name: 'Creature Token',
+        power: 1,
+        toughness: 1,
+        colors: ['W'],
+        isWhite: true,
+        isToken: true,
+        subtypes: ['Token']
+      };
+
+      this.createCreatureTokens(playerId, 1, tokenSpec);
+      this.emit('CLASS_LEVEL_UP', { card, newLevel: 2, playerId });
+      return { card, newLevel: 2 };
+    } else if (currentLevel === 2) {
+      // Pay {3}{W}
+      const pool = player.resources?.manaPool;
+      if (pool && (pool.W > 0 || pool.C >= 3)) {
+        if (pool.W > 0) pool.W -= 1;
+        let generic = 3;
+        for (const col of ['C', 'W', 'U', 'B', 'R', 'G']) {
+          const take = Math.min(generic, pool[col] || 0);
+          pool[col] -= take;
+          generic -= take;
+          if (generic <= 0) break;
+        }
+      } else {
+        try { this.autoTapForMana(playerId, '{3}{W}'); } catch (e) {}
+      }
+      card.classLevel = 3;
+      card.level = 3;
+
+      if (this.abilityEngine && typeof this.abilityEngine.evaluateAllLayers === 'function') {
+        this.abilityEngine.evaluateAllLayers(this);
+      }
+      this.emit('CLASS_LEVEL_UP', { card, newLevel: 3, playerId });
+      return { card, newLevel: 3 };
+    }
+
+    return { card, newLevel: card.classLevel };
   }
 
   addCardToZone(playerId, zone, cardData = {}) {
@@ -5789,8 +6623,107 @@ export class TabletopStateManager extends EventEmitter {
     if (this.abilityEngine && Array.isArray(this.abilityEngine.staticEffects)) {
       this.abilityEngine.staticEffects = this.abilityEngine.staticEffects.filter(ef => ef.duration !== 'END_OF_TURN');
     }
+    for (const player of Object.values(this.players || {})) {
+      if (!player) continue;
+      player.lifeGainedThisTurn = 0;
+      player.tokensCreatedThisTurn = 0;
+      player.tokensCreatedTemplatesThisTurn = [];
+      player.attackersDeclaredThisTurn = 0;
+      const allPerms = [
+        ...(player.battlefield?.creatures || []),
+        ...(player.battlefield?.lands || []),
+        ...(player.battlefield?.noncreatures || []),
+        ...(player.battlefield?.planeswalkers || []),
+        ...(player.zones?.battlefield || [])
+      ];
+      for (const card of allPerms) {
+        if (card) {
+          card._triggeredTokenDrawThisTurn = false;
+        }
+      }
+    }
     this.runSBACheck();
     this.emit('CLEANUP_DAMAGE_PURGED', { activePlayerId, purgedCount: count });
+  }
+
+  handleEndStep(activePlayerId) {
+    if (!activePlayerId) return;
+    const player = this.getPlayer(activePlayerId);
+    if (!player) return;
+
+    // 1. Wedding Announcement end-of-turn trigger
+    const noncreatures = [
+      ...(player.battlefield?.noncreatures || []),
+      ...(player.battlefield?.creatures || []),
+      ...(player.zones?.battlefield || [])
+    ];
+    const seenAnnouncements = new Set();
+    for (const card of noncreatures) {
+      if (!card) continue;
+      const id = card.instanceId || card.id;
+      if (seenAnnouncements.has(id)) continue;
+      if (/wedding announcement/i.test(card.name || '') && !card.isTransformed) {
+        seenAnnouncements.add(id);
+        card.invitationCounters = (card.invitationCounters || 0) + 1;
+        if ((player.attackersDeclaredThisTurn || 0) >= 2) {
+          this.drawCard(activePlayerId, 1);
+        } else {
+          this.createCreatureTokens(activePlayerId, 1, {
+            name: 'Human Token',
+            power: 1,
+            toughness: 1,
+            colors: ['W'],
+            isWhite: true,
+            isToken: true,
+            subtypes: ['Human']
+          });
+        }
+        if (card.invitationCounters >= 3) {
+          card.isTransformed = true;
+          card.name = 'Wedding Festivity';
+          card.typeLine = 'Enchantment';
+          this.emit('PERMANENT_TRANSFORMED', { card, newName: 'Wedding Festivity', playerId: activePlayerId });
+        }
+      }
+    }
+
+    // 2. Ocelot Pride end-of-turn trigger
+    const prideCreatures = (player.battlefield?.creatures || []).filter(c =>
+      c && /ocelot pride/i.test(c.name || '')
+    );
+    for (const pride of prideCreatures) {
+      // Ascend check: if total permanents on active player's battlefield >= 10, set player.hasCitysBlessing = true
+      const totalPermanents = [
+        ...(player.battlefield?.creatures || []),
+        ...(player.battlefield?.lands || []),
+        ...(player.battlefield?.noncreatures || []),
+        ...(player.battlefield?.planeswalkers || [])
+      ].length;
+      if (totalPermanents >= 10) {
+        player.hasCitysBlessing = true;
+      }
+
+      if ((player.lifeGainedThisTurn || 0) > 0) {
+        this.createCreatureTokens(activePlayerId, 1, {
+          name: 'Cat Token',
+          power: 1,
+          toughness: 1,
+          colors: ['W'],
+          isWhite: true,
+          isToken: true,
+          subtypes: ['Cat']
+        });
+
+        if (player.hasCitysBlessing === true && Array.isArray(player.tokensCreatedTemplatesThisTurn)) {
+          const templatesToDuplicate = [...player.tokensCreatedTemplatesThisTurn];
+          for (const template of templatesToDuplicate) {
+            this.createCreatureTokens(activePlayerId, 1, template);
+          }
+        }
+      }
+    }
+
+    this.emit('END_STEP_RESOLVED', { activePlayerId });
   }
 
   handlePhaseStepChanged(data = {}) {
@@ -5855,6 +6788,8 @@ export class TabletopStateManager extends EventEmitter {
       });
     } else if (currentPhaseStep === 'COMBAT_DAMAGE') {
       this.resolveCombatDamage();
+    } else if (currentPhaseStep === 'END' || currentPhaseStep === 'END_STEP') {
+      this.handleEndStep(activePlayerId);
     } else if (currentPhaseStep === 'CLEANUP') {
       this.handleCleanupStep(activePlayerId);
     }
@@ -6466,6 +7401,156 @@ export class TabletopStateManager extends EventEmitter {
       return { resolved: 'SURGICAL_EXTRACT_NAME' };
     }
 
+    // 5. Raise the Alarm: Create two 1/1 white Soldier creature tokens
+    if (nameLower === 'raise the alarm' || /create two 1\/1 white soldier creature tokens/i.test(oracleLower)) {
+      const tokens = this.createCreatureTokens(playerId, 2, {
+        name: 'Soldier Token',
+        power: 1,
+        toughness: 1,
+        colors: ['W'],
+        isWhite: true,
+        isToken: true,
+        subtypes: ['Soldier']
+      });
+      return { resolved: 'RAISE_THE_ALARM', tokens };
+    }
+
+    // 6. Gather the Townsfolk: Create two 1/1 white Human creature tokens. Fateful hour: create five instead
+    if (nameLower === 'gather the townsfolk' || /create (?:two|five) 1\/1 white human creature tokens/i.test(oracleLower)) {
+      const currentLife = Number(player.resources?.life ?? 20);
+      const isFatefulHour = currentLife <= 5;
+      const count = isFatefulHour ? 5 : 2;
+      const tokens = this.createCreatureTokens(playerId, count, {
+        name: 'Human Token',
+        power: 1,
+        toughness: 1,
+        colors: ['W'],
+        isWhite: true,
+        isToken: true,
+        subtypes: ['Human']
+      });
+      return { resolved: 'GATHER_THE_TOWNSFOLK', count, fatefulHour: isFatefulHour, tokens };
+    }
+
+    // 7. Secure the Wastes: Create X 1/1 white Warrior creature tokens
+    if (nameLower === 'secure the wastes' || /create x 1\/1 white warrior creature tokens/i.test(oracleLower)) {
+      let xValue = Number(
+        options.xValue ??
+        options.x ??
+        options.spentX ??
+        card.xValue ??
+        card.spentX ??
+        options.payload?.x ??
+        options.payload?.xValue ??
+        0
+      );
+      if (xValue <= 0 && options.manaSpent && typeof options.manaSpent === 'object') {
+        const totalSpent = Object.values(options.manaSpent).reduce((a, b) => a + Number(b || 0), 0);
+        xValue = Math.max(0, totalSpent - 1);
+      }
+      const tokens = this.createCreatureTokens(playerId, xValue, {
+        name: 'Warrior Token',
+        power: 1,
+        toughness: 1,
+        colors: ['W'],
+        isWhite: true,
+        isToken: true,
+        subtypes: ['Warrior']
+      });
+      return { resolved: 'SECURE_THE_WASTES', count: xValue, tokens };
+    }
+
+    // 8. Path to Exile: Exile target creature. Its controller may search library for basic land card, put onto battlefield tapped, then shuffle.
+    if (nameLower === 'path to exile' || /exile target creature.*search.*library for a basic land card/i.test(oracleLower)) {
+      const targetId = options.targetCreatureId || options.targetId || (Array.isArray(options.targets) ? options.targets[0] : null);
+      let targetCr = null;
+      let targetOwnerPlayer = null;
+      let targetControllerId = null;
+
+      for (const [pid, p] of Object.entries(this.players || {})) {
+        const found = (p.battlefield?.creatures || []).find(c => c && (c.instanceId === targetId || c.id === targetId));
+        if (found) {
+          targetCr = found;
+          targetOwnerPlayer = p;
+          targetControllerId = pid;
+          break;
+        }
+      }
+
+      if (targetCr && targetOwnerPlayer) {
+        this.moveToZone(targetCr, 'EXILE', targetControllerId);
+        this.emit('CARD_EXILED', { playerId: targetControllerId, cardId: targetCr.instanceId || targetCr.id, card: targetCr });
+
+        const targetController = this.getPlayer(targetControllerId);
+        if (targetController && Array.isArray(targetController.library)) {
+          const basicLandIdx = targetController.library.findIndex(c =>
+            c && (/basic/i.test(c.typeLine || '') || /plains|island|swamp|mountain|forest/i.test(c.typeLine || c.name || ''))
+          );
+          if (basicLandIdx !== -1) {
+            const [landCard] = targetController.library.splice(basicLandIdx, 1);
+            if (targetController.zones?.library) {
+              targetController.zones.library = targetController.zones.library.filter(c => c !== landCard && c.instanceId !== landCard.instanceId);
+            }
+            landCard.zone = 'battlefield';
+            landCard.subzone = 'lands';
+            landCard.isTapped = true;
+            landCard.controllerId = targetControllerId;
+            landCard.ownerId = landCard.ownerId || targetControllerId;
+
+            targetController.battlefield.lands = targetController.battlefield.lands || [];
+            targetController.battlefield.lands.push(landCard);
+            if (targetController.zones) {
+              targetController.zones.battlefield = targetController.zones.battlefield || [];
+              targetController.zones.battlefield.push(landCard);
+            }
+            this._onPermanentEnteredBattlefield(landCard, targetControllerId);
+            this.emit('CARD_ENTERED_BATTLEFIELD', { card: landCard, subzone: 'lands', controllerId: targetControllerId, enteredTapped: true });
+            this.emit('LAND_PUT_ONTO_BATTLEFIELD', { card: landCard, playerId: targetControllerId });
+          }
+          if (typeof this.shuffleLibrary === 'function') {
+            this.shuffleLibrary(targetControllerId);
+          }
+          this.emit('LIBRARY_SHUFFLED', { playerId: targetControllerId });
+        }
+      }
+      return { resolved: 'PATH_TO_EXILE', targetCreature: targetCr };
+    }
+
+    // 9. Brave the Elements: Choose a color. White creatures you control gain protection from chosen color until EOT.
+    if (nameLower === 'brave the elements' || /choose a color.*white creatures you control gain protection from the chosen color/i.test(oracleLower)) {
+      const chosenColor = String(options.chosenColor || options.color || options.selectedColor || 'white').toLowerCase();
+      const creatures = player.battlefield?.creatures || [];
+      for (const cr of creatures) {
+        const isWhite = Boolean(
+          cr.colors?.includes('W') ||
+          cr.isWhite === true ||
+          /\{W\}/i.test(cr.manaCost || '') ||
+          cr.colorIdentity?.includes('W')
+        );
+        if (isWhite) {
+          cr.protectionFromColor = chosenColor;
+          cr.protectionColor = chosenColor;
+          cr.protectionFrom = chosenColor;
+          if (this.abilityEngine) {
+            this.abilityEngine.registerStaticEffect({
+              id: `brave_${chosenColor}_${Date.now()}_${cr.instanceId}`,
+              sourceId: card.instanceId || 'brave_the_elements',
+              layer: CONTINUOUS_LAYERS.LAYER_6_ABILITY,
+              duration: 'END_OF_TURN',
+              apply: (perm) => {
+                perm.protectionFromColor = chosenColor;
+                perm.protectionColor = chosenColor;
+                perm.protectionFrom = chosenColor;
+              },
+              appliesTo: (perm) => perm && (perm.instanceId === cr.instanceId || perm.id === cr.instanceId)
+            });
+          }
+        }
+      }
+      this.emit('PROTECTION_GRANTED', { playerId, color: chosenColor });
+      return { resolved: 'BRAVE_THE_ELEMENTS', chosenColor };
+    }
+
     // Fallback for generic PUMP_PT_AND_KEYWORDS
     for (const effect of effects) {
       if (effect.action === 'PUMP_PT_AND_KEYWORDS') {
@@ -6682,6 +7767,22 @@ export class TabletopStateManager extends EventEmitter {
           requiresSacrifice: true,
           action: 'GRANT_TEAM_HEXPROOF_INDESTRUCTIBLE'
         };
+      } else if (abilityId === 'CASTLE_ARDENVALE_TOKEN' || (/castle ardenvale/i.test(nameLower) && (abilityId === 'CREATE_TOKEN' || options.action === 'CREATE_TOKEN' || (!abilityId && options.token)))) {
+        ability = {
+          id: 'CASTLE_ARDENVALE_TOKEN',
+          cost: '{2}{W}{W}',
+          requiresTap: true,
+          requiresSacrifice: false,
+          action: 'CREATE_HUMAN_TOKEN'
+        };
+      } else if (abilityId === 'TAP_ADD_WHITE' || (/castle ardenvale/i.test(nameLower) && (abilityId === 'ADD_W' || options.action === 'ADD_MANA' || !abilityId))) {
+        ability = {
+          id: 'TAP_ADD_WHITE',
+          cost: '{0}',
+          requiresTap: true,
+          requiresSacrifice: false,
+          action: 'ADD_MANA_W'
+        };
       }
     }
 
@@ -6892,9 +7993,30 @@ export class TabletopStateManager extends EventEmitter {
           });
         }
       }
+    } else if (actionType === 'CREATE_HUMAN_TOKEN' || actionType === 'CASTLE_ARDENVALE_TOKEN') {
+      const tokens = this.createCreatureTokens(playerId, 1, {
+        name: 'Human Token',
+        power: 1,
+        toughness: 1,
+        colors: ['W'],
+        isWhite: true,
+        isToken: true,
+        subtypes: ['Human']
+      });
+      return { activated: ability.id, permanent: perm, tokens };
+    } else if (actionType === 'ADD_MANA_W' || actionType === 'TAP_ADD_WHITE') {
+      player.resources = player.resources || {};
+      player.resources.manaPool = player.resources.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      player.resources.manaPool.W = (player.resources.manaPool.W || 0) + 1;
+      this.emit('MANA_POOL_UPDATED', { playerId, manaPool: { ...player.resources.manaPool } });
+      return { activated: ability.id, permanent: perm, addedMana: 'W' };
     }
 
     return { activated: ability.id, permanent: perm };
+  }
+
+  activateAbility(playerId, instanceId, abilityId = null, options = {}) {
+    return this.activatePermanentAbility(playerId, instanceId, abilityId, options);
   }
 
   _checkAndTriggerValiant(targetCreature, controllerId, sourceObject) {
@@ -6939,6 +8061,7 @@ export class TabletopStateManager extends EventEmitter {
         const isOpeningBattlefield =
           card.compiledMechanics?.openingHandAction === 'START_ON_BATTLEFIELD' ||
           /opening\s+hand,\s*you\s+may\s+begin\s+the\s+game\s+with\s+(?:it|this\s+card|[^\n,]+)\s+on\s+the\s+battlefield/i.test(oracleStr) ||
+          /^leyline\s+(?:axe|of\s+sanctity)$/i.test((card.name || '').trim()) ||
           /^leyline\s+axe$/i.test((card.name || '').trim());
 
         if (isOpeningBattlefield) {

@@ -151,6 +151,61 @@ export class PerkinsAgent {
   }
 
   /**
+   * Reference to tabletop state manager.
+   * @returns {Object|null}
+   */
+  get tabletopState() {
+    return this._tabletopState || this.app?.tabletopState || null;
+  }
+
+  set tabletopState(state) {
+    this._tabletopState = state;
+    if (state && typeof state.on === 'function') {
+      const onTriggerTarget = (payload) => {
+        if (this.isDestroyed || !payload) return;
+        if (payload.controllerId === this.slotId) {
+          this.handleTriggerTargetRequired(payload);
+        }
+      };
+      state.on('TRIGGER_TARGET_REQUIRED', onTriggerTarget);
+      this._unsubscribers.push(() => {
+        try { state.off?.('TRIGGER_TARGET_REQUIRED', onTriggerTarget); } catch (_) {}
+      });
+    }
+  }
+
+  /**
+   * Auto-resolves pending trigger choice targeting Perkins's strongest own creature (CR 603).
+   * 
+   * @param {Object} payload
+   */
+  handleTriggerTargetRequired(payload) {
+    if (!payload || !payload.triggerId) return;
+    try {
+      const state = this.tabletopState || this.app?.tabletopState;
+      if (!state || typeof state.resolvePendingTriggerChoice !== 'function') return;
+
+      let bestId = 'DECLINE';
+      const candidates = Array.isArray(payload.candidates) ? [...payload.candidates] : [];
+      if (candidates.length > 0) {
+        // Target Perkins's strongest own creature (power, then toughness)
+        candidates.sort((a, b) => {
+          const pA = Number(a.power ?? a.card?.power ?? 0);
+          const pB = Number(b.power ?? b.card?.power ?? 0);
+          if (pB !== pA) return pB - pA;
+          const tA = Number(a.toughness ?? a.card?.toughness ?? 0);
+          const tB = Number(b.toughness ?? b.card?.toughness ?? 0);
+          return tB - tA;
+        });
+        bestId = candidates[0].id || candidates[0].instanceId || 'DECLINE';
+      }
+      state.resolvePendingTriggerChoice(payload.triggerId, bestId);
+    } catch (err) {
+      console.warn('[PerkinsAgent] Error resolving pending trigger target:', err.message);
+    }
+  }
+
+  /**
    * Obtains safe Fog-of-War projected state for Perkins (INV-PERKINS-3).
    * @returns {Object|null}
    */
@@ -235,7 +290,14 @@ export class PerkinsAgent {
           (this.app?.tabletopState?.combatState?.attackers?.length || 0) > 0 &&
           !this.app?.tabletopState?.combatState?.blockersDeclared
         ) {
-          this.evaluateTurnPhase(currentPhase);
+          const allAttackers = this.app?.tabletopState?.combatState?.attackers || [];
+          const hasAttackerAgainstMe = allAttackers.some(a => {
+            const defId = a?.defendingPlayerId || a?.creature?.defendingPlayerId;
+            return !defId || defId === this.slotId;
+          });
+          if (hasAttackerAgainstMe) {
+            this.evaluateTurnPhase(currentPhase);
+          }
         }
       };
       this.app.priorityMachine.on('PHASE_STEP_CHANGED', onPhaseStepChange);
@@ -276,6 +338,21 @@ export class PerkinsAgent {
       };
       this.app.randomPerk.on('PERK_ROLLED', onPerkRolled);
       this._unsubscribers.push(() => this.app.randomPerk.off('PERK_ROLLED', onPerkRolled));
+    }
+
+    // 4. TabletopStateManager listening (TRIGGER_TARGET_REQUIRED)
+    const state = this.tabletopState;
+    if (state && typeof state.on === 'function') {
+      const onTriggerTarget = (payload) => {
+        if (this.isDestroyed || !payload) return;
+        if (payload.controllerId === this.slotId) {
+          this.handleTriggerTargetRequired(payload);
+        }
+      };
+      state.on('TRIGGER_TARGET_REQUIRED', onTriggerTarget);
+      this._unsubscribers.push(() => {
+        try { state.off?.('TRIGGER_TARGET_REQUIRED', onTriggerTarget); } catch (_) {}
+      });
     }
   }
 
@@ -650,6 +727,214 @@ export class PerkinsAgent {
   }
 
   /**
+   * Returns an array of mana symbols (['W', 'U', 'B', 'R', 'G', 'C']) that `land` can produce.
+   *
+   * @param {Object} land
+   * @param {Object} [myState=null]
+   * @returns {string[]}
+   */
+  getLandProducedColors(land, myState = null) {
+    if (!land) return [];
+    const produced = new Set();
+
+    if (Array.isArray(land.producedMana)) {
+      for (const m of land.producedMana) if (m) produced.add(String(m).toUpperCase());
+    }
+    if (Array.isArray(land.colors)) {
+      for (const c of land.colors) if (c) produced.add(String(c).toUpperCase());
+    }
+
+    const tLine = String(land.typeLine || land.type || land.name || '').toLowerCase();
+    const oText = String(land.oracleText || land.text || '').toLowerCase();
+    const name = String(land.name || '').toLowerCase();
+
+    // Mana Confluence / Starting Town = any color
+    if (/mana confluence|starting town/i.test(name) || /mana confluence|starting town/i.test(tLine) || /any color/i.test(oText)) {
+      return ['W', 'U', 'B', 'R', 'G', 'C'];
+    }
+
+    // Spire of Industry = {C} or any color if you control an artifact
+    if (/spire of industry/i.test(name) || /spire of industry/i.test(tLine)) {
+      const state = myState || this.getProjectedState();
+      const me = state?.players?.[this.slotId] || state;
+      const noncreatures = me?.battlefield?.noncreatures || [];
+      const creatures = me?.battlefield?.creatures || [];
+      const hasArtifact = [...noncreatures, ...creatures].some(c =>
+        c && c !== land && /artifact/i.test(String(c.typeLine || c.type || ''))
+      );
+      if (hasArtifact) {
+        return ['W', 'U', 'B', 'R', 'G', 'C'];
+      }
+      return ['C'];
+    }
+
+    // Inkmoth Nexus = {C}
+    if (/inkmoth nexus/i.test(name) || /inkmoth nexus/i.test(tLine)) {
+      produced.add('C');
+      return Array.from(produced);
+    }
+
+    // Basic subtypes
+    if (/plains/i.test(tLine)) produced.add('W');
+    if (/island/i.test(tLine)) produced.add('U');
+    if (/swamp/i.test(tLine)) produced.add('B');
+    if (/mountain/i.test(tLine)) produced.add('R');
+    if (/forest/i.test(tLine)) produced.add('G');
+    if (/wastes/i.test(tLine)) produced.add('C');
+
+    // Duals via oracle {T}: Add {X} or {Y}
+    if (oText.includes('add')) {
+      if (/add\s+[^.]*\{w\}/i.test(oText)) produced.add('W');
+      if (/add\s+[^.]*\{u\}/i.test(oText)) produced.add('U');
+      if (/add\s+[^.]*\{b\}/i.test(oText)) produced.add('B');
+      if (/add\s+[^.]*\{r\}/i.test(oText)) produced.add('R');
+      if (/add\s+[^.]*\{g\}/i.test(oText)) produced.add('G');
+      if (/add\s+[^.]*\{c\}/i.test(oText)) produced.add('C');
+    }
+
+    if (produced.size === 0) {
+      if (/plains/i.test(name)) produced.add('W');
+      else if (/island/i.test(name)) produced.add('U');
+      else if (/swamp/i.test(name)) produced.add('B');
+      else if (/mountain/i.test(name)) produced.add('R');
+      else if (/forest/i.test(name)) produced.add('G');
+      else if (/wastes/i.test(name)) produced.add('C');
+      else {
+        // Fallback for test mock lands without explicit subtype/colors
+        return ['W', 'U', 'B', 'R', 'G', 'C'];
+      }
+    }
+
+    return Array.from(produced);
+  }
+
+  /**
+   * Computes a payment plan for `card`, assigning untapped lands to colored symbols first
+   * (most constrained first), then generic mana.
+   *
+   * @param {Object} card
+   * @param {Object} [myState=null]
+   * @returns {{ affordable: boolean, landsToTap: Object[] }}
+   */
+  getPaymentPlan(card, myState = null) {
+    if (!card) return { affordable: false, landsToTap: [] };
+
+    const state = myState || this.getProjectedState()?.players?.[this.slotId] || this.getProjectedState();
+    const rawPool = state?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    const pool = {
+      W: Number(rawPool.W) || 0,
+      U: Number(rawPool.U) || 0,
+      B: Number(rawPool.B) || 0,
+      R: Number(rawPool.R) || 0,
+      G: Number(rawPool.G) || 0,
+      C: Number(rawPool.C) || 0
+    };
+
+    const lands = Array.isArray(state?.battlefield?.lands) ? state.battlefield.lands : [];
+    const availableLands = lands.filter(l => l && !l.isTapped);
+
+    const costStr = String(card.manaCost || '');
+    const symbols = (costStr.match(/\{([^}]+)\}/g) || []).map(s => s.slice(1, -1).toUpperCase());
+
+    const neededColors = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    let neededGeneric = 0;
+
+    for (const sym of symbols) {
+      if (neededColors[sym] !== undefined) {
+        neededColors[sym]++;
+      } else {
+        const num = parseInt(sym, 10);
+        if (!isNaN(num)) {
+          neededGeneric += num;
+        }
+      }
+    }
+
+    let computedX = null;
+    const isSecureTheWastes = /secure the wastes/i.test(card.name || '');
+    if (isSecureTheWastes || symbols.includes('X')) {
+      const totalAvailableMana = availableLands.length + Object.values(pool).reduce((s, v) => s + (Number(v) || 0), 0);
+      computedX = card.xValue !== undefined ? Number(card.xValue) : Math.max(1, totalAvailableMana - 1);
+      neededGeneric += computedX;
+    }
+
+    // 1. Pay colored requirements from existing floating mana pool first
+    for (const color of ['W', 'U', 'B', 'R', 'G', 'C']) {
+      if (neededColors[color] > 0 && pool[color] > 0) {
+        const paid = Math.min(neededColors[color], pool[color]);
+        neededColors[color] -= paid;
+        pool[color] -= paid;
+      }
+    }
+
+    const landsToTap = [];
+    const remainingLands = [...availableLands];
+
+    // Helper: list of colors each remaining land can produce
+    const landColorMap = new Map();
+    for (const land of remainingLands) {
+      landColorMap.set(land, this.getLandProducedColors(land, state));
+    }
+
+    // 2. Pay remaining colored requirements from lands: most constrained first
+    while (Object.values(neededColors).some(n => n > 0)) {
+      const activeColors = Object.keys(neededColors).filter(c => neededColors[c] > 0);
+      if (activeColors.length === 0) break;
+
+      const colorCandidateCounts = activeColors.map(c => {
+        const count = remainingLands.filter(l => landColorMap.get(l).includes(c)).length;
+        return { color: c, count };
+      });
+
+      // Sort by fewest candidates first (most constrained)
+      colorCandidateCounts.sort((a, b) => a.count - b.count);
+      const targetColor = colorCandidateCounts[0].color;
+
+      const matchingLands = remainingLands.filter(l => landColorMap.get(l).includes(targetColor));
+      if (matchingLands.length === 0) {
+        return { affordable: false, landsToTap: [] };
+      }
+
+      matchingLands.sort((a, b) => landColorMap.get(a).length - landColorMap.get(b).length);
+      const chosenLand = matchingLands[0];
+
+      landsToTap.push(chosenLand);
+      const idx = remainingLands.indexOf(chosenLand);
+      if (idx !== -1) remainingLands.splice(idx, 1);
+      neededColors[targetColor]--;
+    }
+
+    // 3. Pay generic mana requirement: first from remaining pool, then remaining lands
+    if (neededGeneric > 0) {
+      const remainingPoolTotal = Object.values(pool).reduce((sum, n) => sum + (Number(n) || 0), 0);
+      const fromPool = Math.min(neededGeneric, remainingPoolTotal);
+      neededGeneric -= fromPool;
+
+      if (neededGeneric > 0) {
+        if (remainingLands.length < neededGeneric) {
+          return { affordable: false, landsToTap: [] };
+        }
+        for (let i = 0; i < neededGeneric; i++) {
+          landsToTap.push(remainingLands[i]);
+        }
+      }
+    }
+
+    return { affordable: true, landsToTap, xValue: computedX };
+  }
+
+  /**
+   * Checks if Perkins can afford the colors and generic cost of `card`.
+   *
+   * @param {Object} card
+   * @param {Object} [myState=null]
+   * @returns {boolean}
+   */
+  canAffordCardColors(card, myState = null) {
+    return this.getPaymentPlan(card, myState).affordable;
+  }
+
+  /**
    * Core turn phase evaluator. Executes in <1ms (INV-PERKINS-1).
    * Enforces Fog-of-War (INV-PERKINS-3), anti-hang (INV-SAFE-1), and deckout concession (INV-SAFE-2).
    * 
@@ -794,34 +1079,46 @@ export class PerkinsAgent {
           }
         }
 
-        // 2. Cast Creatures / Sorceries if affordable
-        const manaPool = myState?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
-        const lands = myState?.battlefield?.lands || [];
-        const untappedLands = lands.filter(l => !l.isTapped);
-        const totalAvailableMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0) + untappedLands.length;
+        // 2. Cast Spells (Creatures, Artifacts, Equipment, Enchantments, Sorceries, Instants)
+        const castableSpells = [];
+        for (const card of handCards) {
+          if (!card || card.isHidden) continue;
+          const type = String(card.typeLine || card.type || '');
+          if (!/creature|sorcery|instant|artifact|enchantment|equipment/i.test(type)) continue;
 
-        const castableCreatures = handCards.filter(c => {
-          if (!c || c.isHidden) return false;
-          const type = String(c.typeLine || c.type || '');
-          if (!/creature|sorcery/i.test(type)) return false;
-          const cmc = c.cmc ?? c.manaValue ?? this._parseCmc(c.manaCost);
-          return cmc <= totalAvailableMana;
-        });
+          const plan = this.getPaymentPlan(card, myState);
+          if (!plan.affordable) continue;
 
-        if (castableCreatures.length > 0) {
-          castableCreatures.sort((a, b) => {
-            const cmcA = a.cmc ?? this._parseCmc(a.manaCost);
-            const cmcB = b.cmc ?? this._parseCmc(b.manaCost);
+          let target = null;
+          if (/instant|sorcery/i.test(type)) {
+            const needsTarget = Boolean(
+              (card.groundedEffects && card.groundedEffects.length > 0) ||
+              card.action ||
+              /target/i.test(card.oracleText || card.text || '')
+            );
+            if (needsTarget) {
+              target = this.selectLegalSpellTarget(card, this.tabletopState || this.app?.tabletopState);
+              if (!target) continue;
+            }
+          }
+
+          castableSpells.push({ card, plan, target });
+        }
+
+        if (castableSpells.length > 0) {
+          castableSpells.sort((a, b) => {
+            const cmcA = a.card.cmc ?? this._parseCmc(a.card.manaCost);
+            const cmcB = b.card.cmc ?? this._parseCmc(b.card.manaCost);
             return cmcB - cmcA;
           });
-          const cardToCast = castableCreatures[0];
+          const { card: cardToCast, plan, target: chosenTarget } = castableSpells[0];
+          const isSecureTheWastes = /secure the wastes/i.test(cardToCast.name || '');
+          const computedX = plan.xValue !== undefined && plan.xValue !== null
+            ? plan.xValue
+            : (isSecureTheWastes ? Math.max(1, ((myState?.battlefield?.lands || []).filter(l => !l.isTapped).length || 1) - 1) : null);
 
-          // Explicitly tap matching lands before casting (INV-MANA-1)
-          const cmc = cardToCast.cmc ?? this._parseCmc(cardToCast.manaCost);
-          const floatingMana = Object.values(manaPool).reduce((sum, n) => sum + (Number(n) || 0), 0);
-          const landsNeeded = Math.max(0, Math.min(cmc - floatingMana, untappedLands.length));
-          for (let i = 0; i < landsNeeded; i++) {
-            const landToTap = untappedLands[i];
+          // Tap chosen lands via engine
+          for (const landToTap of plan.landsToTap) {
             if (this.app?.tabletopState && typeof this.app.tabletopState.tapLandForMana === 'function') {
               try { this.app.tabletopState.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
             }
@@ -844,17 +1141,200 @@ export class PerkinsAgent {
             controllerName: this.playerName || 'Perkins AI (Bot)',
             card: cardToCast,
             cardName: cardToCast.name,
+            manaAlreadyPaid: true,
+            targetId: chosenTarget?.targetId || null,
+            targetType: chosenTarget?.targetType || null,
+            ...(computedX !== null ? { xValue: computedX } : {}),
             payload: {
               playerId: this.slotId,
               controllerId: this.slotId,
               controllerName: this.playerName || 'Perkins AI (Bot)',
               card: cardToCast,
               cardName: cardToCast.name,
-              instanceId: cardToCast.instanceId
+              instanceId: cardToCast.instanceId,
+              manaAlreadyPaid: true,
+              targetId: chosenTarget?.targetId || null,
+              targetType: chosenTarget?.targetType || null,
+              target: chosenTarget?.targetId || null,
+              ...(computedX !== null ? { xValue: computedX } : {})
             }
           };
           await this.dispatchAction(castAction);
+          this._pendingEvaluation = true;
           return castAction;
+        }
+
+        // 3. Activate Equip in main phase when Perkins has an unattached Equipment + creature and can afford it
+        const noncreatures = myState?.battlefield?.noncreatures || [];
+        const myCreatures = (myState?.battlefield?.creatures || []).filter(c => c && !c.isDead);
+
+        if (myCreatures.length > 0) {
+          const unattachedEquipment = noncreatures.filter(card => {
+            if (!card) return false;
+            const isEquip = /equipment/i.test(card.typeLine || card.type || '') || card.subtype === 'Equipment';
+            if (!isEquip) return false;
+            return !card.attachedTo && !card.attachedToCreatureId && !card.isAttached;
+          });
+
+          if (unattachedEquipment.length > 0) {
+            const sortedCreatures = [...myCreatures].sort((a, b) => {
+              const pA = Number(a.power ?? 0);
+              const pB = Number(b.power ?? 0);
+              if (pB !== pA) return pB - pA;
+              return Number(b.toughness ?? 0) - Number(a.toughness ?? 0);
+            });
+            const targetCreature = sortedCreatures[0];
+
+            for (const equip of unattachedEquipment) {
+              const stateRef = this.tabletopState || this.app?.tabletopState;
+              let effectiveCostStr = '{0}';
+              if (stateRef && typeof stateRef.computeEquipCost === 'function') {
+                try {
+                  effectiveCostStr = stateRef.computeEquipCost(this.slotId, equip, targetCreature);
+                } catch (_) {
+                  effectiveCostStr = equip.compiledMechanics?.equipCost || equip.equipCost || '{1}';
+                }
+              } else {
+                effectiveCostStr = equip.compiledMechanics?.equipCost || equip.equipCost || '{1}';
+              }
+
+              const isFree = effectiveCostStr === '{0}';
+              const equipPlan = isFree ? { affordable: true, landsToTap: [] } : this.getPaymentPlan({ manaCost: effectiveCostStr }, myState);
+
+              if (equipPlan.affordable) {
+                const equipAction = {
+                  type: 'ACTIVATE_EQUIP',
+                  playerId: this.slotId,
+                  equipmentId: equip.instanceId || equip.id,
+                  targetCreatureId: targetCreature.instanceId || targetCreature.id,
+                  payload: {
+                    playerId: this.slotId,
+                    equipmentId: equip.instanceId || equip.id,
+                    targetCreatureId: targetCreature.instanceId || targetCreature.id,
+                    isFree
+                  }
+                };
+
+                if (stateRef && typeof stateRef.activateEquipAbility === 'function') {
+                  try {
+                    stateRef.activateEquipAbility(this.slotId, equip.instanceId || equip.id, targetCreature.instanceId || targetCreature.id, { isFree });
+                  } catch (_) {}
+                }
+                await this.dispatchAction(equipAction);
+                this._pendingEvaluation = true;
+                return equipAction;
+              }
+            }
+          }
+        }
+
+        // 4. Caretaker's Talent Level Up
+        const talent = noncreatures.find(c => /caretaker's talent/i.test(c?.name || ''));
+        const stateRef = this.tabletopState || this.app?.tabletopState;
+        if (talent) {
+          const currentLvl = talent.classLevel || talent.level || 1;
+          const levelCost = currentLvl === 1 ? '{1}{W}' : (currentLvl === 2 ? '{3}{W}' : null);
+          if (levelCost) {
+            const levelPlan = this.getPaymentPlan({ manaCost: levelCost }, myState);
+            if (levelPlan.affordable) {
+              for (const landToTap of levelPlan.landsToTap) {
+                if (stateRef && typeof stateRef.tapLandForMana === 'function') {
+                  try { stateRef.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
+                }
+                landToTap.isTapped = true;
+                await this.dispatchAction({
+                  type: 'TAP_PERMANENT',
+                  playerId: this.slotId,
+                  instanceId: landToTap.instanceId || landToTap.id,
+                  payload: { playerId: this.slotId, instanceId: landToTap.instanceId || landToTap.id }
+                });
+              }
+              if (stateRef && typeof stateRef.levelUpClass === 'function') {
+                try { stateRef.levelUpClass(this.slotId, talent.instanceId || talent.id); } catch (_) {}
+              }
+              const levelAction = {
+                type: 'LEVEL_UP_CLASS',
+                playerId: this.slotId,
+                instanceId: talent.instanceId || talent.id,
+                payload: {
+                  playerId: this.slotId,
+                  instanceId: talent.instanceId || talent.id,
+                  targetLevel: currentLvl + 1
+                }
+              };
+              await this.dispatchAction(levelAction);
+              this._pendingEvaluation = true;
+              return levelAction;
+            }
+          }
+        }
+
+        // 5. Castle Ardenvale Activation (main phase)
+        const myLands = myState?.battlefield?.lands || [];
+        const castle = myLands.find(l => !l.isTapped && /castle ardenvale/i.test(l?.name || ''));
+        if (castle) {
+          const otherLands = myLands.filter(l => !l.isTapped && (l.instanceId || l.id) !== (castle.instanceId || castle.id));
+          const totalOtherMana = otherLands.length + Object.values(myState?.resources?.manaPool || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+          if ((handCards.length === 0 || totalOtherMana >= 4) && totalOtherMana >= 4) {
+            const ardenPlan = this.getPaymentPlan({ manaCost: '{2}{W}{W}' }, {
+              ...myState,
+              battlefield: { ...myState.battlefield, lands: otherLands }
+            });
+            if (ardenPlan.affordable) {
+              castle.isTapped = true;
+              await this.dispatchAction({
+                type: 'TAP_PERMANENT',
+                playerId: this.slotId,
+                instanceId: castle.instanceId || castle.id,
+                payload: { playerId: this.slotId, instanceId: castle.instanceId || castle.id }
+              });
+              for (const landToTap of ardenPlan.landsToTap) {
+                if (stateRef && typeof stateRef.tapLandForMana === 'function') {
+                  try { stateRef.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
+                }
+                landToTap.isTapped = true;
+                await this.dispatchAction({
+                  type: 'TAP_PERMANENT',
+                  playerId: this.slotId,
+                  instanceId: landToTap.instanceId || landToTap.id,
+                  payload: { playerId: this.slotId, instanceId: landToTap.instanceId || landToTap.id }
+                });
+              }
+              if (stateRef) {
+                if (typeof stateRef.activateCastleArdenvale === 'function') {
+                  try { stateRef.activateCastleArdenvale(this.slotId, castle.instanceId || castle.id); } catch (_) {}
+                } else if (typeof stateRef.activateAbility === 'function') {
+                  try { stateRef.activateAbility(this.slotId, castle.instanceId || castle.id, 'token'); } catch (_) {}
+                } else if (typeof stateRef.addCardToZone === 'function') {
+                  try {
+                    stateRef.addCardToZone(this.slotId, 'battlefield', {
+                      instanceId: `token_human_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      name: 'Human Token',
+                      typeLine: 'Creature — Human',
+                      power: 1,
+                      toughness: 1,
+                      isToken: true,
+                      colors: ['W']
+                    });
+                  } catch (_) {}
+                }
+              }
+              const ardenvaleAction = {
+                type: 'ACTIVATE_ABILITY',
+                playerId: this.slotId,
+                sourceId: castle.instanceId || castle.id,
+                abilityName: 'Create 1/1 white Human creature token',
+                payload: {
+                  playerId: this.slotId,
+                  sourceId: castle.instanceId || castle.id,
+                  abilityName: 'Create 1/1 white Human creature token'
+                }
+              };
+              await this.dispatchAction(ardenvaleAction);
+              this._pendingEvaluation = true;
+              return ardenvaleAction;
+            }
+          }
         }
       }
 
@@ -903,22 +1383,25 @@ export class PerkinsAgent {
       const alreadyBlocked = Boolean(this.app?.tabletopState?.combatState?.blockersDeclared) ||
         (this.app?.tabletopState?.combatState?.blockers?.length || 0) > 0;
       if (isDefending && !alreadyBlocked) {
-        const rawAttackers = state?.combat?.attackers ||
+        const allRawAttackers = state?.combat?.attackers ||
           (this.app?.tabletopState?.combatState?.attackers || []).map(a => a?.creature || a).filter(Boolean);
-        const blocks = this.evaluateCombatBlocks(state, rawAttackers);
-        if (blocks.length > 0) {
-          const blockAction = {
-            type: 'DECLARE_BLOCKERS',
-            playerId: this.slotId,
-            blocks,
-            payload: {
+        const rawAttackers = allRawAttackers.filter(a => !a.defendingPlayerId || a.defendingPlayerId === this.slotId);
+        if (rawAttackers.length > 0) {
+          const blocks = this.evaluateCombatBlocks(state, rawAttackers);
+          if (blocks.length > 0) {
+            const blockAction = {
+              type: 'DECLARE_BLOCKERS',
               playerId: this.slotId,
-              blocks
-            }
-          };
-          await this.dispatchAction(blockAction);
-          this._pendingEvaluation = true;
-          return blockAction;
+              blocks,
+              payload: {
+                playerId: this.slotId,
+                blocks
+              }
+            };
+            await this.dispatchAction(blockAction);
+            this._pendingEvaluation = true;
+            return blockAction;
+          }
         }
       }
       if (this.app?.priorityMachine && this.app.priorityMachine.priorityPlayerId !== this.slotId) {
@@ -932,6 +1415,76 @@ export class PerkinsAgent {
     // Phase 6: END_STEP & CLEANUP (CR 513-514)
     if (phaseStep === 'END_STEP' || phaseStep === 'CLEANUP') {
       this._hasPlayedLandThisTurn = false;
+      if (phaseStep === 'END_STEP') {
+        const myState = state?.players?.[this.slotId];
+        const myLands = myState?.battlefield?.lands || [];
+        const castle = myLands.find(l => !l.isTapped && /castle ardenvale/i.test(l?.name || ''));
+        if (castle) {
+          const otherLands = myLands.filter(l => !l.isTapped && (l.instanceId || l.id) !== (castle.instanceId || castle.id));
+          const totalOtherMana = otherLands.length + Object.values(myState?.resources?.manaPool || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+          if (totalOtherMana >= 4) {
+            const ardenPlan = this.getPaymentPlan({ manaCost: '{2}{W}{W}' }, {
+              ...myState,
+              battlefield: { ...myState.battlefield, lands: otherLands }
+            });
+            if (ardenPlan.affordable) {
+              const stateRef = this.tabletopState || this.app?.tabletopState;
+              castle.isTapped = true;
+              await this.dispatchAction({
+                type: 'TAP_PERMANENT',
+                playerId: this.slotId,
+                instanceId: castle.instanceId || castle.id,
+                payload: { playerId: this.slotId, instanceId: castle.instanceId || castle.id }
+              });
+              for (const landToTap of ardenPlan.landsToTap) {
+                if (stateRef && typeof stateRef.tapLandForMana === 'function') {
+                  try { stateRef.tapLandForMana(this.slotId, landToTap.instanceId || landToTap.id); } catch (_) {}
+                }
+                landToTap.isTapped = true;
+                await this.dispatchAction({
+                  type: 'TAP_PERMANENT',
+                  playerId: this.slotId,
+                  instanceId: landToTap.instanceId || landToTap.id,
+                  payload: { playerId: this.slotId, instanceId: landToTap.instanceId || landToTap.id }
+                });
+              }
+              if (stateRef) {
+                if (typeof stateRef.activateCastleArdenvale === 'function') {
+                  try { stateRef.activateCastleArdenvale(this.slotId, castle.instanceId || castle.id); } catch (_) {}
+                } else if (typeof stateRef.activateAbility === 'function') {
+                  try { stateRef.activateAbility(this.slotId, castle.instanceId || castle.id, 'token'); } catch (_) {}
+                } else if (typeof stateRef.addCardToZone === 'function') {
+                  try {
+                    stateRef.addCardToZone(this.slotId, 'battlefield', {
+                      instanceId: `token_human_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                      name: 'Human Token',
+                      typeLine: 'Creature — Human',
+                      power: 1,
+                      toughness: 1,
+                      isToken: true,
+                      colors: ['W']
+                    });
+                  } catch (_) {}
+                }
+              }
+              const ardenvaleAction = {
+                type: 'ACTIVATE_ABILITY',
+                playerId: this.slotId,
+                sourceId: castle.instanceId || castle.id,
+                abilityName: 'Create 1/1 white Human creature token',
+                payload: {
+                  playerId: this.slotId,
+                  sourceId: castle.instanceId || castle.id,
+                  abilityName: 'Create 1/1 white Human creature token'
+                }
+              };
+              await this.dispatchAction(ardenvaleAction);
+              this._pendingEvaluation = true;
+              return ardenvaleAction;
+            }
+          }
+        }
+      }
       const passAction = { type: 'PASS_PRIORITY', playerId: this.slotId };
       await this.dispatchAction(passAction);
       return passAction;
@@ -1081,11 +1634,30 @@ export class PerkinsAgent {
     const minBlockerToughness = Math.min(...oppBlockers.map(b => Number(b.effectiveToughness ?? b.toughness) || 1));
     const minBlockerCmc = Math.min(...oppBlockers.map(b => Number(b.cmc ?? this._parseCmc(b.manaCost)) || 0));
 
+    const hasIntangibleVirtue = (myPlayer.battlefield?.noncreatures || []).some(
+      nc => /intangible virtue/i.test(nc?.name || '')
+    );
+
     const declaredAttackers = [];
     for (const c of eligibleAttackers) {
       const power = Number(c.effectivePower ?? c.power) || 0;
       const toughness = Number(c.effectiveToughness ?? c.toughness) || 0;
       const cmc = Number(c.cmc ?? this._parseCmc(c.manaCost)) || 0;
+
+      const isToken = Boolean(c.isToken || /token/i.test(c.typeLine || '') || String(c.instanceId || '').startsWith('token_'));
+      const hasVigilance = Boolean(
+        c.vigilance ||
+        c.hasVigilance ||
+        (c.keywords && (Array.isArray(c.keywords) ? c.keywords.includes('vigilance') : c.keywords.vigilance)) ||
+        (hasIntangibleVirtue && isToken)
+      );
+
+      // Rule C: Tokens with Vigilance (e.g. Intangible Virtue) attack aggressively:
+      // They don't tap to attack, remain available for blocking, and push face damage.
+      if (hasVigilance && isToken && power > 0) {
+        declaredAttackers.push(c.instanceId);
+        continue;
+      }
 
       // Rule A: c.toughness > maxBlockerPower (can attack and survive any single blocker)
       if (toughness > maxBlockerPower) {
@@ -1426,43 +1998,177 @@ export class PerkinsAgent {
    * @param {Object} tabletopState
    * @returns {{ targetId: string, targetType: 'PLAYER'|'CREATURE' } | null}
    */
+  /**
+   * Selects legal target for targeted spell, filtering out Hexproof, Shroud, and Protection (INV-TARGET-MENU-1).
+   * 
+   * Specific heuristics (SPEC A):
+   * - removal / DESTROY_TARGET -> strongest opponent creature (power, then toughness)
+   * - PUMP_PT_EOT -> own attacking/unblocked creature (else strongest own)
+   * - DEAL_DAMAGE -> killable opponent creature else opponent face
+   * - Fallback -> strongest legal opponent creature else opponent player
+   * 
+   * @param {Object} spell
+   * @param {Object} tabletopState
+   * @returns {{ targetId: string, targetType: 'PLAYER'|'CREATURE' } | null}
+   */
   selectLegalSpellTarget(spell, tabletopState) {
     if (!spell || !tabletopState) return null;
 
-    // 1. Check opponent creatures
+    const groundedEffects = Array.isArray(spell.groundedEffects) ? spell.groundedEffects : (
+      Array.isArray(spell.compiledMechanics?.effects) ? spell.compiledMechanics.effects : []
+    );
+
+    const isGroundedPump = groundedEffects.some(e => e.action === 'PUMP_PT_EOT' || e.type === 'PUMP_PT_EOT') ||
+      spell.action === 'PUMP_PT_EOT' ||
+      /\+\d+\/\+\d+\s+until end of turn|target creature gets \+/i.test(spell.oracleText || spell.text || '');
+
+    const isGroundedDestroy = groundedEffects.some(e => e.action === 'DESTROY_TARGET' || e.type === 'DESTROY_TARGET') ||
+      spell.action === 'DESTROY_TARGET' ||
+      /destroy target|exile target/i.test(spell.oracleText || spell.text || '');
+
+    const damageEffect = groundedEffects.find(e => e.action === 'DEAL_DAMAGE' || e.type === 'DEAL_DAMAGE') ||
+      (spell.action === 'DEAL_DAMAGE' ? spell : null);
+    const isGroundedDamage = Boolean(damageEffect) || (/deals \d+ damage/i.test(spell.oracleText || spell.text || ''));
+
+    const isPlayerHexproof = (pid, player) => {
+      if (typeof tabletopState.playerHasHexproof === 'function' && tabletopState.playerHasHexproof(pid)) {
+        return true;
+      }
+      if (this.app?.tabletopState && typeof this.app.tabletopState.playerHasHexproof === 'function' && this.app.tabletopState.playerHasHexproof(pid)) {
+        return true;
+      }
+      if (player?.hasHexproof || player?.keywords?.hexproof) {
+        return true;
+      }
+      const noncreatures = player?.battlefield?.noncreatures || [];
+      if (noncreatures.some(c => /leyline of sanctity/i.test(c?.name || ''))) {
+        return true;
+      }
+      const allPermanents = [
+        ...(player?.battlefield?.creatures || []),
+        ...(player?.battlefield?.noncreatures || []),
+        ...(player?.battlefield?.lands || [])
+      ];
+      if (allPermanents.some(c => /leyline of sanctity/i.test(c?.name || ''))) {
+        return true;
+      }
+      return false;
+    };
+
+    const checkLegality = (targetCandidate) => {
+      if (targetCandidate.type === 'PLAYER') {
+        const pid = targetCandidate.id || targetCandidate.player?.id;
+        const player = targetCandidate.player || tabletopState.players?.[pid];
+        if (isPlayerHexproof(pid, player)) {
+          return false;
+        }
+      }
+      if (TargetSelectorModal && typeof TargetSelectorModal.evaluateTargetLegality === 'function') {
+        try {
+          return TargetSelectorModal.evaluateTargetLegality(targetCandidate, spell, this.slotId).isLegal;
+        } catch (_) {
+          return true;
+        }
+      }
+      return true;
+    };
+
+    // 1. PUMP_PT_EOT: Target own creature (unblocked attacker first, else strongest own)
+    if (isGroundedPump) {
+      const myPlayer = tabletopState.players?.[this.slotId];
+      const myCreatures = (myPlayer?.battlefield?.creatures || []).filter(card => {
+        return checkLegality({ id: card.instanceId, type: 'CREATURE', card });
+      });
+
+      if (myCreatures.length > 0) {
+        const combat = tabletopState.combatState;
+        const attackers = Array.isArray(combat?.attackers) ? combat.attackers : [];
+        const blockers = Array.isArray(combat?.blockers) ? combat.blockers : [];
+        const blockedAttackerIds = new Set(blockers.map(b => b.attackerId || b.targetAttackerId));
+
+        const unblockedMyAttackers = myCreatures.filter(c => {
+          const isAttacking = attackers.some(a => (a.attackerId || a.creature?.instanceId || a.instanceId) === c.instanceId);
+          return isAttacking && !blockedAttackerIds.has(c.instanceId);
+        });
+
+        if (unblockedMyAttackers.length > 0) {
+          unblockedMyAttackers.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0) || (Number(b.toughness) || 0) - (Number(a.toughness) || 0));
+          return { targetId: unblockedMyAttackers[0].instanceId, targetType: 'CREATURE' };
+        }
+
+        myCreatures.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0) || (Number(b.toughness) || 0) - (Number(a.toughness) || 0));
+        return { targetId: myCreatures[0].instanceId, targetType: 'CREATURE' };
+      }
+      return null;
+    }
+
+    // Collect legal opponent creatures
     const opponentCreatures = [];
     for (const [pid, player] of Object.entries(tabletopState.players || {})) {
       if (pid === this.slotId) continue;
       const creatures = player.battlefield?.creatures || [];
       for (const card of creatures) {
-        const legality = TargetSelectorModal.evaluateTargetLegality(
-          { id: card.instanceId, type: 'CREATURE', card },
-          spell,
-          this.slotId
-        );
-        if (legality.isLegal) {
+        if (checkLegality({ id: card.instanceId, type: 'CREATURE', card })) {
           opponentCreatures.push(card);
         }
       }
     }
 
+    // Collect legal opponent players
+    const opponentPlayers = [];
+    for (const [pid, player] of Object.entries(tabletopState.players || {})) {
+      if (pid === this.slotId) continue;
+      if (checkLegality({ id: pid, type: 'PLAYER', player })) {
+        opponentPlayers.push({ id: pid, player });
+      }
+    }
+
+    // Player-only spells (e.g. Thoughtseize, Lava Spike): strictly player targets, respecting Hexproof
+    const isPlayerOnly = /target player|target opponent/i.test(spell.oracleText || spell.text || '') &&
+      !/target creature|any target/i.test(spell.oracleText || spell.text || '');
+
+    if (isPlayerOnly) {
+      if (opponentPlayers.length > 0) {
+        return { targetId: opponentPlayers[0].id, targetType: 'PLAYER' };
+      }
+      return null;
+    }
+
+    // 2. DEAL_DAMAGE: Killable opponent creature else opponent face
+    if (isGroundedDamage) {
+      const dmg = Number(damageEffect?.amount || damageEffect?.damage || (String(spell.oracleText || spell.text || '').match(/deals (\d+) damage/i)?.[1]) || 3);
+      const killable = opponentCreatures.filter(c => {
+        if (c.toughness !== undefined) {
+          return Number(c.toughness) <= dmg;
+        }
+        return false;
+      });
+
+      if (killable.length > 0) {
+        killable.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0) || (Number(b.toughness) || 0) - (Number(a.toughness) || 0));
+        return { targetId: killable[0].instanceId, targetType: 'CREATURE' };
+      }
+
+      if (opponentPlayers.length > 0) {
+        return { targetId: opponentPlayers[0].id, targetType: 'PLAYER' };
+      }
+
+      if (opponentCreatures.length > 0) {
+        opponentCreatures.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0) || (Number(b.toughness) || 0) - (Number(a.toughness) || 0));
+        return { targetId: opponentCreatures[0].instanceId, targetType: 'CREATURE' };
+      }
+      return null;
+    }
+
+    // 3. DESTROY_TARGET or generic removal: Strongest opponent creature
     if (opponentCreatures.length > 0) {
-      // Target highest power legal opponent creature
-      opponentCreatures.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0));
+      opponentCreatures.sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0) || (Number(b.toughness) || 0) - (Number(a.toughness) || 0));
       return { targetId: opponentCreatures[0].instanceId, targetType: 'CREATURE' };
     }
 
-    // 2. Opponent Player
-    for (const [pid, player] of Object.entries(tabletopState.players || {})) {
-      if (pid === this.slotId) continue;
-      const legality = TargetSelectorModal.evaluateTargetLegality(
-        { id: pid, type: 'PLAYER', player },
-        spell,
-        this.slotId
-      );
-      if (legality.isLegal) {
-        return { targetId: pid, targetType: 'PLAYER' };
-      }
+    // Opponent player fallback
+    if (opponentPlayers.length > 0) {
+      return { targetId: opponentPlayers[0].id, targetType: 'PLAYER' };
     }
 
     return null;

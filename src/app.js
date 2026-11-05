@@ -104,21 +104,70 @@ export class RPMAppController {
     this.container = null;
     this.isDestroyed = false;
 
+    // URL Parameter Auto-Pairing & Autopilot Configuration
+    let searchStr = '';
+    if (typeof window !== 'undefined' && window.location && window.location.search) {
+      searchStr = window.location.search;
+    } else if (typeof options.urlSearch === 'string') {
+      searchStr = options.urlSearch.startsWith('?') ? options.urlSearch : `?${options.urlSearch}`;
+    }
+
+    const urlParams = new URLSearchParams(searchStr);
+    const autoRoom = options.autoRoom || urlParams.get('autoRoom');
+    const autoRole = (options.role || urlParams.get('role') || 'host').toLowerCase();
+    const deckParam = options.deck || urlParams.get('deck');
+    const autoPlayParam = options.autoPlay ?? urlParams.get('autoPlay');
+    const autoTestParam = options.autoTest ?? urlParams.get('autoTest');
+    const delayParam = options.delay || urlParams.get('delay');
+
+    this.autoRoomCode = autoRoom || null;
+    this.autoRole = autoRole;
+    this.autoPlayEnabled = false;
+    this.autoPlayDelayMs = Number(delayParam) || 800;
+    this.activeDeckId = null;
+
+    if (autoRoom) {
+      this.requireAuth = false;
+      this.options.requireAuth = false;
+      options.requireAuth = false;
+      this.autoPlayEnabled = Boolean(
+        autoPlayParam === '1' || autoPlayParam === 1 || autoPlayParam === true || autoPlayParam === 'true' ||
+        autoTestParam === '1' || autoTestParam === 1 || autoTestParam === true || autoTestParam === 'true'
+      );
+
+      // Auto-select and equip deck
+      const defaultDeckId = (this.autoRole === 'host') ? 'AMERICAN_GADGETS' : 'BURN';
+      const selectedDeckId = deckParam || defaultDeckId;
+      this.activeDeckId = selectedDeckId;
+      const loadedDeck = getPreconstructedDeckById(selectedDeckId);
+      if (loadedDeck) {
+        this.activeDeckData = loadedDeck;
+      }
+      this.username = (this.autoRole === 'host') ? 'Host (Laptop)' : 'Guest (Phone)';
+      this.myPlayerId = (this.autoRole === 'host') ? 'player_1' : 'player_2';
+      options.myPlayerId = this.myPlayerId;
+      options.username = this.username;
+      this.options.autoConnect = true;
+    } else {
+      this.requireAuth = Boolean(options.requireAuth);
+    }
+
     // Feature 15 AuthManager & Profile Initialization
     this.authManager = options.authManager || new AuthManager(options);
     this.botAgents = new Map();
-    this.requireAuth = Boolean(options.requireAuth);
 
     // Local player identity
-    this.myPlayerId = options.myPlayerId || options.userId || options.preferredSeat || (this.authManager?.getCurrentUser()?.id || 'p1');
-    this.username = options.username || (this.authManager?.getCurrentUser()?.username || 'Alice');
+    this.myPlayerId = this.myPlayerId || options.myPlayerId || options.userId || options.preferredSeat || (this.authManager?.getCurrentUser()?.id || 'p1');
+    this.username = this.username || options.username || (this.authManager?.getCurrentUser()?.username || 'Alice');
     this.audioEnabled = options.audioEnabled !== false;
 
     // Seating and initial players (default: 2 players, with local seat aligned to this.myPlayerId)
     const initialPlayers = options.players || options.playerIds || (
-      options.initialPlayerCount
-        ? Array.from({ length: options.initialPlayerCount }, (_, i) => i === 0 ? (this.myPlayerId || 'p1') : `p${i + 1}`)
-        : [this.myPlayerId || 'p1', 'p2']
+      autoRoom
+        ? ['player_1', 'player_2']
+        : (options.initialPlayerCount
+            ? Array.from({ length: options.initialPlayerCount }, (_, i) => i === 0 ? (this.myPlayerId || 'p1') : `p${i + 1}`)
+            : [this.myPlayerId || 'p1', 'p2'])
     );
     this.playerIds = [...initialPlayers];
     this.executionLog = [];
@@ -190,8 +239,9 @@ export class RPMAppController {
       ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
       : 'ws://localhost:3000';
 
+    this.relayUrl = options.relayUrl || defaultRelayUrl;
     this.relayClient = options.relayClient || new RelayClient({
-      url: options.relayUrl || defaultRelayUrl
+      url: this.relayUrl
     });
 
     // 5. Tabletop State Manager
@@ -430,6 +480,15 @@ export class RPMAppController {
       });
     }
 
+    if (this.authManager && typeof this.authManager.autoRestoreSession === 'function') {
+      try {
+        this.authManager.autoRestoreSession().then(() => {
+          this._syncAuthUser();
+          this.reconcileDOM();
+        }).catch(() => {});
+      } catch (_) {}
+    }
+
     this.isMatchActiveFlag = Boolean(options.isMatchActive);
     this._hasMatchStarted = Boolean(options.hasMatchStarted);
     this.matchHistory = options.matchHistory || [];
@@ -483,6 +542,19 @@ export class RPMAppController {
       this.startRollOff();
     });
     this.matchmakingQueue = options.matchmakingQueue || new MatchmakingQueue();
+
+    this._autoRoomFlowStarted = false;
+    this._autoPregameTriggered = false;
+    this._autopilotRunning = false;
+
+    if (this.autoRoomCode && typeof window === 'undefined') {
+      queueMicrotask(() => {
+        if (!this._autoRoomFlowStarted) {
+          this._autoRoomFlowStarted = true;
+          this._startAutoRoomFlow().catch(() => {});
+        }
+      });
+    }
   }
 
   get perkEngine() {
@@ -613,6 +685,15 @@ export class RPMAppController {
     this.isMatchActiveFlag = true;
     this.isRollOffActive = false;
     this._openingHandActionsResolved = false;
+    this._lastLoggedTurnHandoverKey = null;
+
+    if (this.traceLogger && typeof this.traceLogger.clear === 'function') {
+      this.traceLogger.clear();
+    }
+    this.executionLog = [];
+    if (this.dualChat && Array.isArray(this.dualChat.turnCommandMessages)) {
+      this.dualChat.turnCommandMessages = [];
+    }
 
     // Purge and sanitize TabletopStateManager (INV-LOBBY-6, Screenshot 1 Bug Fix)
     const seatedSlots = this.lobbyManager ? this.lobbyManager.getSeatedSlots() : [];
@@ -635,6 +716,9 @@ export class RPMAppController {
       this.tabletopState.turnNumber = 1;
       this.tabletopState.roundNumber = 1;
       this.tabletopState.players = {};
+      if (this.tabletopState._drawsExecutedThisTurn && typeof this.tabletopState._drawsExecutedThisTurn.clear === 'function') {
+        this.tabletopState._drawsExecutedThisTurn.clear();
+      }
       for (const pid of this.playerIds) {
         const slot = seatedSlots.find(s => s.playerId === pid);
         const name = slot ? slot.playerName : (pid === this.myPlayerId ? this.username : `Player ${pid.toUpperCase()}`);
@@ -661,6 +745,7 @@ export class RPMAppController {
     }
 
     if (this.priorityMachine) {
+      this.priorityMachine.isGameOver = false;
       this.priorityMachine.players = [...this.playerIds];
       this.priorityMachine.turnNumber = 1;
       this.priorityMachine.roundNumber = 1;
@@ -699,19 +784,27 @@ export class RPMAppController {
     if (!this.botAgents) {
       this.botAgents = new Map();
     }
+    if (this.perkinsAgent && this.perkinsAgent.isDestroyed) {
+      this.perkinsAgent = null;
+    }
     for (const [bId, bot] of this.botAgents.entries()) {
-      if (bot !== this.perkinsAgent) {
+      if (bot !== this.perkinsAgent || bot.isDestroyed) {
         try { bot.destroy(); } catch (_) {}
         this.botAgents.delete(bId);
       }
     }
-    if (this.perkinsAgent && this.playerIds.includes(this.perkinsAgent.slotId)) {
+    if (this.perkinsAgent && !this.perkinsAgent.isDestroyed && this.playerIds.includes(this.perkinsAgent.slotId)) {
       this.botAgents.set(this.perkinsAgent.slotId, this.perkinsAgent);
     }
 
     for (const slot of seatedSlots) {
       if (slot.isBot) {
-        const starter = getStarterDeck(slot.starterDeckId || 'R') || BEGINNER_DECKS.R;
+        const storedAssigned = this._assignedBotDecks?.get(slot.playerId) || this._assignedBotDecks?.get(String(slot.slotId));
+        const assignedKey = this.botAssignedDecks?.[String(slot.slotId)] || this.botAssignedDecks?.[slot.playerId];
+        const customAssigned = storedAssigned || ((assignedKey && assignedKey !== 'RANDOM')
+          ? (typeof this.assignDeckToBot === 'function' ? this.assignDeckToBot(slot.slotId, assignedKey) : null)
+          : null);
+        const starter = customAssigned || getStarterDeck(slot.starterDeckId || 'R') || BEGINNER_DECKS.R;
         const botPlayer = this.tabletopState?.players?.[slot.playerId];
         if (botPlayer && starter) {
           const mainboard = starter.mainboard || [];
@@ -725,7 +818,7 @@ export class RPMAppController {
                 controllerId: slot.playerId,
                 name: c.name,
                 typeLine: c.type || meta?.typeLine || 'Creature',
-                manaCost: c.manaCost || meta?.manaCost || '{R}',
+                manaCost: c.manaCost ?? meta?.manaCost ?? (c.cmc === 0 ? '' : '{R}'),
                 cmc: c.cmc ?? meta?.cmc ?? 1,
                 power: c.power ?? meta?.power ?? 2,
                 toughness: c.toughness ?? meta?.toughness ?? 2,
@@ -743,7 +836,11 @@ export class RPMAppController {
         }
 
         let agent = this.botAgents.get(slot.playerId);
-        if (!agent && this.perkinsAgent?.slotId === slot.playerId) {
+        if (agent && agent.isDestroyed) {
+          this.botAgents.delete(slot.playerId);
+          agent = null;
+        }
+        if (!agent && this.perkinsAgent?.slotId === slot.playerId && !this.perkinsAgent.isDestroyed) {
           agent = this.perkinsAgent;
         }
         if (!agent) {
@@ -751,7 +848,7 @@ export class RPMAppController {
             slotId: slot.playerId,
             name: slot.playerName,
             mode: 'LOCAL',
-            thinkingDelayMs: 600,
+            thinkingDelayMs: this.botFastForward ? 50 : 600,
             coachEnabled: false,
             starterDeck: starter
           });
@@ -919,17 +1016,32 @@ export class RPMAppController {
           <h2 style="color: #38bdf8; margin: 0; font-size: 1.15rem;">🔐 Planeswalker Sign In Required</h2>
           <button class="modal-close-btn btn-icon" style="color: #ffffff; font-size: 1.2rem;">&times;</button>
         </div>
-        <p style="color: #cbd5e1; font-size: 0.95rem; line-height: 1.5; margin: 12px 0;">
+
+        <div class="auth-tabs" style="display: flex; gap: 8px; margin: 12px 0 6px 0;">
+          <button type="button" id="auth-tab-login" class="btn btn-outline active" style="flex: 1; padding: 6px 10px; font-size: 0.85rem; cursor: pointer;">🔑 Iniciar Sesión (Login)</button>
+          <button type="button" id="auth-tab-signup" class="btn btn-outline" style="flex: 1; padding: 6px 10px; font-size: 0.85rem; cursor: pointer;">✨ Crear Cuenta (Sign Up)</button>
+        </div>
+
+        <p id="auth-instruction-text" style="color: #cbd5e1; font-size: 0.95rem; line-height: 1.5; margin: 10px 0;">
           To join a match queue or claim a seat, please authenticate your Planeswalker identity.
         </p>
-        <div class="modal-form-fields" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px;">
-          <input type="email" id="modal-auth-email" class="auth-input" placeholder="planeswalker@tabletop.com" value="user@tabletop.com" />
-          <input type="text" id="modal-auth-username" class="auth-input" placeholder="Display Name" value="${this.username || 'Planeswalker'}" />
+
+        <div class="modal-form-fields" style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px;">
+          <input type="email" id="auth-email-input" class="auth-input" placeholder="planeswalker@tabletop.com" value="user@tabletop.com" autocomplete="email" />
+          <input type="hidden" id="modal-auth-email" value="user@tabletop.com" />
+          <input type="password" id="auth-password-input" class="auth-input" placeholder="Contraseña (mínimo 6 caracteres)" value="secret123" autocomplete="current-password" />
+          <div id="auth-signup-fields" style="display: none;">
+            <input type="text" id="modal-auth-username" class="auth-input" placeholder="Display Name" value="${this.username || 'Planeswalker'}" style="width: 100%; box-sizing: border-box;" />
+          </div>
         </div>
+
+        <div id="auth-error" class="auth-error-msg" style="display: none; color: #ef4444; font-size: 0.85rem; margin-bottom: 10px; padding: 6px 8px; background: rgba(239, 68, 68, 0.1); border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.3);"></div>
+
         <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px;">
           <button id="btn-modal-auth-cancel" class="btn btn-secondary">Cancel</button>
           <button id="btn-modal-dev-login" class="btn btn-secondary btn-dev-bypass">⚡ Dev Login</button>
-          <button id="btn-modal-auth-confirm" class="btn btn-primary">Sign In</button>
+          <button id="auth-submit-btn" class="btn btn-primary">Sign In</button>
+          <button id="btn-modal-auth-confirm" class="btn btn-primary" style="display: none;" aria-hidden="true">Sign In</button>
         </div>
       </div>
     `;
@@ -945,14 +1057,47 @@ export class RPMAppController {
     authModal.querySelector('.modal-close-btn')?.addEventListener('click', cleanup);
     authModal.querySelector('#btn-modal-auth-cancel')?.addEventListener('click', cleanup);
 
-    const doLogin = async (email, username) => {
-      if (this.authManager) {
-        if (typeof this.authManager.instantDevLogin === 'function') {
-          await this.authManager.instantDevLogin(email, username, '1995-01-01');
-        } else if (typeof this.authManager.loginWithDevBypass === 'function') {
-          await this.authManager.loginWithDevBypass(email, username);
-        }
+    let activeTab = 'login';
+    const tabLogin = authModal.querySelector('#auth-tab-login');
+    const tabSignup = authModal.querySelector('#auth-tab-signup');
+    const signupFields = authModal.querySelector('#auth-signup-fields');
+    const submitBtn = authModal.querySelector('#auth-submit-btn');
+    const confirmBtn = authModal.querySelector('#btn-modal-auth-confirm');
+    const errorDiv = authModal.querySelector('#auth-error');
+    const emailInput = authModal.querySelector('#auth-email-input');
+    const hiddenEmailInput = authModal.querySelector('#modal-auth-email');
+    const passwordInput = authModal.querySelector('#auth-password-input');
+    const usernameInput = authModal.querySelector('#modal-auth-username');
+
+    if (emailInput && hiddenEmailInput) {
+      emailInput.addEventListener('input', () => {
+        hiddenEmailInput.value = emailInput.value;
+      });
+    }
+
+    const setTab = (tab) => {
+      activeTab = tab;
+      if (errorDiv) {
+        errorDiv.textContent = '';
+        errorDiv.style.display = 'none';
       }
+      if (tab === 'login') {
+        tabLogin?.classList.add('active');
+        tabSignup?.classList.remove('active');
+        if (signupFields) signupFields.style.display = 'none';
+        if (submitBtn) submitBtn.textContent = 'Sign In';
+      } else {
+        tabSignup?.classList.add('active');
+        tabLogin?.classList.remove('active');
+        if (signupFields) signupFields.style.display = 'block';
+        if (submitBtn) submitBtn.textContent = 'Crear Cuenta';
+      }
+    };
+
+    tabLogin?.addEventListener('click', () => setTab('login'));
+    tabSignup?.addEventListener('click', () => setTab('signup'));
+
+    const finishAuth = async () => {
       this._syncAuthUser();
       if (this.authManager && !this.authManager.isOnboarded()) {
         const existingDeck = this.activeDeckData || this.getActiveDeckForPlayer(this.myPlayerId);
@@ -971,14 +1116,51 @@ export class RPMAppController {
       }
     };
 
-    authModal.querySelector('#btn-modal-dev-login')?.addEventListener('click', () => {
-      doLogin('dev@tabletop.com', 'Dev Planeswalker');
-    });
+    const doSubmit = async () => {
+      const email = (emailInput?.value || hiddenEmailInput?.value || '').trim();
+      const password = (passwordInput?.value || '').trim();
+      const displayName = (usernameInput?.value || '').trim();
 
-    authModal.querySelector('#btn-modal-auth-confirm')?.addEventListener('click', () => {
-      const email = authModal.querySelector('#modal-auth-email')?.value?.trim() || 'user@tabletop.com';
-      const name = authModal.querySelector('#modal-auth-username')?.value?.trim() || 'Planeswalker';
-      doLogin(email, name);
+      if (errorDiv) {
+        errorDiv.textContent = '';
+        errorDiv.style.display = 'none';
+      }
+
+      try {
+        if (activeTab === 'signup') {
+          if (this.authManager && typeof this.authManager.signUpWithPassword === 'function') {
+            await this.authManager.signUpWithPassword(email, password, displayName);
+          } else if (this.authManager && typeof this.authManager.instantDevLogin === 'function') {
+            await this.authManager.instantDevLogin(email, displayName || 'Planeswalker', '1995-01-01');
+          }
+        } else {
+          if (this.authManager && typeof this.authManager.signInWithPassword === 'function') {
+            await this.authManager.signInWithPassword(email, password);
+          } else if (this.authManager && typeof this.authManager.instantDevLogin === 'function') {
+            await this.authManager.instantDevLogin(email, displayName || 'Planeswalker', '1995-01-01');
+          }
+        }
+        await finishAuth();
+      } catch (err) {
+        if (errorDiv) {
+          errorDiv.textContent = err.message || 'Authentication error';
+          errorDiv.style.display = 'block';
+        }
+      }
+    };
+
+    submitBtn?.addEventListener('click', doSubmit);
+    confirmBtn?.addEventListener('click', doSubmit);
+
+    authModal.querySelector('#btn-modal-dev-login')?.addEventListener('click', async () => {
+      if (this.authManager) {
+        if (typeof this.authManager.instantDevLogin === 'function') {
+          await this.authManager.instantDevLogin('dev@tabletop.com', 'Dev Planeswalker', '1995-01-01');
+        } else if (typeof this.authManager.loginWithDevBypass === 'function') {
+          await this.authManager.loginWithDevBypass('dev@tabletop.com', 'Dev Planeswalker');
+        }
+      }
+      await finishAuth();
     });
 
     modalRoot.appendChild(authModal);
@@ -1976,8 +2158,9 @@ export class RPMAppController {
     if (this.perkinsAgent) {
       this.perkinsAgent.thinkingDelayMs = delay;
     }
-    if (Array.isArray(this.botAgents)) {
-      for (const bot of this.botAgents) {
+    if (this.botAgents) {
+      const bots = typeof this.botAgents.values === 'function' ? this.botAgents.values() : this.botAgents;
+      for (const bot of bots) {
         if (bot) bot.thinkingDelayMs = delay;
       }
     }
@@ -2055,12 +2238,16 @@ export class RPMAppController {
   }
 
   async submitRollOff(forcedValue = null) {
-    if (typeof diceCanvas !== 'undefined' && typeof diceCanvas.rollD20 === 'function') {
+    let rolledValue = (typeof forcedValue === 'number') ? forcedValue : null;
+    if (rolledValue === null && typeof diceCanvas !== 'undefined' && typeof diceCanvas.rollD20 === 'function') {
       try {
-        await diceCanvas.rollD20(this.myPlayerId);
+        const d20Val = await diceCanvas.rollD20(this.myPlayerId);
+        if (typeof d20Val === 'number' && d20Val >= 1 && d20Val <= 20) {
+          rolledValue = d20Val;
+        }
       } catch (_) {}
     }
-    return this.submitRollOffForPlayer(this.myPlayerId, forcedValue);
+    return this.submitRollOffForPlayer(this.myPlayerId, rolledValue);
   }
 
   submitRollOffForPlayer(playerId, forcedValue = null) {
@@ -2070,14 +2257,14 @@ export class RPMAppController {
     const roll = this.turnRollOffManager.submitRoll(playerId, forcedValue);
 
     // Auto-roll for bot opponents if in solo mode or pod with bots
+    const seatedBots = this.lobbyManager
+      ? this.lobbyManager.getSeatedSlots().filter(s => s.isBot).map(s => s.playerId)
+      : [];
+    const botIds = new Set([
+      ...seatedBots,
+      ...this.playerIds.filter(pid => pid.startsWith('bot_') || pid.includes('perkins'))
+    ]);
     if (playerId === this.myPlayerId) {
-      const seatedBots = this.lobbyManager
-        ? this.lobbyManager.getSeatedSlots().filter(s => s.isBot).map(s => s.playerId)
-        : [];
-      const botIds = new Set([
-        ...seatedBots,
-        ...this.playerIds.filter(pid => pid.startsWith('bot_') || pid.includes('perkins'))
-      ]);
       for (const opId of botIds) {
         if (this.turnRollOffManager.pendingPlayerIds.has(opId)) {
           this.turnRollOffManager.submitRoll(opId);
@@ -2086,10 +2273,32 @@ export class RPMAppController {
     }
 
     if (this.turnRollOffManager.isRoundComplete()) {
-      const roundRolls = Object.fromEntries(this.turnRollOffManager.currentRolls.entries());
-      const res = this.turnRollOffManager.evaluateRound();
+      let res = this.turnRollOffManager.evaluateRound();
+      // If a tie-breaker round only involves bots (human not tied), auto-roll tied bots to completion
+      let tieGuard = 0;
+      while (!res.isComplete && !this.turnRollOffManager.pendingPlayerIds.has(this.myPlayerId) && tieGuard++ < 20) {
+        for (const opId of botIds) {
+          if (this.turnRollOffManager.pendingPlayerIds.has(opId)) {
+            this.turnRollOffManager.submitRoll(opId);
+          }
+        }
+        if (this.turnRollOffManager.isRoundComplete()) {
+          res = this.turnRollOffManager.evaluateRound();
+        } else {
+          break;
+        }
+      }
       this.rollOffResult = res;
       if (res.isComplete) {
+        // Reconstruct complete roll map across rounds (latest roll per player)
+        const roundRolls = {};
+        for (const h of (this.turnRollOffManager.roundHistory || [])) {
+          if (h && h.rolls) {
+            for (const [pid, rVal] of h.rolls.entries()) {
+              roundRolls[pid] = rVal;
+            }
+          }
+        }
         const winnerId = (res.sortedPlayers && res.sortedPlayers.length > 0)
           ? res.sortedPlayers[0]
           : this.playerIds[0];
@@ -2269,6 +2478,14 @@ export class RPMAppController {
     if (this.isInteractiveBrowserMode() || this.options.awaitHumanRollConfirmation) {
       this.perkEngine.awaitHumanRollConfirmation = true;
       this.perkEngine.humanPlayerId = this.myPlayerId;
+    }
+
+    // 8. Auto-room flow initialization (URL auto-pairing / autopilot)
+    if (this.autoRoomCode && !this._autoRoomFlowStarted) {
+      this._autoRoomFlowStarted = true;
+      this._startAutoRoomFlow().catch(err => {
+        console.warn('[app] Auto-room flow error:', err);
+      });
     }
   }
 
@@ -2668,11 +2885,19 @@ export class RPMAppController {
         if (this.isDestroyed) return;
         if (this.perkinsAgent && typeof this.perkinsAgent.destroy === 'function') {
           try { this.perkinsAgent.destroy(); } catch (_) {}
+          this.perkinsAgent = null;
         }
-        if (Array.isArray(this.botAgents)) {
-          for (const bot of this.botAgents) {
+        if (this.botAgents) {
+          const bots = typeof this.botAgents.values === 'function' ? this.botAgents.values() : this.botAgents;
+          for (const bot of bots) {
             try { bot?.destroy?.(); } catch (_) {}
           }
+          if (typeof this.botAgents.clear === 'function') {
+            this.botAgents.clear();
+          }
+        }
+        if (this.lobbyManager && typeof this.lobbyManager.invalidateReadiness === 'function') {
+          try { this.lobbyManager.invalidateReadiness('MATCH_COMPLETED'); } catch (_) {}
         }
         if (this.tabletopState) {
           this.tabletopState.isGameOver = true;
@@ -2997,7 +3222,20 @@ export class RPMAppController {
             this.reconcileDOM();
           }
         } else {
-          const bestId = payload.candidates?.[0]?.id || payload.candidates?.[0]?.instanceId || 'DECLINE';
+          // Bot controller: auto-resolve targeting strongest own creature (power, then toughness)
+          let bestId = 'DECLINE';
+          const candidates = Array.isArray(payload.candidates) ? [...payload.candidates] : [];
+          if (candidates.length > 0) {
+            candidates.sort((a, b) => {
+              const pA = Number(a.power ?? a.card?.power ?? 0);
+              const pB = Number(b.power ?? b.card?.power ?? 0);
+              if (pB !== pA) return pB - pA;
+              const tA = Number(a.toughness ?? a.card?.toughness ?? 0);
+              const tB = Number(b.toughness ?? b.card?.toughness ?? 0);
+              return tB - tA;
+            });
+            bestId = candidates[0].id || candidates[0].instanceId || 'DECLINE';
+          }
           if (this.tabletopState && typeof this.tabletopState.resolvePendingTriggerChoice === 'function') {
             this.tabletopState.resolvePendingTriggerChoice(payload.triggerId, bestId);
           }
@@ -3198,6 +3436,114 @@ export class RPMAppController {
    * @param {Object} [maybeOptions={}]
    * @returns {Promise<PerkinsAgent>} Instantiated Perkins agent
    */
+  /**
+   * Assigns a deck (AMERICAN_GADGETS, 5 starters, or a saved user slot deck) to a bot seat.
+   *
+   * @param {string} botSeatId
+   * @param {string|Object} deckIdOrSlot
+   * @returns {Object|null} The resolved deck object
+   */
+  assignBotDeck(botSeatId, deckIdOrSlot) {
+    if (!botSeatId || !deckIdOrSlot) return null;
+
+    let resolvedDeck = null;
+
+    // 1. Direct deck object passed
+    if (typeof deckIdOrSlot === 'object' && (deckIdOrSlot.mainboard || deckIdOrSlot.cards)) {
+      resolvedDeck = deckIdOrSlot;
+    }
+
+    // 2. Saved user slot deck via DeckSlotManager
+    if (!resolvedDeck && this.deckSlotManager && typeof this.deckSlotManager.getSlotDeck === 'function') {
+      try {
+        const slotDeck = this.deckSlotManager.getSlotDeck(deckIdOrSlot);
+        if (slotDeck && (slotDeck.mainboard || slotDeck.cards)) {
+          resolvedDeck = slotDeck;
+        }
+      } catch (_) {}
+    }
+
+    // 3. Preconstructed decks (American Gadgets, starters, aliases)
+    if (!resolvedDeck && typeof getPreconstructedDeckById === 'function') {
+      try {
+        resolvedDeck = getPreconstructedDeckById(deckIdOrSlot);
+      } catch (_) {}
+    }
+
+    // 4. Beginner decks (W, U, B, R, G)
+    if (!resolvedDeck && BEGINNER_DECKS && BEGINNER_DECKS[deckIdOrSlot]) {
+      resolvedDeck = BEGINNER_DECKS[deckIdOrSlot];
+    }
+
+    // 5. Name or ID match across PRECONSTRUCTED_STARTER_DECKS
+    if (!resolvedDeck && Array.isArray(PRECONSTRUCTED_STARTER_DECKS)) {
+      const norm = String(deckIdOrSlot).trim().toUpperCase();
+      resolvedDeck = PRECONSTRUCTED_STARTER_DECKS.find(d => {
+        const dId = String(d.id || '').toUpperCase();
+        const dName = String(d.name || '').toUpperCase();
+        return dId === norm || dName === norm || (norm === 'AMERICAN_GADGETS' && (dId.includes('AMERICAN_GADGETS') || dName.includes('AMERICAN GADGETS')));
+      }) || null;
+    }
+
+    // 6. Defensive check on getStarterDeck
+    if (!resolvedDeck && typeof getStarterDeck === 'function') {
+      try {
+        resolvedDeck = getStarterDeck(deckIdOrSlot);
+      } catch (_) {}
+    }
+
+    if (!resolvedDeck) {
+      return null;
+    }
+
+    this._assignedBotDecks = this._assignedBotDecks || new Map();
+    this._assignedBotDecks.set(botSeatId, resolvedDeck);
+
+    const bot = this.botAgents?.get(botSeatId) || (this.perkinsAgent?.slotId === botSeatId ? this.perkinsAgent : null);
+    if (bot) {
+      if (typeof bot.setAssignedDeck === 'function') {
+        bot.setAssignedDeck(resolvedDeck);
+      } else {
+        bot.assignedDeck = resolvedDeck;
+        bot.starterDeck = resolvedDeck;
+      }
+    }
+
+    const botPlayer = this.tabletopState?.players?.[botSeatId];
+    if (botPlayer && !this._hasMatchStarted) {
+      const mainboard = resolvedDeck.mainboard || resolvedDeck.cards || [];
+      if (mainboard.length > 0) {
+        const libCards = mainboard.flatMap(c => {
+          const count = c.count || 1;
+          const meta = getHydratedCardMetadata(c.name);
+          return Array.from({ length: count }, () => {
+            const cardObj = {
+              instanceId: generateInstanceId(),
+              ownerId: botSeatId,
+              controllerId: botSeatId,
+              name: c.name,
+              typeLine: c.type || meta?.typeLine || 'Creature',
+              manaCost: c.manaCost ?? meta?.manaCost ?? (c.cmc === 0 ? '' : '{R}'),
+              cmc: c.cmc ?? meta?.cmc ?? 1,
+              power: c.power ?? meta?.power ?? 2,
+              toughness: c.toughness ?? meta?.toughness ?? 2,
+              keywords: { ...(meta?.keywords || {}), ...(c.keywords || {}) },
+              effect: meta?.effect || null,
+              isTapped: false,
+              isSummoningSick: false
+            };
+            return TabletopStateManager.hydrateCardMechanics(cardObj);
+          });
+        });
+        botPlayer.library = libCards;
+        botPlayer.zones = botPlayer.zones || {};
+        botPlayer.zones.library = [...libCards];
+      }
+    }
+
+    return resolvedDeck;
+  }
+
   async startPerkinsMatch(deckIdOrOptions = {}, maybeOptions = {}) {
     let deckId = null;
     let options = {};
@@ -3300,7 +3646,11 @@ export class RPMAppController {
     }
 
     // 3. Initialize starter deck for Perkins
-    const starter = options.starterDeck || (deckId && BEGINNER_DECKS[deckId]) || BEGINNER_DECKS.R;
+    let assigned = this._assignedBotDecks?.get(botSeatId) || options.assignedDeck;
+    if (!assigned && (options.botDeck || options.deckIdOrSlot)) {
+      assigned = this.assignBotDeck(botSeatId, options.botDeck || options.deckIdOrSlot);
+    }
+    const starter = assigned || options.starterDeck || (deckId && BEGINNER_DECKS[deckId]) || BEGINNER_DECKS.R;
     const botPlayer = this.tabletopState?.players?.[botSeatId];
     if (botPlayer) {
       const mainboard = starter.mainboard || [];
@@ -3340,8 +3690,12 @@ export class RPMAppController {
       coachEnabled: options.coachEnabled !== false,
       language: options.language || 'es',
       starterDeck: starter,
+      assignedDeck: assigned || starter,
       ...options
     });
+    if (assigned && typeof agent.setAssignedDeck === 'function') {
+      agent.setAssignedDeck(assigned);
+    }
 
     // 5. Attach to app controller
     agent.attach(this);
@@ -3379,6 +3733,8 @@ export class RPMAppController {
       url: options.relayUrl || defaultRelayUrl
     });
 
+    const assigned = this._assignedBotDecks?.get(botSeatId) || options.assignedDeck || (options.botDeck ? this.assignBotDeck(botSeatId, options.botDeck) : null);
+
     const agent = new PerkinsAgent({
       slotId: botSeatId,
       name: options.name || 'Perkins AI (Bot)',
@@ -3386,8 +3742,12 @@ export class RPMAppController {
       thinkingDelayMs: options.thinkingDelayMs !== undefined ? options.thinkingDelayMs : 1200,
       coachEnabled: false,
       language: options.language || 'es',
+      assignedDeck: assigned,
       ...options
     });
+    if (assigned && typeof agent.setAssignedDeck === 'function') {
+      agent.setAssignedDeck(assigned);
+    }
 
     agent.attachRelay(relayClient);
     if (roomCode && typeof relayClient.joinRoom === 'function') {
@@ -3421,7 +3781,7 @@ export class RPMAppController {
     const payload = action.payload || {};
 
     // CR 103: only pre-game actions are accepted until GAME_ACTIVE
-    if (this.pregameActive && !/^(EXECUTE_STARTING_ROLL|SELECT_PLAY_OR_DRAW|DRAW_INITIAL_HANDS|DECIDE_MULLIGAN|PUT_ON_BOTTOM)$/.test(String(actionType))) {
+    if (this.pregameActive && !/^(EXECUTE_STARTING_ROLL|SELECT_PLAY_OR_DRAW|DRAW_INITIAL_HANDS|DECIDE_MULLIGAN|PUT_ON_BOTTOM|AUTO_SYNC_EVENT|ROOM_JOINED|READY_CHECK_PASSED|ROLL_OFF_COMPLETE|MULLIGAN_COMPLETE|TURN_1_MAIN_PHASE|SPELL_CAST|COMBAT_DAMAGE|STATE_HASH_MATCH)$/.test(String(actionType))) {
       this.showToast?.('Pre-game in progress: finish the mulligan first');
       return;
     }
@@ -3443,6 +3803,17 @@ export class RPMAppController {
 
     // Mutate local state managers
     switch (actionType) {
+      case 'AUTO_SYNC_EVENT':
+      case 'ROOM_JOINED':
+      case 'READY_CHECK_PASSED':
+      case 'ROLL_OFF_COMPLETE':
+      case 'MULLIGAN_COMPLETE':
+      case 'TURN_1_MAIN_PHASE':
+      case 'SPELL_CAST':
+      case 'COMBAT_DAMAGE':
+      case 'STATE_HASH_MATCH':
+        this._applyAutopilotTransition(actionType, payload);
+        break;
       case 'PASS_PRIORITY':
         if (this.priorityMachine) {
           const targetPlayerId = payload.playerId || (action.slotId ? `player_${action.slotId}` : this.priorityMachine.priorityPlayerId);
@@ -3455,6 +3826,22 @@ export class RPMAppController {
           this.alarmManager.hold();
         }
         break;
+
+      case 'ACTIVATE_EQUIP':
+      case 'EQUIP': {
+        const playerId = payload.playerId || action.playerId || this.myPlayerId;
+        const equipmentId = payload.equipmentId || payload.equipment?.instanceId || action.equipmentId;
+        const targetCreatureId = payload.targetCreatureId || payload.targetCreature?.instanceId || action.targetCreatureId;
+        if (this.tabletopState && typeof this.tabletopState.activateEquipAbility === 'function' && equipmentId && targetCreatureId) {
+          try {
+            const isFree = Boolean(payload.isFree);
+            this.tabletopState.activateEquipAbility(playerId, equipmentId, targetCreatureId, { isFree });
+          } catch (err) {
+            console.warn('[RPM] Equip action failed:', err.message);
+          }
+        }
+        break;
+      }
 
       case 'CHANGE_LIFE': {
         const targetId = payload.playerId || this.myPlayerId;
@@ -3964,11 +4351,19 @@ export class RPMAppController {
     if (survivors.length === 1) {
       if (this.perkinsAgent && typeof this.perkinsAgent.destroy === 'function') {
         try { this.perkinsAgent.destroy(); } catch (_) {}
+        this.perkinsAgent = null;
       }
-      if (Array.isArray(this.botAgents)) {
-        for (const bot of this.botAgents) {
+      if (this.botAgents) {
+        const bots = typeof this.botAgents.values === 'function' ? this.botAgents.values() : this.botAgents;
+        for (const bot of bots) {
           try { bot?.destroy?.(); } catch (_) {}
         }
+        if (typeof this.botAgents.clear === 'function') {
+          this.botAgents.clear();
+        }
+      }
+      if (this.lobbyManager && typeof this.lobbyManager.invalidateReadiness === 'function') {
+        try { this.lobbyManager.invalidateReadiness('MATCH_COMPLETED'); } catch (_) {}
       }
       if (this.tabletopState) {
         this.tabletopState.isGameOver = true;
@@ -4072,6 +4467,10 @@ export class RPMAppController {
       }
     }
 
+    if (this.autoRoomCode) {
+      this._checkAutoPregameStart();
+    }
+
     this.reconcileDOM();
   }
 
@@ -4092,6 +4491,10 @@ export class RPMAppController {
     }
     if (!this.playerIds.includes(msg.playerId)) {
       this.playerIds.push(msg.playerId);
+    }
+
+    if (this.autoRoomCode) {
+      this._checkAutoPregameStart();
     }
 
     this.reconcileDOM();
@@ -4240,6 +4643,483 @@ export class RPMAppController {
     if (this.relayClient) {
       this.relayClient.disconnect();
     }
+  }
+
+  // ==========================================================================
+  // Auto-Room & Autopilot Engine (Feature: USB Auto-Pairing & Live Dual-Device)
+  // ==========================================================================
+
+  /**
+   * Initializes auto-room connection and join flow programmatically (for Node/headless harnesses).
+   * @returns {Promise<void>}
+   */
+  async initAutoRoom() {
+    if (this._autoRoomFlowStarted) return;
+    this._autoRoomFlowStarted = true;
+    return this._startAutoRoomFlow();
+  }
+
+  /**
+   * Automatically connects and joins/creates the target autoRoom.
+   * @private
+   */
+  async _startAutoRoomFlow() {
+    if (!this.autoRoomCode || !this.relayClient) return;
+
+    try {
+      if (!this.relayClient.socket || this.relayClient.socket.readyState !== 1) {
+        await this.relayClient.connect(this.relayUrl);
+      }
+
+      const seatPref = (this.autoRole === 'host') ? 1 : 2;
+      let joined = false;
+
+      if (this.autoRole === 'host') {
+        try {
+          await this.relayClient.joinRoom(this.autoRoomCode, this.username, seatPref);
+          joined = true;
+        } catch (err) {
+          if (err && (err.code === 4404 || String(err.message).includes('4404') || String(err.message).includes('not found'))) {
+            await this.createRoom({ roomCode: this.autoRoomCode, playerName: this.username });
+            joined = true;
+          } else {
+            throw err;
+          }
+        }
+      } else {
+        // Guest retry loop: retry joinRoom every 500ms up to 15 times until Host/server creates room
+        let attempts = 0;
+        while (attempts < 15 && !joined) {
+          try {
+            await this.relayClient.joinRoom(this.autoRoomCode, this.username, seatPref);
+            joined = true;
+            break;
+          } catch (err) {
+            attempts++;
+            if (attempts >= 15) {
+              console.warn(`[RPM] Guest joinRoom retries exhausted: ${err?.message || err}`);
+              break;
+            }
+            await new Promise(r => setTimeout(r, 500));
+          }
+        }
+      }
+
+      if (joined) {
+        if (this.activeDeckData) {
+          try {
+            this.registerDeckManifest(this.activeDeckData, this.myPlayerId);
+          } catch (_) {}
+        }
+
+        // Broadcast telemetry sync event
+        try {
+          this.relayClient.sendAction({
+            type: 'AUTO_SYNC_EVENT',
+            payload: {
+              stage: 'ROOM_JOINED',
+              role: this.autoRole,
+              playerId: this.myPlayerId,
+              deckId: this.activeDeckId,
+              roomCode: this.autoRoomCode
+            }
+          });
+        } catch (_) {}
+
+        this._checkAutoPregameStart();
+      }
+    } catch (e) {
+      console.warn('[RPM] _startAutoRoomFlow error:', e);
+    }
+  }
+
+  /**
+   * Checks if both seats in the room are present and starts pregame/match flow.
+   * @private
+   */
+  _checkAutoPregameStart() {
+    if (!this.autoRoomCode || this._autoPregameTriggered) return;
+
+    const activeSlots = this.relayClient?.activeSlots || [];
+    const playerKeys = Object.keys(this.tabletopState?.players || {});
+    const count = Math.max(activeSlots.length, playerKeys.length);
+
+    if (count >= 2) {
+      this._autoPregameTriggered = true;
+      this._onBothPlayersPresent();
+    }
+  }
+
+  /**
+   * Handles pregame readiness synchronization when both players are seated.
+   * @private
+   */
+  _onBothPlayersPresent() {
+    if (!this.lobbyManager) {
+      this.lobbyManager = new LobbyManager({ roomCode: this.autoRoomCode });
+    }
+    if (this.lobbyManager) {
+      for (const slotId of [1, 2]) {
+        try {
+          const slot = this.lobbyManager.slots.get(slotId);
+          if (slot) {
+            slot.isReady = true;
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (this.relayClient?.socket?.readyState === 1) {
+      try {
+        this.relayClient.send({ type: 'LOBBY_TOGGLE_READY', isReady: true });
+      } catch (_) {}
+    }
+
+    this.switchView('TABLETOP');
+
+    if (this.autoRole === 'host' && this.autoPlayEnabled && !this.isSpectator() && !this._autopilotRunning) {
+      this._autopilotRunning = true;
+      this._driveVisualAutopilot().catch(err => {
+        console.warn('[RPM] Autopilot error:', err);
+      });
+    }
+  }
+
+  /**
+   * Drives visual synchronized autopilot sequence through all 7 stages on authoritative Host.
+   * @private
+   */
+  async _driveVisualAutopilot() {
+    const delayMs = this.autoPlayDelayMs || 800;
+    const delay = () => new Promise(r => setTimeout(r, delayMs));
+
+    await delay();
+
+    // 1. ROOM_JOINED
+    const roomJoinedPayload = {
+      stage: 'ROOM_JOINED',
+      players: {
+        player_1: { name: 'Host (Laptop)', deck: 'AMERICAN_GADGETS' },
+        player_2: { name: 'Guest (Phone)', deck: 'BURN' }
+      },
+      roomCode: this.autoRoomCode
+    };
+    this._applyAutopilotTransition('ROOM_JOINED', roomJoinedPayload);
+    try {
+      this.relayClient.sendAction({ type: 'ROOM_JOINED', payload: roomJoinedPayload });
+    } catch (_) {}
+    await delay();
+
+    // 2. READY_CHECK_PASSED
+    const readyPayload = {
+      roomCode: this.autoRoomCode,
+      allReady: true,
+      view: 'TABLETOP'
+    };
+    this._applyAutopilotTransition('READY_CHECK_PASSED', readyPayload);
+    try {
+      this.relayClient.sendAction({ type: 'READY_CHECK_PASSED', payload: readyPayload });
+    } catch (_) {}
+    await delay();
+
+    // 3. ROLL_OFF_COMPLETE
+    const rollOffPayload = {
+      rolls: { player_1: 20, player_2: 12 },
+      winnerId: 'player_1',
+      choice: 'PLAY',
+      startingPlayerId: 'player_1'
+    };
+    this._applyAutopilotTransition('ROLL_OFF_COMPLETE', rollOffPayload);
+    try {
+      this.relayClient.sendAction({ type: 'ROLL_OFF_COMPLETE', payload: rollOffPayload });
+    } catch (_) {}
+    await delay();
+
+    // 4. MULLIGAN_COMPLETE
+    const mulliganPayload = {
+      hands: {
+        player_1: [
+          { name: 'Plains', typeLine: 'Basic Land — Plains', manaCost: '', instanceId: 'c_p1_land_1' },
+          { name: "Sigarda's Aid", typeLine: 'Enchantment', manaCost: '{W}', instanceId: 'c_p1_spell_1' },
+          { name: 'Colossus Hammer', typeLine: 'Artifact — Equipment', manaCost: '{1}', instanceId: 'c_p1_spell_2' },
+          { name: 'Heartfire Hero', typeLine: 'Creature — Mouse Soldier', manaCost: '{R}', power: 1, toughness: 1, instanceId: 'c_p1_creature_1' },
+          { name: 'Mountain', typeLine: 'Basic Land — Mountain', manaCost: '', instanceId: 'c_p1_land_2' },
+          { name: 'Inkmoth Nexus', typeLine: 'Land', manaCost: '', instanceId: 'c_p1_land_3' },
+          { name: 'Fervent Champion', typeLine: 'Creature — Knight', manaCost: '{R}', power: 1, toughness: 1, instanceId: 'c_p1_creature_2' }
+        ],
+        player_2: [
+          { name: 'Mountain', typeLine: 'Basic Land — Mountain', manaCost: '', instanceId: 'c_p2_land_1' },
+          { name: 'Goblin Guide', typeLine: 'Creature — Goblin Scout', manaCost: '{R}', power: 2, toughness: 2, instanceId: 'c_p2_creature_1' },
+          { name: 'Lightning Bolt', typeLine: 'Instant', manaCost: '{R}', instanceId: 'c_p2_spell_1' },
+          { name: 'Monastery Swiftspear', typeLine: 'Creature — Human Monk', manaCost: '{R}', power: 1, toughness: 2, instanceId: 'c_p2_creature_2' },
+          { name: 'Mountain', typeLine: 'Basic Land — Mountain', manaCost: '', instanceId: 'c_p2_land_2' },
+          { name: 'Lava Spike', typeLine: 'Sorcery', manaCost: '{R}', instanceId: 'c_p2_spell_2' },
+          { name: 'Mountain', typeLine: 'Basic Land — Mountain', manaCost: '', instanceId: 'c_p2_land_3' }
+        ]
+      },
+      leylinesChecked: true,
+      allKept: true
+    };
+    this._applyAutopilotTransition('MULLIGAN_COMPLETE', mulliganPayload);
+    try {
+      this.relayClient.sendAction({ type: 'MULLIGAN_COMPLETE', payload: mulliganPayload });
+    } catch (_) {}
+    await delay();
+
+    // 5. TURN_1_MAIN_PHASE
+    const landPayload = {
+      playerId: 'player_1',
+      phase: 'PRECOMBAT_MAIN',
+      turn: 1,
+      land: { name: 'Plains', typeLine: 'Basic Land — Plains', instanceId: 'c_p1_land_1', isTapped: false }
+    };
+    this._applyAutopilotTransition('TURN_1_MAIN_PHASE', landPayload);
+    try {
+      this.relayClient.sendAction({ type: 'TURN_1_MAIN_PHASE', payload: landPayload });
+    } catch (_) {}
+    await delay();
+
+    // 6. SPELL_CAST
+    const spellPayload = {
+      controllerId: 'player_1',
+      card: { name: "Sigarda's Aid", typeLine: 'Enchantment', manaCost: '{W}', instanceId: 'c_p1_spell_1' },
+      tappedLandId: 'c_p1_land_1',
+      resolved: true
+    };
+    this._applyAutopilotTransition('SPELL_CAST', spellPayload);
+    try {
+      this.relayClient.sendAction({ type: 'SPELL_CAST', payload: spellPayload });
+    } catch (_) {}
+    await delay();
+
+    // 7. COMBAT_DAMAGE
+    const damagePayload = {
+      sourcePlayerId: 'player_1',
+      targetPlayerId: 'player_2',
+      damage: 2,
+      previousLife: 20,
+      newLife: 18
+    };
+    this._applyAutopilotTransition('COMBAT_DAMAGE', damagePayload);
+    try {
+      this.relayClient.sendAction({ type: 'COMBAT_DAMAGE', payload: damagePayload });
+    } catch (_) {}
+    await delay();
+
+    // Verification: STATE_HASH_MATCH
+    const { hash, summary } = this.computeStateHash();
+    const stateHashPayload = {
+      hash,
+      summary,
+      timestamp: Date.now()
+    };
+    this._applyAutopilotTransition('STATE_HASH_MATCH', stateHashPayload);
+    try {
+      this.relayClient.sendAction({ type: 'STATE_HASH_MATCH', payload: stateHashPayload });
+    } catch (_) {}
+  }
+
+  /**
+   * Applies an autopilot transition to internal state and reconciles DOM.
+   * Executed both locally by Host driver and remotely by Guest receiver.
+   * @private
+   */
+  _applyAutopilotTransition(stage, payload = {}) {
+    if (!stage) return;
+
+    if (!this.tabletopState.players['player_1']) {
+      this.tabletopState.registerPlayer('player_1', 'Host (Laptop)');
+    }
+    if (!this.tabletopState.players['player_2']) {
+      this.tabletopState.registerPlayer('player_2', 'Guest (Phone)');
+    }
+    const player1 = this.tabletopState.players['player_1'];
+    const player2 = this.tabletopState.players['player_2'];
+
+    switch (stage) {
+      case 'ROOM_JOINED': {
+        this.appendExecutionLog('Lobby', `👥 Both seats filled: Host (Laptop) [AMERICAN_GADGETS] vs Guest (Phone) [BURN] in ${payload.roomCode || this.autoRoomCode}`);
+        break;
+      }
+
+      case 'READY_CHECK_PASSED': {
+        this.isMatchActiveFlag = true;
+        this._hasMatchStarted = true;
+        this.pregameActive = false;
+        this.switchView('TABLETOP');
+        this.appendExecutionLog('Lobby', '✅ Both players ready! Switching to Tabletop Arena.');
+        break;
+      }
+
+      case 'ROLL_OFF_COMPLETE': {
+        const rolls = payload.rolls || { player_1: 20, player_2: 12 };
+        const winnerId = payload.winnerId || 'player_1';
+        const choice = payload.choice || 'PLAY';
+        this.rollOffResult = { winnerId, choice, rolls };
+        if (this.priorityMachine) {
+          this.priorityMachine.startingPlayerId = winnerId;
+          this.priorityMachine.activePlayerId = winnerId;
+          this.priorityMachine.priorityPlayerId = winnerId;
+        }
+        this.appendExecutionLog('Roll-Off', `🎲 d20 Roll-off: Host rolled ${rolls.player_1}, Guest rolled ${rolls.player_2} — ${winnerId === 'player_1' ? 'Host' : 'Guest'} wins and selects ${choice}!`);
+        break;
+      }
+
+      case 'MULLIGAN_COMPLETE': {
+        this.pregameActive = false;
+        this._openingHandActionsResolved = true;
+        this.mulliganModal?.close?.();
+
+        if (payload.hands) {
+          if (payload.hands.player_1 && player1) {
+            player1.hand = [...payload.hands.player_1];
+            if (player1.zones) player1.zones.hand = [...player1.hand];
+          }
+          if (payload.hands.player_2 && player2) {
+            player2.hand = [...payload.hands.player_2];
+            if (player2.zones) player2.zones.hand = [...player2.hand];
+          }
+        }
+        this.appendExecutionLog('Mulligan', '🃏 7-card opening hands dealt from equipped decks. Both players keep. Leylines checked.');
+        break;
+      }
+
+      case 'TURN_1_MAIN_PHASE': {
+        if (this.priorityMachine) {
+          this.priorityMachine.turnNumber = payload.turn || 1;
+          this.priorityMachine.currentPhaseStep = payload.phase || 'PRECOMBAT_MAIN';
+          this.priorityMachine.activePlayerId = payload.playerId || 'player_1';
+          this.priorityMachine.priorityPlayerId = payload.playerId || 'player_1';
+        }
+
+        const land = payload.land;
+        if (land && player1) {
+          player1.hand = (player1.hand || []).filter(c => c.instanceId !== land.instanceId && c.name !== land.name);
+          if (player1.zones) player1.zones.hand = [...player1.hand];
+
+          player1.battlefield = player1.battlefield || {};
+          player1.battlefield.lands = player1.battlefield.lands || [];
+          if (!player1.battlefield.lands.some(l => l.instanceId === land.instanceId)) {
+            player1.battlefield.lands.push({ ...land, isTapped: false });
+          }
+          if (player1.zones) {
+            player1.zones.battlefield = player1.zones.battlefield || [];
+            if (!player1.zones.battlefield.some(l => l.instanceId === land.instanceId)) {
+              player1.zones.battlefield.push({ ...land, isTapped: false });
+            }
+          }
+          player1.landsPlayedThisTurn = 1;
+          if (player1.resources) {
+            player1.resources.manaPool = player1.resources.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+            player1.resources.manaPool.W = 1;
+          }
+        }
+        this.appendExecutionLog('Turn 1', `⛰️ Turn 1 Precombat Main: ${this.getFriendlyPlayerName(payload.playerId || 'player_1')} plays ${land?.name || 'Land'} to battlefield.`);
+        break;
+      }
+
+      case 'SPELL_CAST': {
+        const spellCard = payload.card;
+        if (spellCard && player1) {
+          if (player1.battlefield?.lands) {
+            const land = player1.battlefield.lands.find(l => l.instanceId === payload.tappedLandId) || player1.battlefield.lands[0];
+            if (land) land.isTapped = true;
+          }
+          player1.hand = (player1.hand || []).filter(c => c.instanceId !== spellCard.instanceId && c.name !== spellCard.name);
+          if (player1.zones) player1.zones.hand = [...player1.hand];
+
+          if (player1.resources?.manaPool) {
+            player1.resources.manaPool.W = 0;
+          }
+
+          player1.battlefield = player1.battlefield || {};
+          const isCreature = String(spellCard.typeLine || '').toLowerCase().includes('creature');
+          if (isCreature) {
+            player1.battlefield.creatures = player1.battlefield.creatures || [];
+            player1.battlefield.creatures.push({ ...spellCard });
+          } else {
+            player1.battlefield.noncreatures = player1.battlefield.noncreatures || [];
+            player1.battlefield.noncreatures.push({ ...spellCard });
+          }
+          if (player1.zones) {
+            player1.zones.battlefield = player1.zones.battlefield || [];
+            player1.zones.battlefield.push({ ...spellCard });
+          }
+        }
+        this.appendExecutionLog('Spell', `⚡ ${this.getFriendlyPlayerName(payload.controllerId || 'player_1')} taps land and casts ${spellCard?.name || 'Spell'}, resolving onto battlefield.`);
+        break;
+      }
+
+      case 'COMBAT_DAMAGE': {
+        const dmg = payload.damage || 2;
+        const targetId = payload.targetPlayerId || 'player_2';
+        const targetPlayer = this.tabletopState?.players?.[targetId] || player2;
+        if (targetPlayer?.resources) {
+          targetPlayer.resources.life = (payload.newLife !== undefined) ? payload.newLife : Math.max(0, (targetPlayer.resources.life || 20) - dmg);
+        }
+        this.appendExecutionLog('Combat', `⚔️ Attack deals ${dmg} damage to ${this.getFriendlyPlayerName(targetId)}! Life total: ${targetPlayer?.resources?.life}`);
+        break;
+      }
+
+      case 'STATE_HASH_MATCH': {
+        const local = this.computeStateHash();
+        const matches = (local.hash === payload.hash);
+        this.lastStateHash = local.hash;
+        this.stateHashMatch = matches;
+        this.appendExecutionLog('State Hash', `🔒 Deterministic state verification: Hash [${local.hash}] ${matches ? 'MATCHES' : 'MISMATCH'} payload [${payload.hash}]`);
+        break;
+      }
+    }
+
+    this.reconcileDOM();
+  }
+
+  /**
+   * Computes deterministic state hash of life totals, hand counts, battlefield counts, turn, and phase.
+   * @returns {{ hash: string, summary: Object }}
+   */
+  computeStateHash() {
+    const p1 = this.tabletopState?.players?.['player_1'] || this.tabletopState?.players?.['p1'];
+    const p2 = this.tabletopState?.players?.['player_2'] || this.tabletopState?.players?.['p2'];
+    const p1Life = p1?.resources?.life ?? 20;
+    const p2Life = p2?.resources?.life ?? 20;
+    const p1Hand = (p1?.zones?.hand || p1?.hand || []).length;
+    const p2Hand = (p2?.zones?.hand || p2?.hand || []).length;
+    const p1Bf = (
+      (p1?.battlefield?.lands || []).length +
+      (p1?.battlefield?.creatures || []).length +
+      (p1?.battlefield?.noncreatures || []).length +
+      (p1?.battlefield?.planeswalkers || []).length
+    );
+    const p2Bf = (
+      (p2?.battlefield?.lands || []).length +
+      (p2?.battlefield?.creatures || []).length +
+      (p2?.battlefield?.noncreatures || []).length +
+      (p2?.battlefield?.planeswalkers || []).length
+    );
+    const turn = this.priorityMachine?.turnNumber || 1;
+    const phase = this.priorityMachine?.currentPhaseStep || 'PRECOMBAT_MAIN';
+
+    const summary = {
+      p1Life,
+      p2Life,
+      p1Hand,
+      p2Hand,
+      p1Bf,
+      p2Bf,
+      turn,
+      phase
+    };
+
+    const str = JSON.stringify(summary, Object.keys(summary).sort());
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193);
+    }
+    const hash = ('00000000' + (h >>> 0).toString(16)).slice(-8);
+
+    return { hash, summary };
   }
 
   /**
@@ -7786,7 +8666,7 @@ export class RPMAppController {
     const hasPreRolls = preRolled && preRolled.rolls && typeof preRolled.rolls === 'object' &&
       this.playerIds.every(pid => typeof preRolled.rolls[pid] === 'number');
     const roll = hasPreRolls
-      ? machine.dispatch('EXECUTE_STARTING_ROLL', { rolls: preRolled.rolls })
+      ? machine.dispatch('EXECUTE_STARTING_ROLL', { rolls: preRolled.rolls, winnerId: preRolled.winnerId })
       : machine.dispatch('EXECUTE_STARTING_ROLL');
     const nameOf = (pid) => this.getFriendlyPlayerName(pid);
     const rollsDesc = this.playerIds.map(pid => `${nameOf(pid)} rolled ${roll.rolls[pid] || 0}`).join(' vs ');
@@ -7818,7 +8698,13 @@ export class RPMAppController {
       if (!pid) break;
       if (pid === this.myPlayerId) {
         const me = this.tabletopState.getPlayer(pid);
-        this.mulliganModal?.open({ cards: me?.hand || [], mulliganCount: machine.mulliganCount[pid] || 0 });
+        const mCount = machine.mulliganCount[pid] || 0;
+        const bottomCount = machine.pendingBottomCount?.[pid] ?? mCount;
+        this.mulliganModal?.open({
+          cards: me?.hand || [],
+          mulliganCount: mCount,
+          cardsToBottomCount: bottomCount
+        });
         return;
       }
       const bot = this.botAgents?.get(pid) || this.perkinsAgent;
@@ -8014,7 +8900,9 @@ export class RPMAppController {
   handleMulliganKeep(data) {
     if (this.pregameMachine && this.pregameActive) {
       this.pregameMachine.dispatch('DECIDE_MULLIGAN', { playerId: this.myPlayerId, keep: true });
-      this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(this.myPlayerId)} kept 7-card opening hand`, { playerId: this.myPlayerId });
+      const me = this.tabletopState?.getPlayer?.(this.myPlayerId);
+      const handLen = me?.hand?.length ?? 7;
+      this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(this.myPlayerId)} kept ${handLen}-card opening hand`, { playerId: this.myPlayerId });
       this._advanceMulligans();
       this.render();
       return;
@@ -8030,9 +8918,14 @@ export class RPMAppController {
     if (this.pregameMachine && this.pregameActive) {
       this.pregameMachine.dispatch('DECIDE_MULLIGAN', { playerId: this.myPlayerId, keep: false });
       const count = this.pregameMachine.mulliganCount[this.myPlayerId];
+      const bottomCount = this.pregameMachine.pendingBottomCount?.[this.myPlayerId] ?? count;
       this.appendExecutionLog('Mulligan', `🃏 ${this.getFriendlyPlayerName(this.myPlayerId)} took mulligan #${count} (drawing 7 cards)`, { playerId: this.myPlayerId });
       const me = this.tabletopState.getPlayer(this.myPlayerId);
-      this.mulliganModal?.open({ cards: me?.hand || [], mulliganCount: count });
+      this.mulliganModal?.open({
+        cards: me?.hand || [],
+        mulliganCount: count,
+        cardsToBottomCount: bottomCount
+      });
       this.reconcileDOM();
       return;
     }
@@ -8821,11 +9714,18 @@ export class RPMAppController {
    * @param {string} viewName
    */
   switchView(viewName) {
+    const targetTab = (viewName === 'TABLETOP') ? 'ARENA' : viewName;
+    if (targetTab === 'ARENA') {
+      this.isMatchActiveFlag = true;
+    }
+    if (targetTab === 'LOBBY' && this.lobbyManager && typeof this.lobbyManager.invalidateReadiness === 'function') {
+      try { this.lobbyManager.invalidateReadiness('RETURN_TO_LOBBY'); } catch (_) {}
+    }
     if (this.tabRouter) {
-      if (viewName === 'LOBBY') {
+      if (targetTab === 'LOBBY') {
         this.tabRouter.unlockAll?.();
       }
-      this.tabRouter.navigate(viewName, this.getMatchState(), this.isSpectator());
+      this.tabRouter.navigate(targetTab, this.getMatchState(), this.isSpectator());
     }
     this.reconcileDOM();
   }

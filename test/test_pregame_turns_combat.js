@@ -905,6 +905,95 @@ async function run() {
     app.destroy();
   });
 
+  // ---------------- SPEC 7: 3-Player Pod Mulligan Quota, 3D Die Sync & Consecutive Match Reset ----------------
+  await test('TC-PREGAME-04', '3-Player Pod Mulligan (CR 103.5c) syncs cardsToBottomCount with MulliganModal (4th mulligan bottoms 3, not 4)', async () => {
+    const uuid = '7b51d073-9b47-4ffd-9af3-dfe6691c4541';
+    const doc = setupMockDOM();
+    const container = doc.createElement('div'); doc.body.appendChild(container);
+    const app = new RPMAppController({
+      container,
+      autoConnect: false,
+      myPlayerId: uuid,
+      username: 'Dev Planeswalker',
+      playerIds: [uuid, 'bot_perkins_2', 'bot_perkins_3'],
+      pregame: true
+    });
+    await app.mount(container);
+    app.startMatch({ playerIds: [uuid, 'bot_perkins_2', 'bot_perkins_3'] });
+
+    const pg = new PregameStateMachine({
+      players: [uuid, 'bot_perkins_2', 'bot_perkins_3'],
+      tabletopState: app.tabletopState,
+      priorityMachine: app.priorityMachine
+    });
+    app.pregameMachine = pg;
+    app.tabletopState.pregameMachine = pg;
+    app.pregameActive = true;
+
+    pg.dispatch('EXECUTE_STARTING_ROLL', { rolls: { [uuid]: 19, bot_perkins_2: 11, bot_perkins_3: 5 }, winnerId: uuid });
+    pg.dispatch('SELECT_PLAY_OR_DRAW', { playerId: uuid, choice: 'PLAY' });
+
+    // Mulligan #1 (Free in 3p pod -> 0 bottomed)
+    app.handleMulliganTake({ nextMulliganCount: 1 });
+    assert.strictEqual(app.mulliganModal.mulliganCount, 1);
+    assert.strictEqual(app.mulliganModal.cardsToBottomCount, 0, '1st mulligan in 3p pod requires 0 bottomed cards');
+
+    // Mulligans #2, #3, #4
+    app.handleMulliganTake({ nextMulliganCount: 2 });
+    app.handleMulliganTake({ nextMulliganCount: 3 });
+    app.handleMulliganTake({ nextMulliganCount: 4 });
+    assert.strictEqual(app.mulliganModal.mulliganCount, 4);
+    assert.strictEqual(app.mulliganModal.cardsToBottomCount, 3, '4th mulligan in 3p pod requires exactly 3 bottomed cards');
+
+    // Click Keep in MulliganModal -> enters BOTTOMING mode requiring 3 cards
+    app.mulliganModal.handleKeepClick();
+    assert.strictEqual(app.mulliganModal.mode, 'BOTTOMING');
+    const hand = app.tabletopState.getPlayer(uuid).hand;
+    for (let i = 0; i < 4; i++) {
+      app.mulliganModal.handleCardClick(hand[i].instanceId);
+    }
+    assert.strictEqual(app.mulliganModal.selectedBottomCards.length, 3, 'Modal must cap bottom selection at 3 cards');
+    assert.doesNotThrow(() => app.mulliganModal.handleConfirmBottomClick(), 'Confirming bottom cards must not throw');
+    assert.strictEqual(pg.state, PREGAME_STATES.GAME_ACTIVE, 'Match transitions to GAME_ACTIVE after bots resolve');
+    assert.strictEqual(app.tabletopState.getPlayer(uuid).hand.length, 5, '7 - 3 bottomed + 1 Turn-1 multiplayer draw (CR 800.4i) = 5 cards in hand');
+    app.destroy();
+  });
+
+  await test('TC-TURN-03', 'Consecutive matches reset TraceLogger to 0, clear old bots, and keep new bots active', async () => {
+    const doc = setupMockDOM();
+    const container = doc.createElement('div'); doc.body.appendChild(container);
+    const app = new RPMAppController({ container, autoConnect: false, myPlayerId: 'p1', playerIds: ['p1', 'bot_perkins_2', 'bot_perkins_3'] });
+    await app.mount(container);
+
+    app.lobbyManager.seatBot(2);
+    app.lobbyManager.seatBot(3);
+    app.startMatch({ playerIds: ['p1', 'bot_perkins_2', 'bot_perkins_3'] });
+
+    // Record dummy traces in Game 1
+    app.tabletopState.recordTrace('TURN_TRACE', 'TEST_EVENT_1', {});
+    app.tabletopState.recordTrace('TURN_TRACE', 'TEST_EVENT_2', {});
+    assert.ok(app.traceLogger.entries.length >= 2);
+
+    // End Game 1 via player elimination
+    app.handlePlayerElimination('bot_perkins_2', 'LIFE_ZERO');
+    app.handlePlayerElimination('bot_perkins_3', 'LIFE_ZERO');
+    assert.strictEqual(app.tabletopState.isGameOver, true);
+    assert.strictEqual(app.priorityMachine.isGameOver, true);
+    assert.strictEqual(app.botAgents.size, 0, 'All Game 1 bots must be cleared on game over');
+
+    // Return to lobby and start Game 2
+    app.switchView('LOBBY');
+    assert.strictEqual(app.lobbyManager.slots.get(1).isReady, false, 'Human seat readiness reset on return to lobby');
+    app.startMatch({ playerIds: ['p1', 'bot_perkins_2', 'bot_perkins_3'] });
+
+    assert.strictEqual(app.traceLogger.entries.length, 0, 'TraceLogger must reset to 0 on new match start');
+    assert.strictEqual(app.executionLog.length, 0, 'Execution log must reset to 0 on new match start');
+    assert.strictEqual(app.priorityMachine.isGameOver, false, 'PriorityMachine.isGameOver must reset to false');
+    assert.strictEqual(app.botAgents.get('bot_perkins_2')?.isDestroyed, false, 'Game 2 bot_perkins_2 must be alive');
+    assert.strictEqual(app.botAgents.get('bot_perkins_3')?.isDestroyed, false, 'Game 2 bot_perkins_3 must be alive');
+    app.destroy();
+  });
+
   console.log(`\n  PREGAME/TURNS/COMBAT RESULTS: ${totalPassed} passed, ${totalFailed} failed\n`);
   process.exit(totalFailed > 0 ? 1 : 0);
 }

@@ -448,6 +448,84 @@ export class AbilityEngine {
 
     const attachedItems = Array.from(resolvedAttachedMap.values());
 
+    // Resolve controller and battlefield permanents for static anthems (Honor of the Pure, Intangible Virtue, Wedding Festivity, Caretaker's Talent)
+    let controller = null;
+    if (stateObj && stateObj.players) {
+      if (card.controllerId && stateObj.players[card.controllerId]) {
+        controller = stateObj.players[card.controllerId];
+      } else {
+        for (const p of Object.values(stateObj.players)) {
+          const allPerms = [
+            ...(p.battlefield?.creatures || []),
+            ...(p.battlefield?.lands || []),
+            ...(p.battlefield?.noncreatures || []),
+            ...(p.battlefield?.planeswalkers || []),
+            ...(Array.isArray(p.battlefield) ? p.battlefield : []),
+            ...(p.zones?.battlefield || [])
+          ];
+          if (allPerms.some(perm => perm && (perm.instanceId === card.instanceId || perm.id === card.id || perm === card))) {
+            controller = p;
+            break;
+          }
+        }
+        if (!controller && context?.playerId && stateObj.players[context.playerId]) {
+          controller = stateObj.players[context.playerId];
+        }
+      }
+    }
+    if (!controller && context && (context.battlefield || context.zones?.battlefield)) {
+      controller = context;
+    }
+
+    const controllerPermanents = [];
+    if (controller) {
+      const rawControlled = [
+        ...(controller.battlefield?.noncreatures || []),
+        ...(controller.battlefield?.creatures || []),
+        ...(controller.battlefield?.lands || []),
+        ...(controller.battlefield?.planeswalkers || []),
+        ...(Array.isArray(controller.battlefield) ? controller.battlefield : []),
+        ...(controller.zones?.battlefield || [])
+      ];
+      const seenControlled = new Set();
+      for (const p of rawControlled) {
+        if (!p) continue;
+        const id = p.instanceId || p.id;
+        if (id) {
+          if (!seenControlled.has(id)) {
+            seenControlled.add(id);
+            controllerPermanents.push(p);
+          }
+        } else {
+          controllerPermanents.push(p);
+        }
+      }
+    }
+
+    let honorCopies = 0;
+    let virtueCopies = 0;
+    let festivityCopies = 0;
+    let caretakerLevel3Copies = 0;
+
+    for (const p of controllerPermanents) {
+      const pName = (p.name || '').toLowerCase();
+      if (pName.includes('honor of the pure')) {
+        honorCopies++;
+      }
+      if (pName.includes('intangible virtue')) {
+        virtueCopies++;
+      }
+      if (pName.includes('wedding festivity') || (p.isTransformed === true && pName.includes('wedding announcement'))) {
+        festivityCopies++;
+      }
+      if (pName.includes("caretaker's talent") || pName.includes('caretakers talent')) {
+        const lvl = Number(p.classLevel ?? p.level ?? 1);
+        if (lvl >= 3) {
+          caretakerLevel3Copies++;
+        }
+      }
+    }
+
     // --- CONTINUOUS LAYERS 1 THROUGH 6 ---
     for (const effect of this.staticEffects) {
       if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
@@ -515,6 +593,24 @@ export class AbilityEngine {
           }
         }
       }
+    }
+
+    // Layer 6: Intangible Virtue grants Vigilance to controlled token creatures
+    const isTokenCreature = isCreature && Boolean(card.isToken || evaluated.isToken);
+    if (isTokenCreature && virtueCopies > 0) {
+      evaluated.keywords.vigilance = true;
+      evaluated.keywords.Vigilance = true;
+      evaluated.hasVigilance = true;
+    }
+
+    // Ocelot Pride native / baseline keywords
+    if (/ocelot pride/i.test(card.name || evaluated.name || '')) {
+      evaluated.keywords.firstStrike = true;
+      evaluated.keywords['First strike'] = true;
+      evaluated.keywords.lifelink = true;
+      evaluated.keywords.Lifelink = true;
+      evaluated.hasFirstStrike = true;
+      evaluated.hasLifelink = true;
     }
 
     // --- CONTINUOUS LAYER 7A: CDA P/T ---
@@ -614,6 +710,38 @@ export class AbilityEngine {
       evaluated.effectiveToughness += equipCount * tPerEq;
     }
 
+    // --- CONTINUOUS LAYER 7C: STATIC ANTHEMS (Honor of the Pure, Intangible Virtue, Wedding Festivity, Caretaker's Talent L3) ---
+    if (isCreature) {
+      const isWhite = Boolean(
+        card.colors?.includes('W') ||
+        evaluated.colors?.includes('W') ||
+        card.isWhite === true ||
+        evaluated.isWhite === true ||
+        /\{W\}/i.test(card.manaCost || evaluated.manaCost || '') ||
+        card.colorIdentity?.includes('W') ||
+        evaluated.colorIdentity?.includes('W')
+      );
+      if (isWhite && honorCopies > 0) {
+        evaluated.effectivePower += honorCopies;
+        evaluated.effectiveToughness += honorCopies;
+      }
+
+      if (isTokenCreature && virtueCopies > 0) {
+        evaluated.effectivePower += virtueCopies;
+        evaluated.effectiveToughness += virtueCopies;
+      }
+
+      if (festivityCopies > 0) {
+        evaluated.effectivePower += festivityCopies;
+        evaluated.effectiveToughness += festivityCopies;
+      }
+
+      if (isTokenCreature && caretakerLevel3Copies > 0) {
+        evaluated.effectivePower += (caretakerLevel3Copies * 2);
+        evaluated.effectiveToughness += (caretakerLevel3Copies * 2);
+      }
+    }
+
     // --- CONTINUOUS LAYER 7D: COUNTERS (+1/+1 and -1/-1) ---
     if (isCreature && evaluated.counters) {
       const p1 = Number(evaluated.counters['+1/+1'] || 0);
@@ -709,9 +837,17 @@ export class AbilityEngine {
       toughness: evaluated.effectiveToughness ?? Number(creature.toughness ?? 0) ?? 0,
       keywords: evaluated.keywords || {},
       hasFlying: evaluated.hasFlying !== undefined ? evaluated.hasFlying : Boolean(evaluated.keywords?.flying),
+      hasVigilance: evaluated.hasVigilance !== undefined ? evaluated.hasVigilance : Boolean(evaluated.keywords?.vigilance || evaluated.keywords?.Vigilance),
+      hasFirstStrike: evaluated.hasFirstStrike !== undefined ? evaluated.hasFirstStrike : Boolean(evaluated.keywords?.firstStrike || evaluated.keywords?.['First strike']),
+      hasLifelink: evaluated.hasLifelink !== undefined ? evaluated.hasLifelink : Boolean(evaluated.keywords?.lifelink || evaluated.keywords?.Lifelink),
       effectivePower: evaluated.effectivePower ?? Number(creature.power ?? 0) ?? 0,
       effectiveToughness: evaluated.effectiveToughness ?? Number(creature.toughness ?? 0) ?? 0
     };
+  }
+
+  static evaluateCreatureStats(creature, gameState = {}) {
+    const engine = (gameState?.abilityEngine) || new AbilityEngine({ tabletopState: gameState?.tabletopState || gameState });
+    return engine.evaluateCreatureStats(creature, gameState);
   }
 }
 

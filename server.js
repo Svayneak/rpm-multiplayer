@@ -10,13 +10,15 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRelayServer } from './src/relay.js';
+import { createRelayServer, createAuthHttpHandler } from './src/relay.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+
+const authHandler = createAuthHttpHandler();
 
 // MIME types for static asset serving
 const MIME_TYPES = {
@@ -37,7 +39,19 @@ const MIME_TYPES = {
 };
 
 // Root HTTP server for static files
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
+  // Delegate /api/auth/* endpoints to Auth HTTP handler
+  if (req.url && req.url.startsWith('/api/auth/')) {
+    try {
+      const handled = await authHandler(req, res);
+      if (handled) return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Internal Auth Error' }));
+      return;
+    }
+  }
+
   // Health check endpoint for cloud platforms
   if (req.url === '/health' || req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });

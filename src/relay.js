@@ -18,6 +18,8 @@
  */
 
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { EventEmitter } from 'node:events';
@@ -1024,17 +1026,359 @@ export class RoomSession {
 }
 
 /**
+ * Creates an authoritative JSON HTTP Request Handler for Email + Password Authentication,
+ * persistent cross-device sessions, and deck sync.
+ *
+ * @param {Object} [options={}]
+ * @param {string|null} [options.storePath] - File path to persist accounts.json, null for in-memory only.
+ * @returns {Function} (req, res) => Promise<boolean>
+ */
+export function createAuthHttpHandler({ storePath } = {}) {
+  const accountsFile = storePath === null
+    ? null
+    : (storePath ?? process.env.RPM_ACCOUNTS_FILE ?? path.resolve(process.cwd(), 'data', 'accounts.json'));
+
+  // In-memory accounts store
+  const store = {
+    users: {},  // id -> user
+    tokens: {}  // token -> { userId, expiresAt }
+  };
+
+  // Helper to load accounts from disk
+  function loadFromDisk() {
+    if (!accountsFile) return;
+    try {
+      if (fs.existsSync(accountsFile)) {
+        const raw = fs.readFileSync(accountsFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.users && typeof parsed.users === 'object') store.users = parsed.users;
+          if (parsed.tokens && typeof parsed.tokens === 'object') store.tokens = parsed.tokens;
+        }
+      }
+    } catch (err) {
+      console.warn('[RPM-Auth] Failed to load accounts file:', err.message);
+    }
+  }
+
+  // Helper to atomically persist accounts to disk
+  function persistToDisk() {
+    if (!accountsFile) return;
+    try {
+      const dir = path.dirname(accountsFile);
+      fs.mkdirSync(dir, { recursive: true });
+      const tempPath = `${accountsFile}.tmp.${Date.now()}.${Math.random().toString(36).slice(2)}`;
+      fs.writeFileSync(tempPath, JSON.stringify(store, null, 2), 'utf8');
+      fs.renameSync(tempPath, accountsFile);
+    } catch (err) {
+      console.error('[RPM-Auth] Failed to persist accounts file:', err.message);
+    }
+  }
+
+  loadFromDisk();
+
+  // Helper: sanitize user object (never return salt or hash)
+  function sanitizeUser(u) {
+    if (!u) return null;
+    return {
+      id: u.id,
+      email: u.email,
+      displayName: u.displayName || u.email.split('@')[0],
+      birthdayDay: u.birthdayDay || null,
+      unlockedSlots: Array.isArray(u.unlockedSlots) ? u.unlockedSlots : ['slot_1', 'slot_2'],
+      decks: u.decks || {}
+    };
+  }
+
+  // Scrypt password hashing
+  function hashPassword(password, salt) {
+    return new Promise((resolve, reject) => {
+      crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+        if (err) reject(err);
+        else resolve(derivedKey.toString('hex'));
+      });
+    });
+  }
+
+  // Timing-safe password verification
+  function verifyPassword(password, salt, expectedHashHex) {
+    return new Promise((resolve) => {
+      crypto.scrypt(password, salt, 64, (err, derivedKey) => {
+        if (err) return resolve(false);
+        const expectedBuf = Buffer.from(expectedHashHex, 'hex');
+        if (derivedKey.length !== expectedBuf.length) return resolve(false);
+        resolve(crypto.timingSafeEqual(derivedKey, expectedBuf));
+      });
+    });
+  }
+
+  // Helper: send JSON response with standard headers
+  function sendJson(res, statusCode, data) {
+    res.writeHead(statusCode, {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+    });
+    res.end(JSON.stringify(data));
+  }
+
+  // Helper: read request body with 64KB limit
+  function readBodyJson(req) {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      let bytes = 0;
+      const MAX_BYTES = 64 * 1024; // 64KB
+
+      req.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > MAX_BYTES) {
+          const err = new Error('Payload Too Large');
+          err.statusCode = 413;
+          reject(err);
+          req.destroy();
+          return;
+        }
+        body += chunk.toString('utf8');
+      });
+
+      req.on('end', () => {
+        if (!body.trim()) {
+          resolve({});
+          return;
+        }
+        try {
+          resolve(JSON.parse(body));
+        } catch (e) {
+          const err = new Error('Invalid JSON payload');
+          err.statusCode = 400;
+          reject(err);
+        }
+      });
+
+      req.on('error', (err) => reject(err));
+    });
+  }
+
+  // Helper: extract authenticated user from Bearer token
+  function authenticateToken(req) {
+    const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
+    if (!authHeader.startsWith('Bearer ')) return null;
+    const token = authHeader.slice(7).trim();
+    if (!token) return null;
+
+    const tokenRecord = store.tokens[token];
+    if (!tokenRecord) return null;
+
+    if (tokenRecord.expiresAt && tokenRecord.expiresAt < Date.now()) {
+      delete store.tokens[token];
+      persistToDisk();
+      return null;
+    }
+
+    const user = store.users[tokenRecord.userId];
+    if (!user) return null;
+
+    return { user, token };
+  }
+
+  const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // The actual HTTP handler
+  return async function handleAuthRequest(req, res) {
+    const url = (req.url || '').split('?')[0];
+    if (!url.startsWith('/api/auth/')) {
+      return false;
+    }
+
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+      });
+      res.end();
+      return true;
+    }
+
+    try {
+      // POST /api/auth/register
+      if (req.method === 'POST' && url === '/api/auth/register') {
+        const body = await readBodyJson(req);
+        const { email, password, displayName } = body || {};
+
+        if (!email || !EMAIL_REGEX.test(String(email).trim())) {
+          sendJson(res, 400, { error: 'Invalid email format' });
+          return true;
+        }
+        if (!password || String(password).length < 6) {
+          sendJson(res, 400, { error: 'Password must be at least 6 characters long' });
+          return true;
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+
+        // Duplicate check
+        const exists = Object.values(store.users).some(u => u.email.toLowerCase() === normalizedEmail);
+        if (exists) {
+          sendJson(res, 409, { error: 'An account with this email already exists' });
+          return true;
+        }
+
+        const salt = crypto.randomBytes(16).toString('hex');
+        const hash = await hashPassword(String(password), salt);
+        const userId = 'usr_' + crypto.randomBytes(16).toString('hex');
+        const now = new Date().toISOString();
+
+        const newUser = {
+          id: userId,
+          email: normalizedEmail,
+          displayName: (displayName && String(displayName).trim()) || normalizedEmail.split('@')[0],
+          salt,
+          hash,
+          birthdayDay: null,
+          unlockedSlots: ['slot_1', 'slot_2'],
+          decks: {},
+          createdAt: now,
+          updatedAt: now
+        };
+
+        store.users[userId] = newUser;
+
+        // Generate 32-byte hex token with 90-day expiry
+        const token = crypto.randomBytes(32).toString('hex');
+        store.tokens[token] = {
+          userId,
+          expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1000
+        };
+
+        persistToDisk();
+
+        sendJson(res, 201, {
+          token,
+          user: sanitizeUser(newUser)
+        });
+        return true;
+      }
+
+      // POST /api/auth/login
+      if (req.method === 'POST' && url === '/api/auth/login') {
+        const body = await readBodyJson(req);
+        const { email, password } = body || {};
+
+        if (!email || !password) {
+          sendJson(res, 400, { error: 'Email and password are required' });
+          return true;
+        }
+
+        const normalizedEmail = String(email).trim().toLowerCase();
+        const user = Object.values(store.users).find(u => u.email.toLowerCase() === normalizedEmail);
+        if (!user) {
+          sendJson(res, 401, { error: 'Invalid credentials' });
+          return true;
+        }
+
+        const isValid = await verifyPassword(String(password), user.salt, user.hash);
+        if (!isValid) {
+          sendJson(res, 401, { error: 'Invalid credentials' });
+          return true;
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        store.tokens[token] = {
+          userId: user.id,
+          expiresAt: Date.now() + 90 * 24 * 60 * 60 * 1000
+        };
+
+        persistToDisk();
+
+        sendJson(res, 200, {
+          token,
+          user: sanitizeUser(user)
+        });
+        return true;
+      }
+
+      // GET /api/auth/me or GET /api/auth/session
+      if (req.method === 'GET' && (url === '/api/auth/me' || url === '/api/auth/session')) {
+        const auth = authenticateToken(req);
+        if (!auth) {
+          sendJson(res, 401, { error: 'Unauthorized: Invalid or expired token' });
+          return true;
+        }
+        sendJson(res, 200, { user: sanitizeUser(auth.user) });
+        return true;
+      }
+
+      // GET /api/auth/decks
+      if (req.method === 'GET' && url === '/api/auth/decks') {
+        const auth = authenticateToken(req);
+        if (!auth) {
+          sendJson(res, 401, { error: 'Unauthorized: Invalid or expired token' });
+          return true;
+        }
+        sendJson(res, 200, { decks: auth.user.decks || {} });
+        return true;
+      }
+
+      // PUT /api/auth/decks
+      if (req.method === 'PUT' && url === '/api/auth/decks') {
+        const auth = authenticateToken(req);
+        if (!auth) {
+          sendJson(res, 401, { error: 'Unauthorized: Invalid or expired token' });
+          return true;
+        }
+        const body = await readBodyJson(req);
+        auth.user.decks = body.decks !== undefined ? body.decks : body;
+        auth.user.updatedAt = new Date().toISOString();
+        persistToDisk();
+        sendJson(res, 200, { ok: true, decks: auth.user.decks });
+        return true;
+      }
+
+      // POST /api/auth/logout
+      if (req.method === 'POST' && url === '/api/auth/logout') {
+        const authHeader = req.headers['authorization'] || req.headers['Authorization'] || '';
+        if (authHeader.startsWith('Bearer ')) {
+          const token = authHeader.slice(7).trim();
+          if (store.tokens[token]) {
+            delete store.tokens[token];
+            persistToDisk();
+          }
+        }
+        sendJson(res, 200, { ok: true });
+        return true;
+      }
+
+      // Any unmatched /api/auth/* endpoint
+      sendJson(res, 404, { error: 'Auth endpoint not found' });
+      return true;
+    } catch (err) {
+      const status = err.statusCode || 500;
+      sendJson(res, status, { error: err.message || 'Internal Server Error' });
+      return true;
+    }
+  };
+}
+
+/**
  * Creates and configures the Authoritative Relay Server.
  *
  * @param {Object} [options={}]
- * @returns {{ server: http.Server, rooms: Map<string, RoomSession>, listen: Function, close: Function, getRoom: Function }}
+ * @returns {{ server: http.Server, rooms: Map<string, RoomSession>, listen: Function, close: Function, getRoom: Function, authHandler: Function }}
  */
 export function createRelayServer(options = {}) {
   const rooms = new Map();
   const rawSockets = new Set();
   const matchmakingQueue = new MatchmakingQueue(options);
+  const authHandler = options.authHandler || createAuthHttpHandler({ storePath: options.storePath });
 
-  const server = options.server || http.createServer((req, res) => {
+  const server = options.server || http.createServer(async (req, res) => {
+    if (req.url && req.url.startsWith('/api/auth/')) {
+      const handled = await authHandler(req, res);
+      if (handled) return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ name: 'rpm-multiplayer-relay', status: 'OK' }));
   });
@@ -1375,7 +1719,8 @@ export function createRelayServer(options = {}) {
     matchmakingQueue,
     listen,
     close,
-    getRoom
+    getRoom,
+    authHandler
   };
 }
 
@@ -1385,5 +1730,6 @@ export default {
   timingSafeEqualString,
   WebSocketConnection,
   RoomSession,
-  createRelayServer
+  createRelayServer,
+  createAuthHttpHandler
 };
