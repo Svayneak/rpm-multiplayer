@@ -236,14 +236,20 @@ export {
 
 export {
   DiceCanvas,
+  DiceCanvas as DiceRenderer3D,
   diceCanvas,
-  is3DSupported
+  is3DSupported,
+  DICE_COLORS
 } from './view/DiceCanvas.js';
 
 export {
   DiceShaker,
   diceShaker
 } from './view/DiceShaker.js';
+
+export {
+  RPMDiceRollOverlay
+} from './view/RPMDiceRollOverlay.js';
 
 export {
   MulliganEngine,
@@ -294,6 +300,20 @@ export {
 } from './view/PermanentActionDrawer.js';
 
 export {
+  OracleEffectCompiler,
+  compileCard,
+  compileCardCategory,
+  compileManaProfile,
+  compileSpellEffects,
+  compileAttachmentEffects,
+  compileTriggeredAbilities,
+  compileStaticPermissions,
+  compileCardMechanics,
+  smokeTestCard,
+  STANDARD_KEYWORDS
+} from './OracleEffectCompiler.js';
+
+export {
   DamageAssignmentModal
 } from './view/DamageAssignmentModal.js';
 
@@ -309,8 +329,9 @@ import {
   AUTH_STORAGE_KEY,
   TELEMETRY_STORAGE_KEY
 } from './AuthManager.js';
-import { DiceCanvas, diceCanvas, is3DSupported } from './view/DiceCanvas.js';
+import { DiceCanvas, diceCanvas, is3DSupported, DICE_COLORS } from './view/DiceCanvas.js';
 import { DiceShaker, diceShaker } from './view/DiceShaker.js';
+import { RPMDiceRollOverlay } from './view/RPMDiceRollOverlay.js';
 import { RPMAppController, AppController } from './app.js';
 import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
 import { parseDecklist, REGEX_DECK_COMPREHENSIVE, REGEX_DECK_SIMPLE } from './DeckParser.js';
@@ -439,6 +460,7 @@ import {
   TurnRollOffManager,
   generateAuthoritativeD20
 } from './TurnRollOffManager.js';
+import { OracleEffectCompiler } from './OracleEffectCompiler.js';
 
 export default {
   ProfileManager,
@@ -557,9 +579,13 @@ export default {
   AUTH_STORAGE_KEY,
   TELEMETRY_STORAGE_KEY,
   DiceCanvas,
+  DiceRenderer3D: DiceCanvas,
   diceCanvas,
   is3DSupported,
+  DICE_COLORS,
   DiceShaker,
-  diceShaker
+  diceShaker,
+  RPMDiceRollOverlay,
+  OracleEffectCompiler
 };
 

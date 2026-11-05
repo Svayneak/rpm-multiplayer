@@ -147,22 +147,41 @@ export class PregameStateMachine extends EventEmitter {
       throw new Error(`Cannot execute starting roll in state '${this.state}'`);
     }
 
-    const p1 = this.players[0];
-    const p2 = this.players[1] || 'p2';
-
-    let r1, r2;
-    if (payload.rolls && typeof payload.rolls[p1] === 'number' && typeof payload.rolls[p2] === 'number') {
-      r1 = payload.rolls[p1];
-      r2 = payload.rolls[p2];
-    } else {
-      do {
-        r1 = rollD20(this.rng);
-        r2 = rollD20(this.rng);
-      } while (r1 === r2);
+    const rolls = {};
+    if (payload.rolls && typeof payload.rolls === 'object') {
+      for (const p of this.players) {
+        if (typeof payload.rolls[p] === 'number') {
+          rolls[p] = payload.rolls[p];
+        }
+      }
     }
 
-    this.rolls = { [p1]: r1, [p2]: r2 };
-    this.rollWinnerId = r1 > r2 ? p1 : p2;
+    const unrolled = this.players.filter(p => typeof rolls[p] !== 'number');
+    if (unrolled.length > 0) {
+      let tie = true;
+      while (tie) {
+        for (const p of unrolled) {
+          rolls[p] = rollD20(this.rng);
+        }
+        const maxVal = Math.max(...this.players.map(p => rolls[p]));
+        const leaders = this.players.filter(p => rolls[p] === maxVal);
+        if (leaders.length === 1) {
+          tie = false;
+        }
+      }
+    }
+
+    let winnerId = this.players[0];
+    let maxRoll = -1;
+    for (const p of this.players) {
+      if ((rolls[p] ?? -1) > maxRoll) {
+        maxRoll = rolls[p];
+        winnerId = p;
+      }
+    }
+
+    this.rolls = { ...rolls };
+    this.rollWinnerId = winnerId;
     this.choicePriority = this.rollWinnerId;
     this.state = PREGAME_STATES.PREGAME_CHOOSE_ORDER;
 
@@ -200,8 +219,12 @@ export class PregameStateMachine extends EventEmitter {
       throw new Error(`Invalid play/draw choice '${payload.choice}': must be 'PLAY' or 'DRAW'`);
     }
 
-    const opponentId = this.players.find(p => p !== playerId) || 'p2';
-    const startingPlayerId = (choice === 'PLAY') ? playerId : opponentId;
+    let startingPlayerId = playerId;
+    if (choice === 'DRAW') {
+      const idx = this.players.indexOf(playerId);
+      const nextIdx = (idx + 1) % this.players.length;
+      startingPlayerId = this.players[nextIdx];
+    }
 
     this.startingPlayerId = startingPlayerId;
     this.activePlayerId = startingPlayerId;
@@ -254,12 +277,14 @@ export class PregameStateMachine extends EventEmitter {
         if (player) {
           player.hand = player.hand || [];
           player.zones = player.zones || {};
-          player.zones.hand = player.zones.hand || [];
 
           if (player.hand.length === 0 && Array.isArray(player.library) && player.library.length >= 7) {
             const drawn = player.library.splice(0, 7);
             player.hand.push(...drawn);
-            player.zones.hand.push(...drawn);
+          }
+          player.zones.hand = player.hand;
+          if (Array.isArray(player.library)) {
+            player.zones.library = player.library;
           }
           handsDrawn[pid] = player.hand.length;
         }
@@ -296,11 +321,18 @@ export class PregameStateMachine extends EventEmitter {
     const keep = Boolean(payload.keep);
 
     if (!keep) {
-      // CR 103.5 London Mulligan: Taking another mulligan reshuffles all 7 cards and draws a new 7-card hand;
-      // bottoming only happens once the player decides to KEEP a hand with mulliganCount > 0.
+      // CR 103.5 London Mulligan & CR 103.5c Multiplayer Free First Mulligan:
+      // In games with 3+ players, the first mulligan (mulliganCount === 1) requires 0 cards bottomed on Keep.
       this.mulliganCount[playerId] = (this.mulliganCount[playerId] || 0) + 1;
       const count = this.mulliganCount[playerId];
-      this.pendingBottomCount[playerId] = count;
+      const totalPlayersCount = Math.max(
+        Array.isArray(this.players) ? this.players.length : 0,
+        Array.isArray(this.playerIds) ? this.playerIds.length : 0,
+        Object.keys(this.tabletopState?.players || this.stateManager?.players || {}).length
+      );
+      const isMultiplayer = totalPlayersCount >= 3;
+      const cardsToBottomCount = isMultiplayer ? Math.max(0, count - 1) : count;
+      this.pendingBottomCount[playerId] = cardsToBottomCount;
 
       if (this.tabletopState && typeof this.tabletopState.getPlayer === 'function') {
         const player = this.tabletopState.getPlayer(playerId);
@@ -308,10 +340,7 @@ export class PregameStateMachine extends EventEmitter {
           // 1. Shuffle hand cards back into library
           const handCards = Array.isArray(player.hand) ? [...player.hand] : [];
           player.hand = [];
-          if (player.zones) player.zones.hand = [];
-
           player.library = [...(player.library || []), ...handCards];
-          if (player.zones) player.zones.library = [...player.library];
 
           // Simple Fisher-Yates shuffle
           for (let i = player.library.length - 1; i > 0; i--) {
@@ -322,19 +351,25 @@ export class PregameStateMachine extends EventEmitter {
           // 2. Draw 7 new cards
           const drawn = player.library.splice(0, Math.min(7, player.library.length));
           player.hand.push(...drawn);
-          if (player.zones) player.zones.hand.push(...drawn);
+          if (player.zones) {
+            player.zones.hand = player.hand;
+            player.zones.library = player.library;
+          }
         }
       }
 
-      this.playerSubStates[playerId] = MULLIGAN_SUBSTATES.MULLIGAN_BOTTOMING;
+      const nextSubState = cardsToBottomCount > 0
+        ? MULLIGAN_SUBSTATES.MULLIGAN_BOTTOMING
+        : MULLIGAN_SUBSTATES.DECIDING;
+      this.playerSubStates[playerId] = nextSubState;
 
       const result = {
         state: this.state,
         playerId,
         keep: false,
         mulliganCount: count,
-        subState: MULLIGAN_SUBSTATES.MULLIGAN_BOTTOMING,
-        cardsToBottomCount: count
+        subState: nextSubState,
+        cardsToBottomCount
       };
 
       this.emit('MULLIGAN_TAKEN', result);
@@ -359,11 +394,13 @@ export class PregameStateMachine extends EventEmitter {
 
     this.emit('MULLIGAN_KEPT', { playerId, mulliganCount: this.mulliganCount[playerId] });
 
-    // Rotate mulligan decider in turn order: starter first, then opponent
-    if (playerId === this.startingPlayerId) {
-      const nextPlayer = this.players.find(p => p !== playerId);
-      if (nextPlayer && this.mulliganStatus[nextPlayer] !== MULLIGAN_SUBSTATES.KEPT) {
-        this.currentDecidingPlayerId = nextPlayer;
+    // Rotate mulligan decider in turn order around the table
+    const currentIndex = this.players.indexOf(playerId);
+    for (let offset = 1; offset < this.players.length; offset++) {
+      const nextIndex = (currentIndex + offset) % this.players.length;
+      const candidatePlayer = this.players[nextIndex];
+      if (candidatePlayer && this.mulliganStatus[candidatePlayer] !== MULLIGAN_SUBSTATES.KEPT) {
+        this.currentDecidingPlayerId = candidatePlayer;
         return {
           state: this.state,
           playerId,
@@ -411,12 +448,12 @@ export class PregameStateMachine extends EventEmitter {
           return true;
         });
 
-        if (player.zones && Array.isArray(player.zones.hand)) {
-          player.zones.hand = player.zones.hand.filter(c => !cardIds.includes(c.instanceId || c.id));
+        if (player.zones) {
+          player.zones.hand = player.hand;
         }
 
         player.library = [...(player.library || []), ...bottomed];
-        if (player.zones) player.zones.library = [...player.library];
+        if (player.zones) player.zones.library = player.library;
       }
     }
 
@@ -445,6 +482,11 @@ export class PregameStateMachine extends EventEmitter {
     const anyBottoming = this.players.some(p => this.playerSubStates[p] === MULLIGAN_SUBSTATES.MULLIGAN_BOTTOMING);
 
     if (allKept && !anyBottoming) {
+      // CR 103.6 Opening Hand Actions (e.g. Leyline Axe)
+      if (this.tabletopState && typeof this.tabletopState.resolveOpeningHandActions === 'function') {
+        this.tabletopState.resolveOpeningHandActions();
+      }
+
       this.state = PREGAME_STATES.GAME_ACTIVE;
       this.currentDecidingPlayerId = null;
 

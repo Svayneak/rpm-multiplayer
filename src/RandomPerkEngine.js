@@ -75,20 +75,29 @@ export class RandomPerkEngine extends EventEmitter {
     // Invariant INV-PERK-4: Turn Unlock Scaling Anchor
     // T_unlock = 2 if N_initial >= 3, else 4.
     // Immutable threshold permanently anchored at room creation.
+    const stateCount = Object.keys(this.tabletopState?.players || options.stateManager?.players || {}).length;
+    const psmCount = this.priorityStateMachine?.players?.length;
     const calculatedPlayerCount = options.initialPlayerCount !== undefined
       ? options.initialPlayerCount
       : (
-          this.priorityStateMachine?.players?.length ||
-          Object.keys(this.tabletopState?.players || {}).length ||
+          (stateCount >= 3 ? stateCount : 0) ||
+          (psmCount >= 3 ? psmCount : 0) ||
+          stateCount ||
+          psmCount ||
           2
         );
 
     this.initialPlayerCount = calculatedPlayerCount;
+    // Invariant INV-PERK-4: T_unlock = 2 if N_initial >= 3, else 4.
     this.perkUnlockTurn = (this.initialPlayerCount >= 3) ? 2 : 4;
 
     this.birthdayMap = options.birthdayMap || {};
     this.prng = options.prng || options.prngFn || null;
     this.alarmDurationSeconds = options.alarmDurationSeconds || 15;
+
+    // Interactive human roll confirmation gating (Step 1 RPM Emblem pause)
+    this.awaitHumanRollConfirmation = Boolean(options.awaitHumanRollConfirmation);
+    this.humanPlayerId = options.humanPlayerId || null;
 
     this.isEmblemActive = false;
     this.emblem = null;
@@ -96,6 +105,8 @@ export class RandomPerkEngine extends EventEmitter {
     this.activeStep1Item = null;
     this.activeStep2Item = null;
     this.lastRollResult = null;
+    this.rollState = null;
+    this.rollHistory = [];
 
     // Bound listeners for clean teardown
     this._boundPhaseStepChanged = this.onPhaseStepChanged.bind(this);
@@ -179,6 +190,106 @@ export class RandomPerkEngine extends EventEmitter {
   }
 
   /**
+   * Reconfigures engine player scaling anchor dynamically when player count changes.
+   * In 3-6 player games, perkUnlockTurn is anchored to Round 2 (INV-PERK-4).
+   * 
+   * @param {number} [playerCount]
+   * @returns {{ initialPlayerCount: number, perkUnlockTurn: number }}
+   */
+  reconfigure(playerCount) {
+    const stateCount = Object.keys(this.tabletopState?.players || this.stateManager?.players || {}).length;
+    const psmCount = this.priorityStateMachine?.players?.length;
+    const count = typeof playerCount === 'number'
+      ? playerCount
+      : (
+          (stateCount >= 3 ? stateCount : 0) ||
+          (psmCount >= 3 ? psmCount : 0) ||
+          stateCount ||
+          psmCount ||
+          this.initialPlayerCount ||
+          2
+        );
+
+    this.initialPlayerCount = count;
+    this.perkUnlockTurn = (count >= 3) ? 2 : 4;
+
+    this.emit('ENGINE_RECONFIGURED', {
+      initialPlayerCount: this.initialPlayerCount,
+      perkUnlockTurn: this.perkUnlockTurn
+    });
+
+    return {
+      initialPlayerCount: this.initialPlayerCount,
+      perkUnlockTurn: this.perkUnlockTurn
+    };
+  }
+
+  /**
+   * Evaluates upkeep perk trigger eligibility for activePlayerId.
+   * Checks if the active player is in Round >= 2 (state.priorityMachine.roundNumber >= 2
+   * or player.turnsTaken >= 2), firing PERK_UPKEEP_TRIGGER for each player on their Round 2 UPKEEP.
+   * 
+   * @param {TabletopStateManager|Object} [stateManager]
+   * @param {string} [activePlayerId]
+   * @returns {Object|null} StackItemUpkeepTrigger or null if dormant
+   */
+  evaluateUpkeepPerks(stateManager = null, activePlayerId = null) {
+    const sm = stateManager || this.stateManager || this.tabletopState;
+    const psm = this.priorityStateMachine || sm?.priorityMachine || sm?._priorityMachine;
+    const targetPlayerId = activePlayerId || psm?.activePlayerId || sm?.activePlayerId;
+    if (!targetPlayerId) return null;
+
+    // Dynamically sync scaling with active game's player count
+    const activeCount = Object.keys(sm?.players || {}).length || psm?.players?.length || this.initialPlayerCount || 2;
+    if (activeCount >= 3 && this.perkUnlockTurn > 2) {
+      this.initialPlayerCount = activeCount;
+      this.perkUnlockTurn = 2;
+    }
+
+    const currentTurn = psm?.turnNumber ?? sm?.turnNumber ?? 1;
+    let currentRound = psm?.roundNumber ?? sm?.roundNumber;
+    if (currentRound === undefined) {
+      currentRound = Math.floor((currentTurn - 1) / (this.initialPlayerCount || 2)) + 1;
+    }
+
+    const player = sm?.players?.[targetPlayerId] || (typeof sm?.getPlayer === 'function' ? sm.getPlayer(targetPlayerId) : null);
+    const turnsTaken = player?.turnsTaken ?? player?.turnsPlayed ?? psm?.playerTurnCounts?.get(targetPlayerId) ?? 1;
+
+    // Check if player is in Round >= perkUnlockTurn (or turnsTaken >= perkUnlockTurn)
+    const isEligible = (currentRound >= this.perkUnlockTurn) || (turnsTaken >= this.perkUnlockTurn);
+
+    // In 1v1 (2 players), Round 4 corresponds to global turnNumber >= 7
+    const is1v1Round4 = (this.initialPlayerCount === 2 && currentTurn >= 7);
+
+    if (isEligible || is1v1Round4) {
+      return this.triggerStep1(targetPlayerId);
+    }
+
+    this.emit('PERK_EMBLEM_DORMANT', {
+      turnNumber: currentTurn,
+      roundNumber: currentRound,
+      perkUnlockTurn: this.perkUnlockTurn,
+      activePlayerId: targetPlayerId,
+      turnsTaken
+    });
+    return null;
+  }
+
+  /**
+   * Static convenience evaluator for evaluateUpkeepPerks.
+   */
+  static evaluateUpkeepPerks(stateManager, activePlayerId, engine = null) {
+    if (engine && typeof engine.evaluateUpkeepPerks === 'function') {
+      return engine.evaluateUpkeepPerks(stateManager, activePlayerId);
+    }
+    const eng = stateManager?.randomPerkEngine || stateManager?._randomPerkEngine;
+    if (eng && typeof eng.evaluateUpkeepPerks === 'function') {
+      return eng.evaluateUpkeepPerks(stateManager, activePlayerId);
+    }
+    return null;
+  }
+
+  /**
    * Handler for PriorityStateMachine PHASE_STEP_CHANGED.
    * 
    * @param {Object} event
@@ -215,40 +326,49 @@ export class RandomPerkEngine extends EventEmitter {
    * @param {number} [roundNumber]
    */
   handleUpkeepStep(activePlayerId, turnNumber, roundNumber) {
-    const targetPlayerId = activePlayerId || this.priorityStateMachine?.activePlayerId;
-
-    const currentTurn = (turnNumber !== undefined && turnNumber !== null)
-      ? turnNumber
-      : (this.priorityStateMachine?.turnNumber || 1);
-
-    // Determine effective round:
-    // 1. If explicit roundNumber is provided, use it.
-    // 2. If called directly like handleUpkeepStep(pid, roundOrTurn), and roundNumber is undefined:
-    //    If priorityStateMachine has a roundNumber that was explicitly updated, use it;
-    //    otherwise turnNumber represents the round/turn count for backward compatibility.
-    // 3. In 1v1, if global turnNumber >= 7, that is always Round 4+.
+    let targetPlayerId;
+    let currentTurn;
     let effectiveRound;
-    if (roundNumber !== undefined && roundNumber !== null) {
-      effectiveRound = roundNumber;
-    } else if (this.priorityStateMachine?.roundNumber !== undefined) {
-      effectiveRound = this.priorityStateMachine.roundNumber;
-    } else if (typeof turnNumber === 'number') {
-      effectiveRound = turnNumber;
+
+    if (activePlayerId && typeof activePlayerId === 'object' && typeof turnNumber === 'string') {
+      // Called with (stateManager, activePlayerId)
+      targetPlayerId = turnNumber;
+      currentTurn = typeof roundNumber === 'number' ? roundNumber : (activePlayerId.turnNumber || this.priorityStateMachine?.turnNumber || 1);
+      effectiveRound = (typeof roundNumber === 'number') ? roundNumber : (activePlayerId.roundNumber ?? this.priorityStateMachine?.roundNumber);
     } else {
-      effectiveRound = 1;
+      targetPlayerId = (typeof activePlayerId === 'string' ? activePlayerId : null) || this.priorityStateMachine?.activePlayerId;
+      currentTurn = (turnNumber !== undefined && turnNumber !== null && typeof turnNumber === 'number')
+        ? turnNumber
+        : (this.priorityStateMachine?.turnNumber || 1);
+      if (roundNumber !== undefined && roundNumber !== null) {
+        effectiveRound = roundNumber;
+      } else if (this.priorityStateMachine?.roundNumber !== undefined) {
+        effectiveRound = this.priorityStateMachine.roundNumber;
+      } else if (typeof turnNumber === 'number') {
+        effectiveRound = turnNumber;
+      } else {
+        effectiveRound = 1;
+      }
     }
+
+    const player = this.stateManager?.players?.[targetPlayerId] || this.tabletopState?.players?.[targetPlayerId];
+    const turnsTaken = player?.turnsTaken ?? this.priorityStateMachine?.playerTurnCounts?.get(targetPlayerId) ?? 1;
 
     // In 1v1 (2 players), Round 4 corresponds to global turnNumber >= 7
     if (this.initialPlayerCount === 2 && currentTurn >= 7 && effectiveRound < 4) {
       effectiveRound = 4;
     }
 
-    if (effectiveRound < this.perkUnlockTurn) {
+    // For 3-6 players, Round >= 2 or turnsTaken >= 2 triggers perk
+    const isEligible = (effectiveRound >= this.perkUnlockTurn) || (turnsTaken >= this.perkUnlockTurn);
+
+    if (!isEligible) {
       this.emit('PERK_EMBLEM_DORMANT', {
         turnNumber: currentTurn,
         roundNumber: effectiveRound,
         perkUnlockTurn: this.perkUnlockTurn,
-        activePlayerId: targetPlayerId
+        activePlayerId: targetPlayerId,
+        turnsTaken
       });
       return null;
     }
@@ -313,6 +433,12 @@ export class RandomPerkEngine extends EventEmitter {
       summary: step1Log
     });
 
+    this.emit('PERK_UPKEEP_TRIGGER', {
+      stackItem: step1Item,
+      activePlayerId: targetActivePlayer,
+      priorityPlayerId: nextPlayerId,
+      logMessage: step1Log
+    });
     this.emit('PERK_UPKEEP_TRIGGER_PLACED', {
       stackItem: step1Item,
       activePlayerId: targetActivePlayer,
@@ -362,62 +488,222 @@ export class RandomPerkEngine extends EventEmitter {
   }
 
   /**
-   * Resolves Step 1 Upkeep Trigger: rolls dice, evaluates hit/miss, checks CR 603.3d target legality,
-   * and pushes Step 2 if legal.
+   * Resolves Step 1 Upkeep Trigger:
+   * a) If awaitHumanRollConfirmation is active and it is the human player's turn (not bot),
+   *    pauses and emits 'RPM_AWAIT_PLAYER_ROLL' with callback for human decision (ROLL or SKIP).
+   * b) In headless/test mode, or bot turns, or when injectedRoll is provided: resolves immediately.
    * 
    * @param {Object|null} [injectedRoll=null]
    * @param {string} [playerId]
-   * @returns {Object} DiceRollResult
+   * @returns {Object|Promise<Object>} DiceRollResult or Promise resolving upon decision
    */
   handleStep1Resolution(injectedRoll = null, playerId = null) {
     const activePlayerId = playerId || this.activeStep1Item?.sourcePlayerId || this.priorityStateMachine?.activePlayerId;
-    const roll = injectedRoll || this.rollDice();
 
-    const playerBirthdayRoll = this.birthdayMap[activePlayerId] || '69';
-    const match = resolveRoll(roll.tens, roll.ones, playerBirthdayRoll);
+    const playerObj = this.tabletopState?.players?.[activePlayerId] || this.tabletopState?.getPlayer?.(activePlayerId);
+    const isHumanTurn = (activePlayerId === this.humanPlayerId || (playerObj && !playerObj.isBot && activePlayerId !== 'p2_perkins' && !activePlayerId?.startsWith('bot_') && !activePlayerId?.includes('perkins')));
+
+    const isBot = !isHumanTurn || Boolean(
+      playerObj?.isBot ||
+      activePlayerId?.startsWith('bot_') ||
+      activePlayerId?.includes('perkins')
+    );
+
+    // Interactive pause for human player confirmation if enabled
+    if (this.awaitHumanRollConfirmation && isHumanTurn && !isBot && !injectedRoll) {
+      const turnNumber = this.priorityStateMachine?.turnNumber || 1;
+      let roundNumber = this.priorityStateMachine?.roundNumber;
+      if (roundNumber === undefined) {
+        roundNumber = Math.floor((turnNumber - 1) / (this.initialPlayerCount || 2)) + 1;
+      }
+
+      return new Promise((resolve) => {
+        let settled = false;
+
+        const callback = (decision) => {
+          if (settled) return;
+          settled = true;
+
+          const action = (typeof decision === 'string') ? decision : decision?.action;
+          if (action === 'SKIP') {
+            this.currentStep = 'IDLE';
+            this.activeStep1Item = null;
+            const pName = this.stateManager?.getPlayer?.(activePlayerId)?.playerName || activePlayerId;
+            const declineLog = `🛑 [RPM Step 1]: ${pName} declined to roll the RPM Emblem dice.`;
+            this.stateManager?.recordTrace?.('PERK_TRACE', 'PERK_ROLL_DECLINED', {
+              activePlayerId,
+              summary: declineLog
+            });
+            const declinePayload = {
+              activePlayerId,
+              playerId: activePlayerId,
+              turnNumber,
+              roundNumber,
+              declined: true,
+              logMessage: declineLog
+            };
+            this.emit('PERK_ROLL_DECLINED', declinePayload);
+            resolve(declinePayload);
+            return declinePayload;
+          }
+
+          // Otherwise action === 'ROLL'
+          // Single Synchronized Roll: check if decision?.roll is already provided with valid { tens, ones, rollString }
+          let forcedRoll = null;
+          if (decision?.roll && typeof decision.roll.tens === 'number' && typeof decision.roll.ones === 'number') {
+            const t = Number(decision.roll.tens) % 10;
+            const o = Number(decision.roll.ones) % 10;
+            forcedRoll = {
+              tens: t,
+              ones: o,
+              rollString: String(decision.roll.rollString ?? `${t}${o}`).padStart(2, '0'),
+              timestamp: Date.now()
+            };
+          } else if (decision?.injectedRoll) {
+            forcedRoll = decision.injectedRoll;
+          }
+
+          const deferStep2 = Boolean(decision?.deferStep2);
+          const rollResult = this._finishStep1Resolution(forcedRoll, activePlayerId, {
+            deferStep2,
+            impulse: decision?.impulse
+          });
+          resolve(rollResult);
+          return rollResult;
+        };
+
+        this.emit('RPM_AWAIT_PLAYER_ROLL', {
+          activePlayerId,
+          playerId: activePlayerId,
+          turnNumber,
+          roundNumber,
+          callback
+        });
+      });
+    }
+
+    return this._finishStep1Resolution(injectedRoll, activePlayerId);
+  }
+
+  /**
+   * Finalizes Step 1: executes authoritative roll, resolves match/miss, checks legality,
+   * and triggers Step 2 onto the stack.
+   * 
+   * @param {Object|null} [injectedRoll=null]
+   * @param {string|null} [activePlayerId=null]
+   * @param {Object} [options={}]
+   * @returns {Object} DiceRollResult
+   * @private
+   */
+  _finishStep1Resolution(injectedRoll = null, activePlayerId = null, options = {}) {
+    const targetPlayerId = activePlayerId || this.activeStep1Item?.sourcePlayerId || this.priorityStateMachine?.activePlayerId;
+    const roll = (injectedRoll && typeof injectedRoll.tens === 'number' && typeof injectedRoll.ones === 'number')
+      ? {
+          tens: injectedRoll.tens,
+          ones: injectedRoll.ones,
+          rollString: String(injectedRoll.rollString ?? `${injectedRoll.tens}${injectedRoll.ones}`).padStart(2, '0'),
+          timestamp: injectedRoll.timestamp || Date.now()
+        }
+      : this.rollDice();
+
+    const playerObj = this.stateManager?.players?.[targetPlayerId] || this.tabletopState?.players?.[targetPlayerId];
+    const rawBday =
+      options.birthday ??
+      options.birthDay ??
+      this.birthdayMap?.[targetPlayerId] ??
+      this.playerBirthdays?.[targetPlayerId] ??
+      playerObj?.birthDay ??
+      playerObj?.birthday ??
+      playerObj?.dob ??
+      playerObj?.profile?.birthday ??
+      null;
+
+    let playerBirthdayRoll = '69';
+    if (rawBday !== null && rawBday !== undefined && String(rawBday).trim() !== '') {
+      const strBday = String(rawBday).trim();
+      const isoMatch = strBday.match(/-(\d{1,2})$/);
+      if (isoMatch) {
+        playerBirthdayRoll = isoMatch[1].padStart(2, '0');
+      } else {
+        playerBirthdayRoll = strBday.padStart(2, '0').slice(-2);
+      }
+    }
+
+    const rollNum = parseInt(roll.rollString, 10);
+    const bdayNum = parseInt(playerBirthdayRoll, 10);
+    const isBirthdayDayOverride = (
+      rawBday !== null &&
+      rawBday !== undefined &&
+      rollNum >= 1 &&
+      rollNum <= 31 &&
+      bdayNum === rollNum &&
+      roll.rollString === playerBirthdayRoll
+    );
+
+    const match = isBirthdayDayOverride
+      ? {
+          perkKey: 'RPBD',
+          matchedKey: 'RPBD',
+          tens: roll.tens,
+          ones: roll.ones,
+          rollString: roll.rollString,
+          isBirthday: true,
+          isBirthdayMatch: true,
+          isMiss: false
+        }
+      : resolveRoll(roll.tens, roll.ones, playerBirthdayRoll);
+
+    const perkName = match.isMiss ? 'Miss' : (getPerkDefinition(match.perkKey)?.name || match.perkKey);
 
     const rollResult = {
       tens: roll.tens,
       ones: roll.ones,
       rollString: roll.rollString,
       matchedKey: match.perkKey,
+      perkName,
       isBirthday: match.isBirthday,
       isMiss: match.isMiss,
-      timestamp: Date.now()
+      timestamp: roll.timestamp || Date.now()
     };
 
     this.lastRollResult = rollResult;
+    this.rollState = rollResult;
+    if (!this.rollHistory) this.rollHistory = [];
+    this.rollHistory.push(rollResult);
     this.activeStep1Item = null;
 
-    const perkName = match.isMiss ? 'Miss' : (getPerkDefinition(match.perkKey)?.name || match.perkKey);
-    const pName = this.stateManager?.getPlayer?.(activePlayerId)?.playerName || activePlayerId;
+    const pName = this.stateManager?.getPlayer?.(targetPlayerId)?.playerName || targetPlayerId;
     const rollLog = `🎲 [RPM Roll]: ${pName} rolled ${roll.rollString} (${perkName})`;
 
     this.stateManager?.recordTrace?.('PERK_TRACE', 'PERK_DICE_ROLLED', {
-      activePlayerId,
+      activePlayerId: targetPlayerId,
       roll: rollResult,
       perkName,
       summary: rollLog
     });
 
     this.emit('PERK_DICE_ROLLED', {
-      activePlayerId,
+      activePlayerId: targetPlayerId,
       roll: rollResult,
       perkName,
       logMessage: rollLog
     });
     this.emit('PERK_ROLLED', rollResult);
+    this.emit('DICE_ROLLED', rollResult);
 
     // Roll Miss Branch (INV-PERK-8)
     if (match.isMiss || !match.perkKey) {
       this.currentStep = 'IDLE';
       this.emit('PERK_ROLL_MISS', {
-        activePlayerId,
+        activePlayerId: targetPlayerId,
         roll: rollResult,
         turnNumber: this.priorityStateMachine?.turnNumber || 1,
         logMessage: rollLog
       });
-      return rollResult;
+      return {
+        ...rollResult,
+        queueStep2: () => null
+      };
     }
 
     const perkKey = match.perkKey;
@@ -425,31 +711,48 @@ export class RandomPerkEngine extends EventEmitter {
 
     // CR 603.3d Target Legality Pre-Check (INV-PERK-1)
     if (perkDef?.requiresTargets) {
-      const legal = hasLegalTargets(perkKey, this.stateManager, activePlayerId);
+      const legal = hasLegalTargets(perkKey, this.stateManager, targetPlayerId);
       if (!legal) {
         this.currentStep = 'IDLE';
         this.emit('PERK_TRIGGER_FIZZLED_NO_LEGAL_TARGETS', {
-          activePlayerId,
+          activePlayerId: targetPlayerId,
           perkKey,
           perkName: perkDef.name,
           roll: rollResult,
           reason: 'NO_LEGAL_TARGETS'
         });
-        return rollResult;
+        return {
+          ...rollResult,
+          queueStep2: () => null
+        };
       }
     }
 
     // Step 2 Target Declaration & Stack Push (DEC-014)
     let declaredTargets = [];
     if (perkDef?.requiresTargets) {
-      const availableTargets = getLegalTargets(perkKey, this.stateManager, activePlayerId);
+      const availableTargets = getLegalTargets(perkKey, this.stateManager, targetPlayerId);
       if (availableTargets.length > 0) {
         declaredTargets = [availableTargets[0]];
       }
     }
 
-    this.triggerStep2(perkKey, declaredTargets, match.isBirthday ? 0 : undefined, activePlayerId);
-    return rollResult;
+    const queueStep2 = () => {
+      return this.triggerStep2(perkKey, declaredTargets, match.isBirthday ? 0 : undefined, targetPlayerId);
+    };
+
+    if (options.deferStep2) {
+      return {
+        ...rollResult,
+        queueStep2
+      };
+    }
+
+    queueStep2();
+    return {
+      ...rollResult,
+      queueStep2
+    };
   }
 
   /**
@@ -543,23 +846,32 @@ export class RandomPerkEngine extends EventEmitter {
   /**
    * Executes perk mutation upon Step 2 resolution under MTG CR 608.2c.
    * 
-   * @param {Object} perkStackItem
+   * @param {Object} [perkStackItem]
+   * @param {Object} [options={}]
    * @returns {Object} PerkExecutionResult
    */
-  handleStep2Resolution(perkStackItem) {
+  handleStep2Resolution(perkStackItem, options = {}) {
     const item = perkStackItem || this.activeStep2Item;
     if (!item) {
       throw new Error('No active Step 2 Perk Trigger to resolve');
     }
 
+    const mergedOptions = {
+      activePlayerId: item.sourcePlayerId,
+      targets: item.targets,
+      birthdayOptionIndex: item.birthdayOptionIndex,
+      ...(item.options || {}),
+      ...(options || {})
+    };
+
+    if (item.perkKey === '66' || item.perkName === 'Mutual Sacrifice') {
+      this._handleMutualSacrificeChoices(item, mergedOptions);
+    }
+
     const executionResult = executePerkEffect(
       item.perkKey,
       this.stateManager,
-      {
-        activePlayerId: item.sourcePlayerId,
-        targets: item.targets,
-        birthdayOptionIndex: item.birthdayOptionIndex
-      }
+      mergedOptions
     );
 
     this.currentStep = 'IDLE';
@@ -589,6 +901,88 @@ export class RandomPerkEngine extends EventEmitter {
     this.emit('PERK_RESOLVED', payload);
 
     return executionResult;
+  }
+
+  /**
+   * Helper to resolve sacrifice selections for Perk #66 (Mutual Sacrifice)
+   * under MTG CR 608.2c.
+   * 
+   * @param {Object} item
+   * @param {Object} options
+   * @private
+   */
+  _handleMutualSacrificeChoices(item, options = {}) {
+    const sm = this.stateManager || this.tabletopState;
+    if (!sm) return;
+
+    const sacrificeChoices = options.sacrificeChoices || item.sacrificeChoices || item.options?.sacrificeChoices || {};
+    const allPlayerIds = Object.keys(sm.players || {});
+    const activePid = options.activePlayerId || item.sourcePlayerId || this.priorityStateMachine?.activePlayerId || allPlayerIds[0];
+    const startIdx = Math.max(0, allPlayerIds.indexOf(activePid));
+    const apnapPlayerIds = [
+      ...allPlayerIds.slice(startIdx),
+      ...allPlayerIds.slice(0, startIdx)
+    ];
+
+    for (const pId of apnapPlayerIds) {
+      const player = sm.players[pId];
+      if (!player || player.isEliminated) continue;
+      const creatures = player.battlefield?.creatures || [];
+      if (creatures.length === 0) continue;
+
+      let chosenCreature = null;
+      const explicitChoice = sacrificeChoices[pId];
+      if (explicitChoice) {
+        chosenCreature = creatures.find(c => c && (c.instanceId === explicitChoice || c.id === explicitChoice));
+      }
+
+      const isBot = Boolean(
+        player.isBot ||
+        pId.startsWith('bot_') ||
+        pId.includes('perkins') ||
+        (this.humanPlayerId && pId !== this.humanPlayerId)
+      );
+
+      if (!chosenCreature && creatures.length >= 2 && !isBot) {
+        this.emit('AWAIT_PLAYER_SACRIFICE_CHOICE', {
+          playerId: pId,
+          candidateCreatures: creatures.map(c => ({
+            instanceId: c.instanceId || c.id,
+            name: c.name,
+            power: c.power,
+            toughness: c.toughness,
+            manaCost: c.manaCost
+          }))
+        });
+      }
+
+      if (!chosenCreature) {
+        // Bot or fallback: lowest value (power + toughness)
+        let lowestVal = Infinity;
+        chosenCreature = creatures[0];
+        for (const c of creatures) {
+          if (!c) continue;
+          const stats = (sm.abilityEngine && typeof sm.abilityEngine.evaluateCreatureStats === 'function')
+            ? sm.abilityEngine.evaluateCreatureStats(c, sm)
+            : (sm.evaluateCreatureStats
+                ? sm.evaluateCreatureStats(c, pId)
+                : { power: Number(c.power || 0), toughness: Number(c.toughness || 0) });
+          const val = Number(stats?.power ?? c.power ?? 0) + Number(stats?.toughness ?? c.toughness ?? 0);
+          if (val < lowestVal) {
+            lowestVal = val;
+            chosenCreature = c;
+          }
+        }
+      }
+
+      if (chosenCreature) {
+        const idx = creatures.findIndex(c => c === chosenCreature || (c && chosenCreature.instanceId && c.instanceId === chosenCreature.instanceId));
+        if (idx > 0) {
+          const [selected] = creatures.splice(idx, 1);
+          creatures.unshift(selected);
+        }
+      }
+    }
   }
 
   /**

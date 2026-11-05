@@ -28,11 +28,14 @@ import {
   resolveRoll,
   executePerkEffect,
   DiceCanvas,
+  DiceRenderer3D,
   diceCanvas,
   is3DSupported,
+  DICE_COLORS,
   DiceShaker,
   diceShaker,
-  RandomPerkEngine
+  RandomPerkEngine,
+  RPMDiceRollOverlay
 } from '../src/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -142,6 +145,12 @@ class MockElement {
     return child;
   }
 
+  remove() {
+    if (this.parentNode) {
+      this.parentNode.removeChild(this);
+    }
+  }
+
   removeChild(child) {
     const idxNode = this.childNodes.indexOf(child);
     if (idxNode !== -1) {
@@ -154,6 +163,12 @@ class MockElement {
       this.children.splice(idxChild, 1);
     }
     return child;
+  }
+
+  remove() {
+    if (this.parentNode) {
+      this.parentNode.removeChild(this);
+    }
   }
 
   get textContent() {
@@ -248,6 +263,16 @@ class MockElement {
 
   querySelectorAll(selector) {
     if (!selector || typeof selector !== 'string') return [];
+    if (selector.includes(',')) {
+      const subSelectors = selector.split(',').map(s => s.trim()).filter(Boolean);
+      const results = [];
+      for (const sub of subSelectors) {
+        for (const el of this.querySelectorAll(sub)) {
+          if (!results.includes(el)) results.push(el);
+        }
+      }
+      return results;
+    }
     const parts = selector.trim().split(/\s+/);
 
     if (parts.length === 1) {
@@ -328,6 +353,15 @@ class MockDocument {
   }
   removeEventListener(type, listener) {
     if (this._listeners.has(type)) this._listeners.get(type).delete(listener);
+  }
+  dispatchEvent(event) {
+    event.target = this;
+    if (this._listeners.has(event.type)) {
+      for (const listener of this._listeners.get(event.type)) {
+        listener.call(this, event);
+      }
+    }
+    return !event.defaultPrevented;
   }
 }
 
@@ -871,6 +905,386 @@ export async function runTestSuite() {
     diceShaker.update(120, 140);
     const shakeResult = diceShaker.release(150, 180);
     assert.ok(shakeResult.throwForce >= 3.2, 'Throw force calculated');
+
+    app.destroy();
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-17: Deterministic 2d10 Trapezohedron Face Alignment (DiceCanvas & DiceRenderer3D)
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-17', 'Deterministic 2d10 Trapezohedron Face Alignment (DiceCanvas & DiceRenderer3D)', async () => {
+    // 1. Verify DiceRenderer3D alias and DICE_COLORS palette ported from rpmrevival
+    assert.strictEqual(DiceRenderer3D, DiceCanvas, 'DiceRenderer3D must alias DiceCanvas');
+    assert.strictEqual(DICE_COLORS.DIE_TENS.background, '#8A2BE2', 'Violet tens die background must be #8A2BE2');
+    assert.strictEqual(DICE_COLORS.DIE_TENS.foreground, '#FFD700', 'Violet tens die numeral must be #FFD700');
+    assert.strictEqual(DICE_COLORS.DIE_ONES.background, '#7FFFD4', 'Aquamarine ones die background must be #7FFFD4');
+    assert.strictEqual(DICE_COLORS.DIE_ONES.foreground, '#FF0000', 'Aquamarine ones die numeral must be #FF0000');
+
+    // 2. Deterministic rollPercentile alignment
+    const roll1 = await diceCanvas.rollPercentile({ tens: 7, ones: 3 });
+    assert.deepStrictEqual(roll1, [7, 3], 'Must return deterministic [7, 3]');
+    const settled1 = diceCanvas.getSettledValues();
+    assert.strictEqual(settled1.tens, 7);
+    assert.strictEqual(settled1.ones, 3);
+    assert.strictEqual(settled1.rollString, '73');
+
+    // 3. Double-zero alignment
+    const roll0 = await diceCanvas.rollPercentile({ tens: 0, ones: 0 });
+    assert.deepStrictEqual(roll0, [0, 0], 'Must return deterministic [0, 0]');
+    const settled0 = diceCanvas.getSettledValues();
+    assert.strictEqual(settled0.rollString, '00');
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-18: Interactive Pause on Step 1 Resolution & Human ROLL Decision
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-18', 'Interactive Pause on Step 1 Resolution & Human ROLL Decision', async () => {
+    const ttsm = new TabletopStateManager({ sessionId: 's_rpe_roll' });
+    ttsm.registerPlayer('p1', 'Player 1');
+    ttsm.registerPlayer('bot_perkins', 'Perkins AI (Bot)');
+
+    const psm = new PriorityStateMachine({
+      players: ['p1', 'bot_perkins'],
+      activePlayerId: 'p1',
+      currentPhaseStep: 'UPKEEP'
+    });
+
+    const engine = new RandomPerkEngine({
+      tabletopState: ttsm,
+      priorityStateMachine: psm,
+      awaitHumanRollConfirmation: true,
+      humanPlayerId: 'p1',
+      initialPlayerCount: 2
+    });
+
+    // 1. Bot turn bypass: When active player is a bot, immediate auto-resolution occurs
+    let awaitEventFired = false;
+    engine.on('RPM_AWAIT_PLAYER_ROLL', () => { awaitEventFired = true; });
+
+    const botResult = engine.handleStep1Resolution({ tens: 2, ones: 2, rollString: '22' }, 'bot_perkins');
+    assert.strictEqual(awaitEventFired, false, 'Bot turn must NOT trigger RPM_AWAIT_PLAYER_ROLL');
+    assert.strictEqual(botResult.rollString, '22', 'Bot must resolve roll immediately');
+
+    // Clear stack for human turn test
+    while (psm.stack.length > 0) psm.popStack();
+
+    // 2. Human turn interactive pause: emits RPM_AWAIT_PLAYER_ROLL and waits for decision
+    let capturedCallback = null;
+    let eventPayload = null;
+    engine.on('RPM_AWAIT_PLAYER_ROLL', (data) => {
+      awaitEventFired = true;
+      eventPayload = data;
+      capturedCallback = data.callback;
+    });
+
+    engine.triggerStep1('p1');
+    assert.strictEqual(psm.stack.length, 1, 'PERK_UPKEEP_TRIGGER must be on stack');
+
+    // Initiate Step 1 resolution for human player
+    awaitEventFired = false;
+    const resolutionPromise = engine.handleStep1Resolution(null, 'p1');
+    assert.ok(resolutionPromise instanceof Promise, 'handleStep1Resolution must return a Promise when awaiting human roll');
+    assert.strictEqual(awaitEventFired, true, 'RPM_AWAIT_PLAYER_ROLL event must fire');
+    assert.strictEqual(eventPayload.playerId, 'p1');
+    assert.strictEqual(typeof capturedCallback, 'function');
+
+    // Verify stack does NOT have Step 2 yet while awaiting human roll
+    assert.strictEqual(engine.currentStep, 'STEP_1', 'Engine must remain at STEP_1 while paused');
+
+    // 3. Human confirms ROLL with Perk #22 (Divination)
+    let diceRolledEvent = null;
+    engine.on('PERK_DICE_ROLLED', (ev) => { diceRolledEvent = ev; });
+
+    capturedCallback({
+      action: 'ROLL',
+      roll: { tens: 2, ones: 2, rollString: '22' }
+    });
+
+    const resolved = await resolutionPromise;
+    assert.strictEqual(resolved.rollString, '22');
+    assert.strictEqual(resolved.matchedKey, '22');
+    assert.ok(diceRolledEvent, 'PERK_DICE_ROLLED must be emitted');
+
+    // Verify Step 2 trigger is now placed on the stack
+    assert.strictEqual(psm.stack.length, 2, 'Stack must now hold PERK_EFFECT_TRIGGER');
+    assert.strictEqual(psm.peekStack().type, 'PERK_EFFECT_TRIGGER');
+    assert.strictEqual(psm.peekStack().perkKey, '22');
+
+    engine.destroy();
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-19: Interactive Pause on Step 1 Resolution & Human SKIP Decision
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-19', 'Interactive Pause on Step 1 Resolution & Human SKIP Decision', async () => {
+    const ttsm = new TabletopStateManager({ sessionId: 's_rpe_skip' });
+    ttsm.registerPlayer('p1', 'Player 1');
+    ttsm.registerPlayer('p2', 'Player 2');
+
+    const psm = new PriorityStateMachine({
+      players: ['p1', 'p2'],
+      activePlayerId: 'p1',
+      currentPhaseStep: 'UPKEEP'
+    });
+
+    const engine = new RandomPerkEngine({
+      tabletopState: ttsm,
+      priorityStateMachine: psm,
+      awaitHumanRollConfirmation: true,
+      humanPlayerId: 'p1',
+      initialPlayerCount: 2
+    });
+
+    let declinedPayload = null;
+    engine.on('PERK_ROLL_DECLINED', (data) => {
+      declinedPayload = data;
+    });
+
+    let capturedCallback = null;
+    engine.on('RPM_AWAIT_PLAYER_ROLL', (data) => {
+      capturedCallback = data.callback;
+    });
+
+    engine.triggerStep1('p1');
+    const resPromise = engine.handleStep1Resolution(null, 'p1');
+
+    assert.ok(capturedCallback, 'Callback must be delivered');
+
+    // Human player chooses SKIP
+    capturedCallback({ action: 'SKIP' });
+    const res = await resPromise;
+
+    assert.strictEqual(res.declined, true, 'Result must reflect declined roll');
+    assert.ok(declinedPayload, 'PERK_ROLL_DECLINED must be emitted');
+    assert.ok(declinedPayload.logMessage.includes('declined to roll the RPM Emblem dice'), 'Log message must state player declined');
+    assert.strictEqual(engine.currentStep, 'IDLE', 'Engine must return to IDLE');
+
+    // Verify NO Step 2 item is pushed onto the stack
+    assert.strictEqual(psm.stack.length, 1, 'Only Step 1 trigger remains on stack (no Step 2 pushed)');
+    assert.strictEqual(psm.peekStack().type, 'PERK_UPKEEP_TRIGGER');
+
+    engine.destroy();
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-20: Modal Overlay (#rpm-dice-roll-overlay) & Draggable Button Mechanics
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-20', 'Modal Overlay (#rpm-dice-roll-overlay) & Draggable Button Mechanics', async () => {
+    const doc = setupMockDOM();
+    const container = doc.createElement('div');
+    doc.body.appendChild(container);
+
+    const app = new RPMAppController({
+      container,
+      autoConnect: false,
+      myPlayerId: 'p1',
+      playerIds: ['p1', 'bot_perkins'],
+      awaitHumanRollConfirmation: true,
+      bannerDurationMs: 50
+    });
+    await app.mount();
+
+    // 1. Verify structural mounting of #rpm-dice-roll-overlay
+    const overlay = container.querySelector('#rpm-dice-roll-overlay');
+    assert.ok(overlay, '#rpm-dice-roll-overlay must be mounted in DOM');
+
+    const btnDraggable = overlay.querySelector('#btn-draggable-dice-roll');
+    assert.ok(btnDraggable, '#btn-draggable-dice-roll must exist in overlay');
+
+    const btnSkip = overlay.querySelector('#btn-skip-dice-roll');
+    assert.ok(btnSkip, '#btn-skip-dice-roll must exist in overlay');
+
+    const banner = overlay.querySelector('#rpm-roll-result-banner');
+    assert.ok(banner, '#rpm-roll-result-banner must exist in overlay');
+
+    // 2. Open overlay via RPM_AWAIT_PLAYER_ROLL
+    let rollDecisionMade = null;
+    const mockCallback = (decision) => {
+      rollDecisionMade = decision;
+      return {
+        tens: 8,
+        ones: 8,
+        rollString: '88',
+        matchedKey: '88',
+        isMiss: false,
+        perkName: 'Infinite Reflection',
+        queueStep2: () => {}
+      };
+    };
+
+    app.diceRollOverlay.open({
+      playerId: 'p1',
+      roundNumber: 4,
+      turnNumber: 7,
+      callback: mockCallback
+    });
+
+    assert.strictEqual(app.diceRollOverlay.isOpen, true, 'Overlay must be marked isOpen');
+    assert.strictEqual(overlay.classList.contains('hidden'), false, 'Overlay must not be hidden');
+
+    // 3. Pointer drag & release interaction simulation
+    btnDraggable.dispatchEvent(new MockEvent('pointerdown', { pointerId: 1, clientX: 100, clientY: 100 }));
+    assert.strictEqual(app.diceRollOverlay._isDragging, true, 'Overlay must record isDragging');
+
+    btnDraggable.dispatchEvent(new MockEvent('pointermove', { pointerId: 1, clientX: 160, clientY: 220 }));
+    btnDraggable.dispatchEvent(new MockEvent('pointerup', { pointerId: 1, clientX: 160, clientY: 220 }));
+
+    // Await microtasks for async _executeRoll completion
+    await new Promise(r => setTimeout(r, 15));
+
+    assert.strictEqual(app.diceRollOverlay._isDragging, false, 'Dragging must end on pointerup');
+    assert.ok(rollDecisionMade, 'Roll callback must have been executed on release');
+    assert.strictEqual(rollDecisionMade.action, 'ROLL');
+    assert.ok(rollDecisionMade.impulse.force >= 3.2, 'Impulse force must be calculated');
+
+    // 4. Verify landed digits and result banner
+    const tensDigit = overlay.querySelector('#overlay-tens-digit');
+    const onesDigit = overlay.querySelector('#overlay-ones-digit');
+    assert.strictEqual(tensDigit.textContent, '8', 'Violet tens digit must display 8');
+    assert.strictEqual(onesDigit.textContent, '8', 'Aquamarine ones digit must display 8');
+
+    assert.strictEqual(banner.classList.contains('hidden'), false, 'Banner must be visible after roll');
+    assert.ok(banner.classList.contains('banner-hit'), 'Banner must have banner-hit class');
+    const bannerHeadline = overlay.querySelector('#banner-result-headline');
+    assert.ok(bannerHeadline.textContent.includes('PERK #[88]'), 'Banner must display Perk #88 headline');
+
+    // 5. Await auto-close after banner inspection duration
+    await new Promise(r => setTimeout(r, 80));
+    assert.strictEqual(app.diceRollOverlay.isOpen, false, 'Overlay must auto-close after inspection duration');
+
+    app.destroy();
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-21: PriorityStateMachine isGameOver Lockdown
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-21', 'PriorityStateMachine passPriority and nextPhase are no-ops when isGameOver === true', async () => {
+    const psm = new PriorityStateMachine({
+      players: ['p1', 'p2'],
+      activePlayerId: 'p1',
+      initialPhaseStep: 'PRECOMBAT_MAIN',
+      isGameOver: true
+    });
+
+    const passRes = psm.passPriority('p1');
+    assert.strictEqual(passRes, false, 'passPriority must return false when isGameOver === true');
+    assert.strictEqual(psm.priorityPlayerId, 'p1', 'Priority must not rotate when game is over');
+
+    const nextRes = psm.nextPhase('p1');
+    assert.strictEqual(nextRes, false, 'nextPhase must return false when isGameOver === true');
+    assert.strictEqual(psm.currentPhaseStep, 'PRECOMBAT_MAIN', 'Phase step must not advance when game is over');
+
+    // Also verify via dispatch
+    const dispatchPass = psm.dispatch('PASS_PRIORITY', { playerId: 'p1' });
+    assert.strictEqual(dispatchPass, false, 'dispatch PASS_PRIORITY must return false when isGameOver === true');
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-22: RandomPerkEngine Pre-Settled Single Synchronized Roll
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-22', 'RandomPerkEngine Step 1 accepts and respects pre-settled roll without re-rolling', async () => {
+    const perkEngine = new RandomPerkEngine({
+      awaitHumanRollConfirmation: true,
+      humanPlayerId: 'p1'
+    });
+
+    let awaitEventData = null;
+    perkEngine.on('RPM_AWAIT_PLAYER_ROLL', (data) => {
+      awaitEventData = data;
+    });
+
+    let rolledEventData = null;
+    perkEngine.on('PERK_ROLLED', (data) => {
+      rolledEventData = data;
+    });
+
+    const step1Promise = perkEngine.handleStep1Resolution(null, 'p1');
+    assert.ok(awaitEventData, 'RPM_AWAIT_PLAYER_ROLL must be emitted for human turn');
+    assert.strictEqual(typeof awaitEventData.callback, 'function');
+
+    // Human decision provides settled roll: tens: 7, ones: 3
+    const settledRoll = { tens: 7, ones: 3, rollString: '73' };
+    await awaitEventData.callback({
+      action: 'ROLL',
+      roll: settledRoll,
+      deferStep2: true
+    });
+
+    const finalResult = await step1Promise;
+    assert.strictEqual(finalResult.tens, 7, 'Final tens must match settled roll');
+    assert.strictEqual(finalResult.ones, 3, 'Final ones must match settled roll');
+    assert.strictEqual(finalResult.rollString, '73', 'Final rollString must match settled roll');
+
+    assert.ok(rolledEventData, 'PERK_ROLLED must be emitted with settled roll');
+    assert.strictEqual(rolledEventData.tens, 7);
+    assert.strictEqual(rolledEventData.ones, 3);
+    assert.strictEqual(perkEngine.rollState?.rollString, '73');
+    assert.strictEqual(perkEngine.rollHistory?.length, 1);
+    assert.strictEqual(perkEngine.rollHistory[0]?.rollString, '73');
+  });
+
+  // --------------------------------------------------------------------------
+  // TC-DICE-23: Spacebar Isolation & Modal Root Node Preservation
+  // --------------------------------------------------------------------------
+  await test('TC-DICE-23', 'RPMDiceRollOverlay ignores Space keydown and closeModal preserves persistent modal nodes', async () => {
+    const doc = setupMockDOM();
+    const container = doc.createElement('div');
+    doc.body.appendChild(container);
+
+    const app = new RPMAppController({
+      container,
+      autoConnect: false,
+      bannerDurationMs: 50
+    });
+    await app.mount();
+
+    const modalRoot = container.querySelector('#modal-root');
+    const overlay = container.querySelector('#rpm-dice-roll-overlay');
+    const targetModal = container.querySelector('#target-selector-modal');
+    assert.ok(modalRoot, '#modal-root must exist');
+    assert.ok(overlay, '#rpm-dice-roll-overlay must exist in modal-root');
+    assert.ok(targetModal, '#target-selector-modal must exist in modal-root');
+
+    // Open dice overlay
+    let rollCalled = false;
+    app.diceRollOverlay.open({
+      playerId: 'p1',
+      callback: () => { rollCalled = true; }
+    });
+
+    assert.strictEqual(app.diceRollOverlay.isOpen, true);
+    assert.strictEqual(modalRoot.getAttribute('aria-hidden'), 'false');
+    assert.strictEqual(modalRoot.style.pointerEvents, 'auto');
+
+    // Press Space keydown - must NOT trigger roll
+    doc.dispatchEvent(new MockEvent('keydown', { key: ' ', code: 'Space' }));
+    assert.strictEqual(rollCalled, false, 'Spacebar must NOT trigger roll in overlay');
+    assert.strictEqual(app.diceRollOverlay._isRolling, false, 'Overlay must NOT be rolling on Spacebar');
+
+    // Close dice overlay
+    app.diceRollOverlay.close();
+    assert.strictEqual(app.diceRollOverlay.isOpen, false);
+
+    // Open Victory modal
+    app._renderVictoryModal(modalRoot, { winnerId: 'p1', winnerName: 'Hero' });
+    assert.ok(modalRoot.querySelector('#victory-modal-wrapper'), '#victory-modal-wrapper must be mounted');
+    assert.ok(modalRoot.querySelector('.modal-backdrop-harness'), '.modal-backdrop-harness must exist');
+    assert.ok(modalRoot.querySelector('#btn-victory-inspect-arena'), '#btn-victory-inspect-arena must exist');
+    assert.ok(modalRoot.querySelector('#btn-victory-view-recap'), '#btn-victory-view-recap must exist');
+    assert.ok(modalRoot.querySelector('#btn-victory-return-lobby'), '#btn-victory-return-lobby must exist');
+
+    // Close modal via closeModal()
+    app.closeModal();
+
+    // Verify backdrop is removed and persistent nodes intact
+    assert.strictEqual(modalRoot.querySelector('.modal-backdrop-harness'), null, '.modal-backdrop-harness must be removed');
+    assert.strictEqual(modalRoot.querySelector('#victory-modal-wrapper'), null, '#victory-modal-wrapper must be removed');
+    assert.strictEqual(modalRoot.getAttribute('aria-hidden'), 'true');
+    assert.strictEqual(modalRoot.style.pointerEvents, 'none');
+
+    // Persistent nodes MUST still be connected to modalRoot
+    assert.ok(modalRoot.querySelector('#rpm-dice-roll-overlay'), '#rpm-dice-roll-overlay must NOT be destroyed by closeModal');
+    assert.ok(modalRoot.querySelector('#target-selector-modal'), '#target-selector-modal must NOT be destroyed by closeModal');
 
     app.destroy();
   });

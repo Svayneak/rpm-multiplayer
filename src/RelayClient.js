@@ -42,6 +42,7 @@ export class RelayClient extends EventEmitter {
     this.isExplicitDisconnect = false;
     this.projectedState = null;
     this.activeSlots = [];
+    this.deckManifests = {};
 
     // Internal promise handlers for request-response flows
     this._pendingCreate = null;
@@ -213,6 +214,34 @@ export class RelayClient extends EventEmitter {
   }
 
   /**
+   * Sends a deck manifest frame across the active socket or connection.
+   * 
+   * @param {Object} manifest - { playerId, cards: [...] }
+   */
+  sendDeckManifest(manifest) {
+    this.send({
+      type: 'deck_manifest',
+      manifest
+    });
+  }
+
+  /**
+   * Registers a deck manifest locally or triggers a manifest distribution.
+   * 
+   * @param {Object} manifest
+   * @param {string} [playerId=null]
+   */
+  registerDeckManifest(manifest, playerId = null) {
+    const pid = playerId || manifest?.playerId;
+    this.deckManifests = this.deckManifests || {};
+    if (pid) {
+      this.deckManifests[pid] = manifest;
+    }
+    this.emit('deck_manifest', { type: 'deck_manifest', playerId: pid, manifest });
+    this.emit('deck_manifest_received', { type: 'deck_manifest', playerId: pid, manifest });
+  }
+
+  /**
    * Serializes and writes a JSON payload to the active socket.
    *
    * @param {Object} data
@@ -344,6 +373,18 @@ export class RelayClient extends EventEmitter {
 
     if (type === 'MATCH_VICTORY') {
       this.emit('match_victory', msg);
+      return;
+    }
+
+    if (type === 'deck_manifest' || type === 'DECK_MANIFEST' || type === 'REGISTER_DECK_MANIFEST') {
+      const manifest = msg.manifest || msg.payload?.manifest || msg.payload || msg;
+      const playerId = msg.playerId || manifest?.playerId;
+      this.deckManifests = this.deckManifests || {};
+      if (playerId) {
+        this.deckManifests[playerId] = manifest;
+      }
+      this.emit('deck_manifest', { ...msg, manifest, playerId });
+      this.emit('deck_manifest_received', { ...msg, manifest, playerId });
       return;
     }
 

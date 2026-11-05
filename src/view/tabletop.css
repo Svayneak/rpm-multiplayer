@@ -2755,3 +2755,346 @@
 .creature-chip.is-attacking { box-shadow: 0 0 8px rgba(255, 140, 0, 0.8); }
 .attack-confirm-bar { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
 .attack-confirm-bar .attack-hint { font-size: 0.8rem; opacity: 0.8; }
+
+/* ==========================================================================
+   RPM Emblem Step 1: Interactive Dice Roll Overlay & Draggable 2d10 Button
+   Ported from rpmrevival
+   ========================================================================== */
+
+.rpm-dice-roll-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+  animation: rpm-overlay-fadein 0.25s ease-out forwards;
+}
+
+.rpm-dice-roll-overlay.hidden {
+  display: none !important;
+}
+
+.rpm-dice-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(5, 7, 15, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.rpm-dice-overlay-panel {
+  position: relative;
+  z-index: 10;
+  width: 92%;
+  max-width: 480px;
+  background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #0f172a 75%, #020617 100%);
+  border: 2px solid rgba(139, 92, 246, 0.5);
+  border-radius: 24px;
+  padding: 24px 28px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.85), 0 0 35px rgba(124, 58, 237, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 18px;
+}
+
+.rpm-overlay-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.rpm-overlay-badge {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: #a78bfa;
+  background: rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(167, 139, 250, 0.3);
+  padding: 3px 10px;
+  border-radius: 9999px;
+  text-transform: uppercase;
+}
+
+.rpm-overlay-title {
+  font-family: 'Cinzel', serif;
+  font-size: 1.6rem;
+  font-weight: 800;
+  margin: 0;
+  background: linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.rpm-overlay-subtitle {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  margin: 0;
+  max-width: 360px;
+  line-height: 1.35;
+}
+
+/* 2d10 Visual Dice Viewport */
+.rpm-dice-viewport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 18px 0;
+  perspective: 800px;
+  width: 100%;
+}
+
+.rpm-die {
+  position: relative;
+  width: 90px;
+  height: 90px;
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.65), inset 0 2px 4px rgba(255, 255, 255, 0.4);
+  transition: transform 0.15s ease-out;
+}
+
+/* Tens Die — Violet Body #8A2BE2 / Gold Accent #FFD700 */
+.rpm-die-tens {
+  background: linear-gradient(135deg, #8b5cf6 0%, #6d28d9 50%, #4c1d95 100%);
+  border: 3px solid #fbbf24;
+  box-shadow: 0 12px 28px rgba(109, 40, 217, 0.5), inset 0 2px 4px rgba(255, 255, 255, 0.35);
+  transform: rotate(-4deg);
+}
+
+.rpm-die-tens .die-digit-text {
+  color: #fef08a;
+  text-shadow: 0 3px 8px rgba(0, 0, 0, 0.8), 0 0 12px rgba(251, 191, 36, 0.5);
+}
+
+.rpm-die-tens .die-accent-diamond {
+  color: #fbbf24;
+}
+
+/* Ones Die — Aquamarine Body #7FFFD4 / Coral Accent #FF0000 */
+.rpm-die-ones {
+  background: linear-gradient(135deg, #22d3ee 0%, #06b6d4 50%, #0e7490 100%);
+  border: 3px solid #f87171;
+  box-shadow: 0 12px 28px rgba(6, 182, 212, 0.5), inset 0 2px 4px rgba(255, 255, 255, 0.35);
+  transform: rotate(4deg);
+}
+
+.rpm-die-ones .die-digit-text {
+  color: #ffffff;
+  text-shadow: 0 3px 8px rgba(0, 0, 0, 0.8), 0 0 12px rgba(34, 211, 238, 0.6);
+}
+
+.rpm-die-ones .die-accent-diamond {
+  color: #f87171;
+}
+
+.die-face-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.die-accent-diamond {
+  font-size: 0.65rem;
+  line-height: 1;
+  margin-bottom: -2px;
+}
+
+.die-digit-text {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 2.7rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.die-label-caption {
+  position: absolute;
+  bottom: -20px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #cbd5e1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Throw & Tumble Deceleration Animations */
+@keyframes throw-fast-glide {
+  0%   { transform: scale(0.65) rotate(-35deg); opacity: 0.3; }
+  50%  { transform: scale(1.15) rotate(16deg); opacity: 1; }
+  80%  { transform: scale(0.96) rotate(-4deg); opacity: 1; }
+  100% { transform: scale(1.0) rotate(0deg); opacity: 1; }
+}
+
+@keyframes throw-bounce-settle {
+  0%   { transform: translateY(-40px) scale(0.8) rotate(-40deg); }
+  40%  { transform: translateY(16px) scale(1.1) rotate(14deg); }
+  70%  { transform: translateY(-8px) scale(0.98) rotate(-5deg); }
+  100% { transform: translateY(0) scale(1.0) rotate(0deg); }
+}
+
+.rpm-dice-viewport.throw-fast-glide .rpm-die-tens {
+  animation: throw-fast-glide 0.65s cubic-bezier(0.1, 0.9, 0.2, 1) 1;
+}
+.rpm-dice-viewport.throw-fast-glide .rpm-die-ones {
+  animation: throw-fast-glide 0.72s 0.05s cubic-bezier(0.1, 0.9, 0.2, 1) 1;
+}
+
+.rpm-dice-viewport.throw-bounce-settle .rpm-die-tens {
+  animation: throw-bounce-settle 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 1;
+}
+.rpm-dice-viewport.throw-bounce-settle .rpm-die-ones {
+  animation: throw-bounce-settle 0.75s 0.06s cubic-bezier(0.34, 1.56, 0.64, 1) 1;
+}
+
+/* Tension Aim-Trail Vector (SVG) */
+.rpm-aim-trail-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10001;
+}
+
+.rpm-aim-trail-line {
+  stroke: #a855f7;
+  stroke-width: 4px;
+  stroke-dasharray: 6 6;
+  filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.8));
+}
+
+.rpm-aim-trail-puck {
+  fill: #f59e0b;
+  stroke: #ffffff;
+  stroke-width: 3px;
+  filter: drop-shadow(0 0 10px rgba(245, 158, 11, 0.9));
+}
+
+/* Result Inspection Banner */
+.rpm-roll-result-banner {
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 14px;
+  animation: rpm-banner-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.rpm-roll-result-banner.banner-hit {
+  background: rgba(34, 197, 94, 0.15);
+  border: 2px solid #22c55e;
+  box-shadow: 0 0 25px rgba(34, 197, 94, 0.35);
+}
+
+.rpm-roll-result-banner.banner-hit .banner-headline {
+  color: #4ade80;
+  font-size: 1.15rem;
+  font-weight: 800;
+  text-shadow: 0 0 10px rgba(74, 222, 128, 0.4);
+}
+
+.rpm-roll-result-banner.banner-hit .banner-subtext {
+  color: #bbf7d0;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+.rpm-roll-result-banner.banner-miss {
+  background: rgba(148, 163, 184, 0.12);
+  border: 2px solid #64748b;
+}
+
+.rpm-roll-result-banner.banner-miss .banner-headline {
+  color: #cbd5e1;
+  font-size: 1.15rem;
+  font-weight: 800;
+}
+
+.rpm-roll-result-banner.banner-miss .banner-subtext {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+/* Action Controls */
+.rpm-overlay-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
+}
+
+.btn-draggable-roll {
+  position: relative;
+  background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+  border: 2px solid #c4b5fd;
+  color: #ffffff;
+  padding: 16px 24px;
+  border-radius: 16px;
+  font-size: 1.05rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: grab;
+  touch-action: none;
+  box-shadow: 0 10px 25px rgba(124, 58, 237, 0.45), inset 0 1px 2px rgba(255, 255, 255, 0.35);
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  will-change: transform;
+}
+
+.btn-draggable-roll:hover {
+  box-shadow: 0 14px 30px rgba(124, 58, 237, 0.6), inset 0 1px 2px rgba(255, 255, 255, 0.45);
+  border-color: #ffffff;
+}
+
+.btn-draggable-roll.is-dragging {
+  cursor: grabbing;
+  box-shadow: 0 0 35px rgba(245, 158, 11, 0.7), inset 0 0 10px rgba(255, 255, 255, 0.5);
+  border-color: #fbbf24;
+}
+
+.btn-draggable-roll.is-rolling,
+.btn-draggable-roll:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.btn-skip-roll {
+  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #94a3b8;
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.btn-skip-roll:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+@keyframes rpm-overlay-fadein {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1.0); }
+}
+
+@keyframes rpm-banner-pop {
+  0%   { opacity: 0; transform: scale(0.85); }
+  100% { opacity: 1; transform: scale(1.0); }
+}

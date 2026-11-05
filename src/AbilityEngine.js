@@ -220,6 +220,22 @@ export class AbilityEngine {
       }
     }
 
+    // Sort Non-Active Player triggers by turn order starting after active player (CR 603.3b)
+    if (Array.isArray(turnOrder) && turnOrder.length > 1) {
+      const activeIdx = turnOrder.indexOf(activePlayerId);
+      const reordered = [];
+      const baseIdx = activeIdx >= 0 ? activeIdx : 0;
+      for (let i = 1; i < turnOrder.length; i++) {
+        const nextPid = turnOrder[(baseIdx + i) % turnOrder.length];
+        reordered.push(nextPid);
+      }
+      nonActivePlayerTriggers.sort((a, b) => {
+        const idxA = reordered.indexOf(a.controllerId);
+        const idxB = reordered.indexOf(b.controllerId);
+        return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+      });
+    }
+
     // Clear queue
     this.triggeredQueue = [];
 
@@ -324,8 +340,16 @@ export class AbilityEngine {
 
     // Initialize base values from printed card characteristics
     let isCreature = /creature/i.test(card.typeLine || card.type || '');
-    const basePower = Number(card.power ?? card.basePower ?? 0) || 0;
-    const baseToughness = Number(card.toughness ?? card.baseToughness ?? 0) || 0;
+    if (card.basePower === undefined && card.power !== undefined) {
+      card.basePower = Number(card.power) || 0;
+    }
+    if (card.baseToughness === undefined && card.toughness !== undefined) {
+      card.baseToughness = Number(card.toughness) || 0;
+    }
+    const basePower = Number(card.basePower ?? card.power ?? 0) || 0;
+    const baseToughness = Number(card.baseToughness ?? card.toughness ?? 0) || 0;
+    card.basePower = basePower;
+    card.baseToughness = baseToughness;
 
     const normalizedKeywords = Array.isArray(card.keywords)
       ? card.keywords.reduce((acc, k) => {
@@ -361,108 +385,263 @@ export class AbilityEngine {
       delete evaluated.keywords.Hexproof;
     }
 
-    let countersApplied = false;
-    const applyCounters = () => {
-      if (countersApplied) return;
-      countersApplied = true;
-      if (isCreature && evaluated.counters) {
-        const p1 = Number(evaluated.counters['+1/+1'] || 0);
-        const m1 = Number(evaluated.counters['-1/-1'] || 0);
-        evaluated.effectivePower += (p1 - m1);
-        evaluated.effectiveToughness += (p1 - m1);
+    // Resolve attached equipment and aura modifiers across zones (CR 613.4b Layer 7b, CR 613.4c Layer 7c & CR 613.1f Layer 6)
+    const stateObj = context?.tabletopState || context?.state || context || this.tabletopState || this._tabletopState;
+    const resolvedAttachedMap = new Map();
+
+    const resolveItem = (itemOrId) => {
+      if (!itemOrId) return null;
+      if (typeof itemOrId === 'object') {
+        const id = itemOrId.instanceId || itemOrId.id;
+        if (id) {
+          resolvedAttachedMap.set(id, itemOrId);
+        } else {
+          resolvedAttachedMap.set(itemOrId, itemOrId);
+        }
+        return itemOrId;
       }
+      const targetId = String(itemOrId);
+      if (stateObj && stateObj.players) {
+        for (const p of Object.values(stateObj.players)) {
+          const list = [
+            ...(p.battlefield?.noncreatures || []),
+            ...(Array.isArray(p.battlefield) ? p.battlefield : []),
+            ...(p.zones?.battlefield || [])
+          ];
+          const found = list.find(nc => nc && (nc.instanceId === targetId || nc.id === targetId));
+          if (found) {
+            resolvedAttachedMap.set(targetId, found);
+            return found;
+          }
+        }
+      }
+      return null;
     };
 
-    // Iterate through all registered continuous effects in strict layer order
-    for (const effect of this.staticEffects) {
-      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) {
-        continue;
-      }
+    const attachedSources = [
+      ...(Array.isArray(card.attachedCards) ? card.attachedCards : []),
+      ...(Array.isArray(card.attachments) ? card.attachments : [])
+    ];
+    for (const item of attachedSources) {
+      resolveItem(item);
+    }
 
-      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) {
-        continue;
+    if (stateObj && stateObj.players) {
+      for (const player of Object.values(stateObj.players)) {
+        const noncreatures = [
+          ...(player.battlefield?.noncreatures || []),
+          ...(Array.isArray(player.battlefield) ? player.battlefield : []),
+          ...(player.zones?.battlefield || [])
+        ];
+        for (const nc of noncreatures) {
+          if (nc && nc.attachedTo && (nc.attachedTo === card.instanceId || nc.attachedTo === card.id)) {
+            const id = nc.instanceId || nc.id;
+            if (id && !resolvedAttachedMap.has(id)) {
+              resolvedAttachedMap.set(id, nc);
+            } else if (!id) {
+              resolvedAttachedMap.set(nc, nc);
+            }
+          }
+        }
       }
+    }
+
+    const attachedItems = Array.from(resolvedAttachedMap.values());
+
+    // --- CONTINUOUS LAYERS 1 THROUGH 6 ---
+    for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
+      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) continue;
 
       switch (effect.layer) {
         case CONTINUOUS_LAYERS.LAYER_4_TYPE:
           if (effect.apply) effect.apply(evaluated, context);
           isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
           break;
-
         case CONTINUOUS_LAYERS.LAYER_5_COLOR:
           if (effect.apply) effect.apply(evaluated, context);
           break;
-
         case CONTINUOUS_LAYERS.LAYER_6_ABILITY:
-          if (effect.grantedKeywords) {
-            Object.assign(evaluated.keywords, effect.grantedKeywords);
-          }
+          if (effect.grantedKeywords) Object.assign(evaluated.keywords, effect.grantedKeywords);
           if (effect.removedKeywords) {
-            for (const kw of effect.removedKeywords) {
-              delete evaluated.keywords[kw];
-            }
+            for (const kw of effect.removedKeywords) delete evaluated.keywords[kw];
           }
           if (effect.apply) effect.apply(evaluated, context);
           break;
-
-        case CONTINUOUS_LAYERS.LAYER_7A_CDA_PT:
-          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          if (isCreature) {
-            if (effect.apply) {
-              effect.apply(evaluated, context);
-            } else {
-              if (effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
-              if (effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
-            }
-          }
-          break;
-
-        case CONTINUOUS_LAYERS.LAYER_7B_SET_PT:
-          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          if (isCreature) {
-            if (effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
-            if (effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
-            if (effect.apply) effect.apply(evaluated, context);
-          }
-          break;
-
-        case CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT:
-          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          // e.g. Static -1/-1 debuff (Night of Souls' Betrayal, Elesh Norn) or Prowess buff
-          if (isCreature) {
-            evaluated.effectivePower += (effect.powerMod || effect.powerDelta || 0);
-            evaluated.effectiveToughness += (effect.toughnessMod || effect.toughnessDelta || 0);
-            if (typeof effect.effectFn === 'function') {
-              effect.effectFn(evaluated, context);
-            }
-            if (effect.apply) effect.apply(evaluated, context);
-          }
-          break;
-
-        case CONTINUOUS_LAYERS.LAYER_7D_COUNTERS_PT:
-          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          applyCounters();
-          if (isCreature && effect.apply) effect.apply(evaluated, context);
-          break;
-
-        case CONTINUOUS_LAYERS.LAYER_7E_SWITCH_PT:
-          isCreature = /creature/i.test(evaluated.typeLine || evaluated.type || '');
-          applyCounters();
-          if (isCreature && effect.switchPT) {
-            const temp = evaluated.effectivePower;
-            evaluated.effectivePower = evaluated.effectiveToughness;
-            evaluated.effectiveToughness = temp;
-          }
-          if (isCreature && effect.apply) effect.apply(evaluated, context);
-          break;
-
         default:
-          if (effect.apply) effect.apply(evaluated, context);
           break;
       }
     }
 
-    applyCounters();
+    // Layer 6 from attached equipment / auras (keywords granted/lost)
+    for (const item of attachedItems) {
+      const attachEffects = item.compiledMechanics?.attachmentEffects ||
+        item.compiledMechanics?.attachment ||
+        item.compiledMechanics?.attachEffects ||
+        item.attachmentEffects ||
+        item.attachEffects ||
+        item.attachment;
+      if (attachEffects) {
+        const granted = attachEffects.keywordsGranted || attachEffects.grantedKeywords || attachEffects.grantKeywords || [];
+        if (Array.isArray(granted)) {
+          for (const kw of granted) {
+            if (typeof kw === 'string') {
+              const lower = kw.toLowerCase();
+              evaluated.keywords[kw] = true;
+              evaluated.keywords[lower] = true;
+              evaluated.keywords[kw.charAt(0).toUpperCase() + kw.slice(1)] = true;
+              if (lower === 'haste') {
+                evaluated.hasHaste = true;
+                evaluated.hasSummoningSickness = false;
+                evaluated.isSummoningSick = false;
+              }
+            }
+          }
+        }
+        const lost = attachEffects.loseKeywords || attachEffects.keywordsLost || attachEffects.lostKeywords || [];
+        if (Array.isArray(lost)) {
+          for (const kw of lost) {
+            if (typeof kw === 'string') {
+              const lower = kw.toLowerCase();
+              delete evaluated.keywords[kw];
+              delete evaluated.keywords[lower];
+              delete evaluated.keywords[kw.charAt(0).toUpperCase() + kw.slice(1)];
+              if (lower === 'flying') {
+                evaluated.hasFlying = false;
+                delete evaluated.flying;
+                delete evaluated.Flying;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // --- CONTINUOUS LAYER 7A: CDA P/T ---
+    for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
+      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) continue;
+      if (effect.layer === CONTINUOUS_LAYERS.LAYER_7A_CDA_PT && isCreature) {
+        if (effect.apply) {
+          effect.apply(evaluated, context);
+        } else {
+          if (effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
+          if (effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
+        }
+      }
+    }
+
+    // --- CONTINUOUS LAYER 7B: SET P/T (Belt of Giant Strength 10/10 & setBasePT) ---
+    for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
+      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) continue;
+      if (effect.layer === CONTINUOUS_LAYERS.LAYER_7B_SET_PT && isCreature) {
+        if (effect.setPower !== undefined) evaluated.effectivePower = effect.setPower;
+        if (effect.setToughness !== undefined) evaluated.effectiveToughness = effect.setToughness;
+        if (effect.apply) effect.apply(evaluated, context);
+      }
+    }
+
+    for (const item of attachedItems) {
+      const attachEffects = item.compiledMechanics?.attachmentEffects ||
+        item.compiledMechanics?.attachment ||
+        item.compiledMechanics?.attachEffects ||
+        item.attachmentEffects ||
+        item.attachEffects ||
+        item.attachment;
+      const isBelt = /belt of giant strength/i.test(item.name || '') ||
+        /base power and toughness 10\/10/i.test(item.oracleText || item.text || '') ||
+        Boolean(item.setBasePT) ||
+        (attachEffects && (attachEffects.setPower !== undefined || attachEffects.basePower !== undefined));
+
+      if (isBelt || attachEffects?.setPower !== undefined || attachEffects?.basePower !== undefined) {
+        const setP = item.setBasePT?.power ?? attachEffects?.setPower ?? attachEffects?.basePower ?? (isBelt ? 10 : undefined);
+        const setT = item.setBasePT?.toughness ?? attachEffects?.setToughness ?? attachEffects?.baseToughness ?? (isBelt ? 10 : undefined);
+        if (setP !== undefined && setP !== null) {
+          evaluated.basePower = Number(setP);
+          evaluated.effectivePower = Number(setP);
+        }
+        if (setT !== undefined && setT !== null) {
+          evaluated.baseToughness = Number(setT);
+          evaluated.effectiveToughness = Number(setT);
+        }
+      }
+    }
+
+    // --- CONTINUOUS LAYER 7C: MODIFY P/T (+X/+Y, Colossus Hammer, Gaveleer Scaling, Static Anthems/Debuffs) ---
+    for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
+      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) continue;
+      if (effect.layer === CONTINUOUS_LAYERS.LAYER_7C_MODIFY_PT && isCreature) {
+        evaluated.effectivePower += (effect.powerMod || effect.powerDelta || 0);
+        evaluated.effectiveToughness += (effect.toughnessMod || effect.toughnessDelta || 0);
+        if (typeof effect.effectFn === 'function') effect.effectFn(evaluated, context);
+        if (effect.apply) effect.apply(evaluated, context);
+      }
+    }
+
+    for (const item of attachedItems) {
+      const attachEffects = item.compiledMechanics?.attachmentEffects ||
+        item.compiledMechanics?.attachment ||
+        item.compiledMechanics?.attachEffects ||
+        item.attachmentEffects ||
+        item.attachEffects ||
+        item.attachment;
+      if (attachEffects) {
+        const powerDelta = Number(attachEffects.powerDelta ?? attachEffects.powerModifier ?? attachEffects.powerMod ?? 0);
+        const toughnessDelta = Number(attachEffects.toughnessDelta ?? attachEffects.toughnessModifier ?? attachEffects.toughnessMod ?? 0);
+        evaluated.effectivePower += powerDelta;
+        evaluated.effectiveToughness += toughnessDelta;
+      }
+    }
+
+    // Layer 7c: Scaling buff per attached Equipment (e.g. Goblin Gaveleer: "gets +2/+0 for each Equipment attached to it")
+    const scalingPerm = Array.isArray(evaluated.compiledMechanics?.staticPermissions)
+      ? evaluated.compiledMechanics.staticPermissions.find(p => p && p.type === 'SCALING_BUFF_PER_EQUIPMENT')
+      : null;
+    const isGaveleer = Boolean(
+      scalingPerm ||
+      /goblin gaveleer/i.test(evaluated.name || '') ||
+      /gets\s+\+2\/\+0\s+for\s+each\s+equipment\s+attached\s+to\s+it/i.test(evaluated.oracleText || evaluated.text || '')
+    );
+    if (isGaveleer) {
+      const equipCount = attachedItems.filter(i =>
+        i && (i.compiledMechanics?.isEquipment || /equipment/i.test(i.typeLine || i.type || ''))
+      ).length;
+      const pPerEq = scalingPerm ? Number(scalingPerm.powerPerEquipment ?? 2) : 2;
+      const tPerEq = scalingPerm ? Number(scalingPerm.toughnessPerEquipment ?? 0) : 0;
+      evaluated.effectivePower += equipCount * pPerEq;
+      evaluated.effectiveToughness += equipCount * tPerEq;
+    }
+
+    // --- CONTINUOUS LAYER 7D: COUNTERS (+1/+1 and -1/-1) ---
+    if (isCreature && evaluated.counters) {
+      const p1 = Number(evaluated.counters['+1/+1'] || 0);
+      const m1 = Number(evaluated.counters['-1/-1'] || 0);
+      evaluated.effectivePower += (p1 - m1);
+      evaluated.effectiveToughness += (p1 - m1);
+    }
+    for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
+      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) continue;
+      if (effect.layer === CONTINUOUS_LAYERS.LAYER_7D_COUNTERS_PT && isCreature && effect.apply) {
+        effect.apply(evaluated, context);
+      }
+    }
+
+    // --- CONTINUOUS LAYER 7E: SWITCH P/T ---
+    for (const effect of this.staticEffects) {
+      if (effect.targetId && (evaluated.instanceId !== effect.targetId && evaluated.id !== effect.targetId)) continue;
+      if (effect.appliesTo && !effect.appliesTo(evaluated, context)) continue;
+      if (effect.layer === CONTINUOUS_LAYERS.LAYER_7E_SWITCH_PT && isCreature) {
+        if (effect.switchPT) {
+          const temp = evaluated.effectivePower;
+          evaluated.effectivePower = evaluated.effectiveToughness;
+          evaluated.effectiveToughness = temp;
+        }
+        if (effect.apply) effect.apply(evaluated, context);
+      }
+    }
 
     evaluated.power = evaluated.effectivePower;
     evaluated.toughness = evaluated.effectiveToughness;
@@ -476,6 +655,41 @@ export class AbilityEngine {
     }
 
     return evaluated;
+  }
+
+  /**
+   * Recalculates continuous layers for all permanents across all player battlefields.
+   * 
+   * @param {Object} [context={}]
+   * @returns {Array<Object>} Evaluated permanent cards
+   */
+  evaluateAllLayers(context = {}) {
+    const stateObj = context?.tabletopState || context?.state || context || this.tabletopState || this._tabletopState;
+    if (!stateObj || !stateObj.players) return [];
+
+    const evaluatedPerms = [];
+    for (const player of Object.values(stateObj.players)) {
+      const perms = [
+        ...(player.battlefield?.creatures || []),
+        ...(player.battlefield?.lands || []),
+        ...(player.battlefield?.noncreatures || []),
+        ...(player.battlefield?.planeswalkers || [])
+      ];
+
+      for (const perm of perms) {
+        if (!perm) continue;
+        const evaluated = this.evaluatePermanentLayers(perm, stateObj);
+        if (/creature/i.test(perm.typeLine || perm.type || '')) {
+          perm.effectivePower = evaluated.effectivePower;
+          perm.effectiveToughness = evaluated.effectiveToughness;
+          perm.power = evaluated.effectivePower;
+          perm.toughness = evaluated.effectiveToughness;
+          perm.keywords = { ...evaluated.keywords };
+        }
+        evaluatedPerms.push(evaluated);
+      }
+    }
+    return evaluatedPerms;
   }
 
   /**
@@ -494,6 +708,7 @@ export class AbilityEngine {
       power: evaluated.effectivePower ?? Number(creature.power ?? 0) ?? 0,
       toughness: evaluated.effectiveToughness ?? Number(creature.toughness ?? 0) ?? 0,
       keywords: evaluated.keywords || {},
+      hasFlying: evaluated.hasFlying !== undefined ? evaluated.hasFlying : Boolean(evaluated.keywords?.flying),
       effectivePower: evaluated.effectivePower ?? Number(creature.power ?? 0) ?? 0,
       effectiveToughness: evaluated.effectiveToughness ?? Number(creature.toughness ?? 0) ?? 0
     };

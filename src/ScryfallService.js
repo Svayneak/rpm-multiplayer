@@ -217,9 +217,25 @@ export class ScryfallService {
     // 6. Modern format legality
     const modernLegal = Boolean(card.legalities && card.legalities.modern === 'legal');
 
+    // 7. Resolve layout and card faces (Section 3 multi-face preservation)
+    const layout = card.layout || 'normal';
+    const rawFaces = card.card_faces || card.cardFaces;
+    const cardFaces = Array.isArray(rawFaces) ? rawFaces.map(f => ({
+      name: f.name || '',
+      manaCost: f.mana_cost !== undefined ? f.mana_cost : (f.manaCost || ''),
+      typeLine: f.type_line !== undefined ? f.type_line : (f.typeLine || ''),
+      oracleText: f.oracle_text !== undefined ? f.oracle_text : (f.oracleText || ''),
+      power: f.power !== undefined ? f.power : undefined,
+      toughness: f.toughness !== undefined ? f.toughness : undefined,
+      loyalty: f.loyalty !== undefined ? f.loyalty : undefined,
+      colors: f.colors || card.colors || []
+    })) : null;
+
     return {
       id: card.id,
       name: card.name,
+      layout,
+      cardFaces,
       manaCost,
       cmc: card.cmc ?? (card.mana_value !== undefined ? card.mana_value : 0),
       typeLine,
@@ -256,29 +272,42 @@ export class ScryfallService {
       } catch (_) {}
     }
 
-    // 2. Network fetch via Scryfall named exact endpoint
+    // 2. Network fetch via Scryfall named exact endpoint (with fuzzy fallback)
     if (this.fetchFn) {
-      const url = `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cardName.trim())}`;
-      try {
-        const response = await this.fetchFn(url, {
-          headers: {
-            'User-Agent': 'RPM-Multiplayer/1.0',
-            'Accept': 'application/json'
-          }
-        });
+      const cleanName = cardName.trim();
+      const frontName = cleanName.includes(' // ') ? cleanName.split(' // ')[0].trim() : cleanName;
+      const urlsToTry = [
+        `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(cleanName)}`,
+        `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cleanName)}`,
+        frontName !== cleanName ? `https://api.scryfall.com/cards/named?exact=${encodeURIComponent(frontName)}` : null,
+        frontName !== cleanName ? `https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(frontName)}` : null
+      ].filter(Boolean);
 
-        if (response && response.ok) {
-          const rawCard = await response.json();
-          const entity = this._transformScryfallCard(rawCard);
-          await this.cache.setItem(cacheKey, JSON.stringify(entity));
-          return entity;
+      for (const url of urlsToTry) {
+        try {
+          const response = await this.fetchFn(url, {
+            headers: {
+              'User-Agent': 'RPM-Multiplayer/1.0',
+              'Accept': 'application/json'
+            }
+          });
+
+          if (response && response.ok) {
+            const rawCard = await response.json();
+            const entity = this._transformScryfallCard(rawCard);
+            await this.cache.setItem(cacheKey, JSON.stringify(entity));
+            if (rawCard.card_faces && rawCard.card_faces[0]?.name) {
+              await this.cache.setItem(`name:${rawCard.card_faces[0].name.toLowerCase()}`, JSON.stringify(entity));
+            }
+            return entity;
+          }
+        } catch (err) {
+          // Try next url fallback
         }
-      } catch (err) {
-        // Fallback on network failure
       }
     }
 
-    // 3. Fallback stub
+    // 3. Fallback stub (do NOT cache so stub never poisons the cache)
     const stub = {
       id: `card_${normalized}`,
       name: cardName,
@@ -288,7 +317,6 @@ export class ScryfallService {
       imageUri: '',
       modernLegal: true
     };
-    await this.cache.setItem(cacheKey, JSON.stringify(stub));
     return stub;
   }
 

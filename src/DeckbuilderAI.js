@@ -19,9 +19,10 @@
  */
 
 import { StorageAdapter, validateAndGuardGuidelineQuota } from './StorageAdapter.js';
-import { DeckValidator, VALIDATION_ERRORS } from './DeckValidator.js';
+import { DeckValidator, VALIDATION_ERRORS, BASIC_LAND_COLORS } from './DeckValidator.js';
 import { evaluateDeckSlots, DECK_SLOT_MILESTONES } from './VictoryFanfare.js';
 import { hydrateCardMechanics } from './TabletopStateManager.js';
+import { compileCardMechanics } from './OracleEffectCompiler.js';
 
 // =============================================================================
 // Constants & Semantic Vocabulary
@@ -1051,6 +1052,352 @@ export const STARTER_CARD_METADATA = {
   }
 };
 
+export const KNOWN_EXTENDED_CARD_METADATA = Object.freeze({
+  // Basic lands
+  'plains': {
+    name: 'Plains',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Basic Land — Plains',
+    type: 'Land',
+    oracleText: '({T}: Add {W}.)',
+    colors: ['W'],
+    isBasicLand: true
+  },
+  'island': {
+    name: 'Island',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Basic Land — Island',
+    type: 'Land',
+    oracleText: '({T}: Add {U}.)',
+    colors: ['U'],
+    isBasicLand: true
+  },
+  'swamp': {
+    name: 'Swamp',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Basic Land — Swamp',
+    type: 'Land',
+    oracleText: '({T}: Add {B}.)',
+    colors: ['B'],
+    isBasicLand: true
+  },
+  'mountain': {
+    name: 'Mountain',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Basic Land — Mountain',
+    type: 'Land',
+    oracleText: '({T}: Add {R}.)',
+    colors: ['R'],
+    isBasicLand: true
+  },
+  'forest': {
+    name: 'Forest',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Basic Land — Forest',
+    type: 'Land',
+    oracleText: '({T}: Add {G}.)',
+    colors: ['G'],
+    isBasicLand: true
+  },
+  'wastes': {
+    name: 'Wastes',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Basic Land',
+    type: 'Land',
+    oracleText: '({T}: Add {C}.)',
+    colors: ['C'],
+    isBasicLand: true
+  },
+  'snow-covered plains': { name: 'Snow-Covered Plains', manaCost: '', cmc: 0, typeLine: 'Basic Snow Land — Plains', type: 'Land', oracleText: '({T}: Add {W}.)', colors: ['W'], isBasicLand: true },
+  'snow-covered island': { name: 'Snow-Covered Island', manaCost: '', cmc: 0, typeLine: 'Basic Snow Land — Island', type: 'Land', oracleText: '({T}: Add {U}.)', colors: ['U'], isBasicLand: true },
+  'snow-covered swamp': { name: 'Snow-Covered Swamp', manaCost: '', cmc: 0, typeLine: 'Basic Snow Land — Swamp', type: 'Land', colors: ['B'], isBasicLand: true },
+  'snow-covered mountain': { name: 'Snow-Covered Mountain', manaCost: '', cmc: 0, typeLine: 'Basic Snow Land — Mountain', type: 'Land', oracleText: '({T}: Add {R}.)', colors: ['R'], isBasicLand: true },
+  'snow-covered forest': { name: 'Snow-Covered Forest', manaCost: '', cmc: 0, typeLine: 'Basic Snow Land — Forest', type: 'Land', oracleText: '({T}: Add {G}.)', colors: ['G'], isBasicLand: true },
+  'snow-covered wastes': { name: 'Snow-Covered Wastes', manaCost: '', cmc: 0, typeLine: 'Basic Snow Land', type: 'Land', oracleText: '({T}: Add {C}.)', colors: ['C'], isBasicLand: true },
+
+  // Shocklands (10)
+  'hallowed fountain': { name: 'Hallowed Fountain', manaCost: '', cmc: 0, typeLine: 'Land — Plains Island', type: 'Land', colors: ['W', 'U'], isShockland: true, oracleText: '({T}: Add {W} or {U}.) As Hallowed Fountain enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'watery grave': { name: 'Watery Grave', manaCost: '', cmc: 0, typeLine: 'Land — Island Swamp', type: 'Land', colors: ['U', 'B'], isShockland: true, oracleText: '({T}: Add {U} or {B}.) As Watery Grave enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'blood crypt': { name: 'Blood Crypt', manaCost: '', cmc: 0, typeLine: 'Land — Swamp Mountain', type: 'Land', colors: ['B', 'R'], isShockland: true, oracleText: '({T}: Add {B} or {R}.) As Blood Crypt enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'stomping ground': { name: 'Stomping Ground', manaCost: '', cmc: 0, typeLine: 'Land — Mountain Forest', type: 'Land', colors: ['R', 'G'], isShockland: true, oracleText: '({T}: Add {R} or {G}.) As Stomping Ground enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'temple garden': { name: 'Temple Garden', manaCost: '', cmc: 0, typeLine: 'Land — Forest Plains', type: 'Land', colors: ['G', 'W'], isShockland: true, oracleText: '({T}: Add {G} or {W}.) As Temple Garden enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'godless shrine': { name: 'Godless Shrine', manaCost: '', cmc: 0, typeLine: 'Land — Plains Swamp', type: 'Land', colors: ['W', 'B'], isShockland: true, oracleText: '({T}: Add {W} or {B}.) As Godless Shrine enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'steam vents': { name: 'Steam Vents', manaCost: '', cmc: 0, typeLine: 'Land — Island Mountain', type: 'Land', colors: ['U', 'R'], isShockland: true, oracleText: '({T}: Add {U} or {R}.) As Steam Vents enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'overgrown tomb': { name: 'Overgrown Tomb', manaCost: '', cmc: 0, typeLine: 'Land — Swamp Forest', type: 'Land', colors: ['B', 'G'], isShockland: true, oracleText: '({T}: Add {B} or {G}.) As Overgrown Tomb enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'sacred foundry': { name: 'Sacred Foundry', manaCost: '', cmc: 0, typeLine: 'Land — Mountain Plains', type: 'Land', colors: ['R', 'W'], isShockland: true, oracleText: '({T}: Add {R} or {W}.) As Sacred Foundry enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+  'breeding pool': { name: 'Breeding Pool', manaCost: '', cmc: 0, typeLine: 'Land — Forest Island', type: 'Land', colors: ['G', 'U'], isShockland: true, oracleText: '({T}: Add {G} or {U}.) As Breeding Pool enters the battlefield, you may pay 2 life. If you don\'t, it enters the battlefield tapped.' },
+
+  // Fetchlands (10)
+  'flooded strand': { name: 'Flooded Strand', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['W', 'U'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Flooded Strand: Search your library for a Plains or Island card, put it onto the battlefield, then shuffle.' },
+  'polluted delta': { name: 'Polluted Delta', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['U', 'B'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Polluted Delta: Search your library for an Island or Swamp card, put it onto the battlefield, then shuffle.' },
+  'bloodstained mire': { name: 'Bloodstained Mire', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['B', 'R'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Bloodstained Mire: Search your library for a Swamp or Mountain card, put it onto the battlefield, then shuffle.' },
+  'wooded foothills': { name: 'Wooded Foothills', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['R', 'G'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Wooded Foothills: Search your library for a Mountain or Forest card, put it onto the battlefield, then shuffle.' },
+  'windswept heath': { name: 'Windswept Heath', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['G', 'W'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Windswept Heath: Search your library for a Forest or Plains card, put it onto the battlefield, then shuffle.' },
+  'marsh flats': { name: 'Marsh Flats', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['W', 'B'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Marsh Flats: Search your library for a Plains or Swamp card, put it onto the battlefield, then shuffle.' },
+  'scalding tarn': { name: 'Scalding Tarn', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['U', 'R'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Scalding Tarn: Search your library for an Island or Mountain card, put it onto the battlefield, then shuffle.' },
+  'verdant catacombs': { name: 'Verdant Catacombs', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['B', 'G'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Verdant Catacombs: Search your library for a Swamp or Forest card, put it onto the battlefield, then shuffle.' },
+  'arid mesa': { name: 'Arid Mesa', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['R', 'W'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Arid Mesa: Search your library for a Mountain or Plains card, put it onto the battlefield, then shuffle.' },
+  'misty rainforest': { name: 'Misty Rainforest', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['G', 'U'], isFetchland: true, oracleText: '{T}, Pay 1 life, Sacrifice Misty Rainforest: Search your library for a Forest or Island card, put it onto the battlefield, then shuffle.' },
+
+  // Checklands (10)
+  'glacial fortress': { name: 'Glacial Fortress', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['W', 'U'], isCheckland: true },
+  'drowned catacomb': { name: 'Drowned Catacomb', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['U', 'B'], isCheckland: true },
+  'dragonskull summit': { name: 'Dragonskull Summit', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['B', 'R'], isCheckland: true },
+  'rootbound crag': { name: 'Rootbound Crag', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['R', 'G'], isCheckland: true },
+  'sunpetal grove': { name: 'Sunpetal Grove', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['G', 'W'], isCheckland: true },
+  'isolated chapel': { name: 'Isolated Chapel', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['W', 'B'], isCheckland: true },
+  'sulfur falls': { name: 'Sulfur Falls', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['U', 'R'], isCheckland: true },
+  'woodland cemetery': { name: 'Woodland Cemetery', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['B', 'G'], isCheckland: true },
+  'clifftop retreat': { name: 'Clifftop Retreat', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['R', 'W'], isCheckland: true },
+  'hinterland harbor': { name: 'Hinterland Harbor', manaCost: '', cmc: 0, typeLine: 'Land', type: 'Land', colors: ['G', 'U'], isCheckland: true },
+
+  // Common Modern / Hammer Time / Boros / Gadgets cards
+  'heartfire hero': {
+    name: 'Heartfire Hero',
+    manaCost: '{R}',
+    cmc: 1,
+    typeLine: 'Creature — Mouse Soldier',
+    type: 'Creature',
+    power: 1,
+    toughness: 1,
+    colors: ['R'],
+    oracleText: 'Whenever Heartfire Hero becomes the target of a spell or ability you control for the first time each turn, put a +1/+1 counter on it.\nWhen Heartfire Hero dies, it deals damage equal to its power to each opponent.',
+    modernLegal: true
+  },
+  'fervent champion': {
+    name: 'Fervent Champion',
+    manaCost: '{R}',
+    cmc: 1,
+    typeLine: 'Creature — Human Knight',
+    type: 'Creature',
+    power: 1,
+    toughness: 1,
+    colors: ['R'],
+    keywords: { firstStrike: true, haste: true },
+    oracleText: 'First strike, haste\nWhenever Fervent Champion attacks, another target attacking Knight you control gets +1/+0 until end of turn.\nEquip abilities you activate that target Fervent Champion cost {3} less to activate.',
+    modernLegal: true
+  },
+  'sigarda\'s aid': {
+    name: "Sigarda's Aid",
+    manaCost: '{W}',
+    cmc: 1,
+    typeLine: 'Enchantment',
+    type: 'Enchantment',
+    colors: ['W'],
+    oracleText: 'You may cast Aura and Equipment spells as though they had flash.\nWhenever an Equipment enters the battlefield under your control, you may attach it to target creature you control.',
+    modernLegal: true
+  },
+  'colossus hammer': {
+    name: 'Colossus Hammer',
+    manaCost: '{1}',
+    cmc: 1,
+    typeLine: 'Artifact — Equipment',
+    type: 'Artifact',
+    colors: [],
+    oracleText: 'Equipped creature gets +10/+10 and loses flying.\nEquip {8}',
+    modernLegal: true
+  },
+  'leyline axe': {
+    name: 'Leyline Axe',
+    manaCost: '{1}',
+    cmc: 1,
+    typeLine: 'Artifact — Equipment',
+    type: 'Artifact',
+    colors: [],
+    oracleText: 'If Leyline Axe is in your opening hand, you may begin the game with it on the battlefield.\nEquipped creature gets +2/+0.\nEquip {2}',
+    modernLegal: true
+  },
+  'stolen uniform': {
+    name: 'Stolen Uniform',
+    manaCost: '{U}',
+    cmc: 1,
+    typeLine: 'Instant',
+    type: 'Instant',
+    colors: ['U'],
+    oracleText: "Choose target creature you control and target Equipment. Gain control of that Equipment until end of turn. Attach it to the chosen creature. When you lose control of that Equipment this turn, if it's attached to a creature you control, unattach it.",
+    modernLegal: true
+  },
+  'inkmoth nexus': {
+    name: 'Inkmoth Nexus',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Land',
+    type: 'Land',
+    colors: [],
+    oracleText: '{T}: Add {C}.\n{1}: Inkmoth Nexus becomes a 1/1 Blinkmoth artifact creature with flying and infect until end of turn. It\'s still a land.',
+    modernLegal: true
+  },
+  'mana confluence': {
+    name: 'Mana Confluence',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Land',
+    type: 'Land',
+    colors: [],
+    oracleText: '{T}, Pay 1 life: Add one mana of any color.',
+    modernLegal: true
+  },
+  'starting town': {
+    name: 'Starting Town',
+    manaCost: '',
+    cmc: 0,
+    typeLine: 'Land',
+    type: 'Land',
+    colors: [],
+    oracleText: '{T}, Pay 1 life: Add one mana of any color.',
+    modernLegal: true
+  },
+  'surge of salvation': {
+    name: 'Surge of Salvation',
+    manaCost: '{W}',
+    cmc: 1,
+    typeLine: 'Instant',
+    type: 'Instant',
+    colors: ['W'],
+    oracleText: 'You and permanents you control gain hexproof until end of turn. Prevent all damage that red and/or black sources would deal to creatures you control this turn.',
+    modernLegal: true
+  },
+  'wear // tear': {
+    name: 'Wear // Tear',
+    manaCost: '{1}{R} // {W}',
+    cmc: 3,
+    typeLine: 'Instant // Instant',
+    type: 'Instant',
+    colors: ['R', 'W'],
+    oracleText: 'Destroy target artifact.\n\nFuse\n\nDestroy target enchantment.',
+    modernLegal: true
+  },
+  'forge anew': {
+    name: 'Forge Anew',
+    manaCost: '{2}{W}',
+    cmc: 3,
+    typeLine: 'Enchantment',
+    type: 'Enchantment',
+    colors: ['W'],
+    oracleText: 'When Forge Anew enters the battlefield, return target Equipment card from your graveyard to the battlefield.\nAs long as it\'s your turn, you may activate equip abilities any time you could cast an instant.\nYou may pay {0} rather than pay the equip cost of the first equip ability you activate each turn.\nWhenever an Equipment enters the battlefield under your control, you may attach it to target creature you control.',
+    modernLegal: true
+  },
+  'skrelv, defector mite': {
+    name: 'Skrelv, Defector Mite',
+    manaCost: '{W}',
+    cmc: 1,
+    typeLine: 'Legendary Artifact Creature — Phyrexian Mite',
+    type: 'Creature',
+    power: 1,
+    toughness: 1,
+    colors: ['W'],
+    oracleText: 'Toxic 1\nSkrelv can\'t block.\n{W/P}, {T}: Another target creature you control gains toxic 1 and hexproof from the color of your choice until end of turn. It can\'t be blocked by creatures of that color this turn.',
+    modernLegal: true
+  },
+  'soul-guide lantern': {
+    name: 'Soul-Guide Lantern',
+    manaCost: '{1}',
+    cmc: 1,
+    typeLine: 'Artifact',
+    type: 'Artifact',
+    colors: [],
+    oracleText: 'When Soul-Guide Lantern enters the battlefield, exile target card from a graveyard.\n{T}, Sacrifice Soul-Guide Lantern: Draw a card.',
+    modernLegal: true
+  },
+  'invasion of gobakhan': {
+    name: 'Invasion of Gobakhan',
+    manaCost: '{1}{W}',
+    cmc: 2,
+    typeLine: 'Battle — Siege',
+    type: 'Battle',
+    colors: ['W'],
+    oracleText: 'When Invasion of Gobakhan enters the battlefield, look at target opponent\'s hand. You may exile a nonland card from it. For as long as that card remains exiled, its owner may cast it. A spell cast this way costs {2} more to cast.',
+    modernLegal: true
+  },
+  'surgical extraction': {
+    name: 'Surgical Extraction',
+    manaCost: '{B/P}',
+    cmc: 1,
+    typeLine: 'Instant',
+    type: 'Instant',
+    colors: ['B'],
+    oracleText: 'Choose target card in a graveyard other than a basic land card. Search its owner\'s graveyard, hand, and library for all cards with that name and exile them.',
+    modernLegal: true
+  },
+  'jegantha, the wellspring': {
+    name: 'Jegantha, the Wellspring',
+    manaCost: '{4}{R/G}',
+    cmc: 5,
+    typeLine: 'Legendary Creature — Elemental Elk',
+    type: 'Creature',
+    power: 5,
+    toughness: 5,
+    colors: ['R', 'G'],
+    oracleText: 'Companion — No card in your starting deck has more than one of the same mana symbol in its mana cost.\n{T}: Add {W}{U}{B}{R}{G}. This mana can\'t be spent to pay generic mana costs.',
+    modernLegal: true
+  },
+  'swiftfoot boots': {
+    name: 'Swiftfoot Boots',
+    manaCost: '{2}',
+    cmc: 2,
+    typeLine: 'Artifact — Equipment',
+    type: 'Artifact',
+    colors: [],
+    oracleText: 'Equipped creature has hexproof and haste.\nEquip {1}',
+    modernLegal: true
+  }
+});
+
+/**
+ * Hydrates standard keywords onto a card or card metadata object.
+ * @param {Object} target
+ * @param {string} [oracleText='']
+ * @param {Object} [existingKeywords={}]
+ * @returns {Object}
+ */
+export function extractAndHydrateKeywords(target, oracleText = '', existingKeywords = {}) {
+  if (!target) return {};
+  const kw = { ...(target.keywords || {}), ...(existingKeywords || {}) };
+  const fullText = `${oracleText} ${target.oracleText || ''} ${target.text || ''}`.toLowerCase();
+
+  const check = (regex, key, altKeys = []) => {
+    let matched = Boolean(kw[key] || kw[key.toLowerCase()] || kw[key.charAt(0).toUpperCase() + key.slice(1)]);
+    if (!matched && regex.test(fullText)) {
+      matched = true;
+    }
+    if (matched) {
+      kw[key] = true;
+      kw[key.charAt(0).toUpperCase() + key.slice(1)] = true;
+      for (const alt of altKeys) {
+        kw[alt] = true;
+      }
+    }
+  };
+
+  check(/\bflying\b/i, 'flying');
+  check(/\bhaste\b/i, 'haste');
+  check(/\bvigilance\b/i, 'vigilance');
+  check(/\btrample\b/i, 'trample');
+  check(/\blifelink\b/i, 'lifelink');
+  check(/\bdeathtouch\b/i, 'deathtouch');
+  check(/\breach\b/i, 'reach');
+  check(/\bflash\b/i, 'flash');
+  check(/\bprowess\b/i, 'prowess');
+  check(/\bfirst strike\b/i, 'firstStrike', ['first_strike', 'FirstStrike']);
+  check(/\bdouble strike\b/i, 'doubleStrike', ['double_strike', 'DoubleStrike']);
+  check(/\bmenace\b/i, 'menace');
+  check(/\bhexproof\b/i, 'hexproof');
+  check(/\bindestructible\b/i, 'indestructible');
+
+  target.keywords = kw;
+  if (kw.haste) {
+    target.hasSummoningSickness = false;
+    target.isSummoningSick = false;
+  }
+  return kw;
+}
+
 /**
  * Retrieves pre-hydrated card metadata by card name (INV-INSPECT-1).
  * 
@@ -1059,8 +1406,38 @@ export const STARTER_CARD_METADATA = {
  */
 export function getHydratedCardMetadata(name) {
   if (!name || typeof name !== 'string') return null;
-  const meta = STARTER_CARD_METADATA[name.trim().toLowerCase()];
-  return meta ? { ...meta } : null;
+  const norm = name.trim().toLowerCase();
+  let meta = STARTER_CARD_METADATA[norm];
+  if (!meta) {
+    meta = KNOWN_EXTENDED_CARD_METADATA[norm];
+  }
+  if (!meta && typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('rpm_scryfall_v1_name:' + norm);
+      if (raw) {
+        meta = JSON.parse(raw);
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (!meta) return null;
+  const copy = { ...meta };
+  if (copy.keywords) {
+    copy.keywords = { ...copy.keywords };
+  }
+  const isBasic = Boolean((copy.typeLine && copy.typeLine.toLowerCase().includes('basic land')) || DeckValidator.isBasicLand(norm));
+  if (isBasic) {
+    copy.isBasicLand = true;
+    if (!copy.colors || copy.colors.length === 0) {
+      if (BASIC_LAND_COLORS[norm]) {
+        copy.colors = [...BASIC_LAND_COLORS[norm]];
+      }
+    }
+  }
+  extractAndHydrateKeywords(copy, copy.oracleText || copy.text || '', copy.keywords);
+  compileCardMechanics(copy);
+  return copy;
 }
 
 export const PRECOMPILED_ARCHETYPES = [

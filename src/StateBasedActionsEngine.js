@@ -127,9 +127,51 @@ export class StateBasedActionsEngine {
             /indestructible/i.test(card.text || '')
           );
 
+          const handleCreatureDiesTriggers = (creatureCard) => {
+            if (creatureCard._onDiesResolved) {
+              if (tabletopState && typeof tabletopState._unattachCreatureEquipment === 'function') {
+                tabletopState._unattachCreatureEquipment(creatureCard);
+              }
+              return;
+            }
+            creatureCard._onDiesResolved = true;
+            const lastKnownStats = (effectiveAbilityEngine || tabletopState.abilityEngine)?.evaluateCreatureStats
+              ? (effectiveAbilityEngine || tabletopState.abilityEngine).evaluateCreatureStats(creatureCard, tabletopState)
+              : { power: creatureCard.power ?? 1 };
+            const triggers = creatureCard.compiledMechanics?.triggers || [];
+            for (const trig of triggers) {
+              if (trig.triggerType === 'ON_DIES') {
+                if (trig.action === 'DAMAGE_EQUAL_TO_POWER_EACH_OPPONENT' && lastKnownStats.power > 0) {
+                  const dmg = Number(lastKnownStats.power);
+                  for (const [oppPid, opp] of Object.entries(tabletopState.players || {})) {
+                    if (oppPid !== pid && oppPid !== player.id && oppPid !== player.playerId && !opp.isEliminated) {
+                      if (typeof tabletopState.adjustLife === 'function') {
+                        tabletopState.adjustLife(oppPid, { delta: -dmg });
+                      } else if (opp.resources) {
+                        opp.resources.life = (opp.resources.life ?? 20) - dmg;
+                      }
+                      passActions.push({
+                        type: 'DIES_TRIGGER_DAMAGE_DEALT',
+                        rule: 'CR 603.2',
+                        sourceId: creatureCard.instanceId,
+                        sourceName: creatureCard.name,
+                        targetPlayerId: oppPid,
+                        amount: dmg
+                      });
+                    }
+                  }
+                }
+              }
+            }
+            if (tabletopState && typeof tabletopState._unattachCreatureEquipment === 'function') {
+              tabletopState._unattachCreatureEquipment(creatureCard);
+            }
+          };
+
           // CHECK 1: CR 704.5f - Toughness <= 0 (State-Based Death)
           // INVARIANT INV-STATIC-SBA-1: BYPASSES INDESTRUCTIBLE!
           if (toughness <= 0) {
+            handleCreatureDiesTriggers(card);
             ZoneTransitionMatrix.moveCard(player, card.instanceId, 'battlefield', 'graveyard');
             (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(card.instanceId);
             passActions.push({
@@ -153,6 +195,7 @@ export class StateBasedActionsEngine {
               // Immune to lethal damage destruction
               continue;
             }
+            handleCreatureDiesTriggers(card);
             ZoneTransitionMatrix.moveCard(player, card.instanceId, 'battlefield', 'graveyard');
             (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(card.instanceId);
             passActions.push({
@@ -173,6 +216,7 @@ export class StateBasedActionsEngine {
             if (isIndestructible) {
               continue;
             }
+            handleCreatureDiesTriggers(card);
             ZoneTransitionMatrix.moveCard(player, card.instanceId, 'battlefield', 'graveyard');
             (effectiveAbilityEngine || tabletopState.abilityEngine)?.unregisterEffectsFromSource(card.instanceId);
             passActions.push({

@@ -13,6 +13,16 @@ const CANVAS_SELECTOR = '#dice-canvas';
 const DICE_BOX_ASSET_PATH = '/assets/dice-box/';
 
 /**
+ * Reshaped 2d10 color palette ported verbatim from rpmrevival.
+ * Tens: Violet #8A2BE2 body with gold #FFD700 accent.
+ * Ones: Aquamarine #7FFFD4 body with red #FF0000 accent.
+ */
+export const DICE_COLORS = Object.freeze({
+  DIE_TENS: { background: '#8A2BE2', foreground: '#FFD700' },
+  DIE_ONES: { background: '#7FFFD4', foreground: '#FF0000' }
+});
+
+/**
  * Calibrated scale matrix: die type × orientation.
  */
 const DICE_SCALE = Object.freeze({
@@ -57,11 +67,31 @@ export class DiceCanvas {
   constructor() {
     this._box = null;
     this._initPromise = null;
-    this._pendingPercentile = null; // { resolve }
+    this._pendingPercentile = null; // { resolve, forcedTens, forcedOnes }
     this._pendingD20 = null;        // { playerId, resolve }
     this._pendingMultiD20 = null;   // { playerIds, resolve }
     this._autoClearTimer = null;
     this._fadeTimer = null;
+    this._lastPercentile = null;
+  }
+
+  /**
+   * Returns the last settled 2d10 values deterministically.
+   * @returns {{ tens: number, ones: number, rollString: string }|null}
+   */
+  getSettledValues() {
+    if (!this._lastPercentile) return null;
+    const tens = this._lastPercentile[0];
+    const ones = this._lastPercentile[1];
+    return {
+      tens,
+      ones,
+      rollString: `${tens}${ones}`
+    };
+  }
+
+  getSettledResult() {
+    return this.getSettledValues();
   }
 
   is3DSupported() {
@@ -148,22 +178,28 @@ export class DiceCanvas {
   /**
    * Roll percentile 2d10 dice (tens and ones).
    * Returns [tens, ones] where tens and ones are numbers in range 0..9.
-   * In headless Node.js tests, returns synchronous RNG digits.
+   * If options.tens or options.ones are provided, deterministically lands on them.
+   * In headless Node.js tests, returns synchronous RNG digits or deterministic options.
    * 
    * @param {Object} [options={}]
    * @returns {Promise<[number, number]>}
    */
   async rollPercentile(options = {}) {
+    const forcedTens = options.tens !== undefined ? normalizeD10(options.tens) : (options.forcedTens !== undefined ? normalizeD10(options.forcedTens) : null);
+    const forcedOnes = options.ones !== undefined ? normalizeD10(options.ones) : (options.forcedOnes !== undefined ? normalizeD10(options.forcedOnes) : null);
+
     if (!this.is3DSupported()) {
-      const tens = Math.floor(Math.random() * 10);
-      const ones = Math.floor(Math.random() * 10);
+      const tens = forcedTens !== null ? forcedTens : Math.floor(Math.random() * 10);
+      const ones = forcedOnes !== null ? forcedOnes : Math.floor(Math.random() * 10);
+      this._lastPercentile = [tens, ones];
       return [tens, ones];
     }
 
     await this.init();
     if (!this._box) {
-      const tens = Math.floor(Math.random() * 10);
-      const ones = Math.floor(Math.random() * 10);
+      const tens = forcedTens !== null ? forcedTens : Math.floor(Math.random() * 10);
+      const ones = forcedOnes !== null ? forcedOnes : Math.floor(Math.random() * 10);
+      this._lastPercentile = [tens, ones];
       return [tens, ones];
     }
 
@@ -179,12 +215,16 @@ export class DiceCanvas {
         gravity: 1.8
       });
 
-      this._pendingPercentile = { resolve };
+      this._pendingPercentile = {
+        resolve,
+        forcedTens,
+        forcedOnes
+      };
       this._playRollSound();
 
       this._box.roll([
-        { qty: 1, sides: 10, themeColor: '#8A2BE2' },
-        { qty: 1, sides: 10, themeColor: '#7FFFD4' }
+        { qty: 1, sides: 10, themeColor: DICE_COLORS.DIE_TENS.background },
+        { qty: 1, sides: 10, themeColor: DICE_COLORS.DIE_ONES.background }
       ]);
     });
   }
@@ -313,10 +353,15 @@ export class DiceCanvas {
     }
 
     if (this._pendingPercentile) {
-      const { resolve } = this._pendingPercentile;
+      const { resolve, forcedTens, forcedOnes } = this._pendingPercentile;
       this._pendingPercentile = null;
-      const tens = normalizeD10(dieValues[0]);
-      const ones = normalizeD10(dieValues[1]);
+      const tens = (forcedTens !== null && forcedTens !== undefined)
+        ? normalizeD10(forcedTens)
+        : normalizeD10(dieValues[0]);
+      const ones = (forcedOnes !== null && forcedOnes !== undefined)
+        ? normalizeD10(forcedOnes)
+        : normalizeD10(dieValues[1]);
+      this._lastPercentile = [tens, ones];
       this._scheduleAutoClear(AUTO_CLEAR_DELAY_MS);
       if (typeof resolve === 'function') {
         resolve([tens, ones]);
@@ -382,3 +427,6 @@ export const diceCanvas = new DiceCanvas();
 export const init = diceCanvas.init.bind(diceCanvas);
 export const clear = diceCanvas.clear.bind(diceCanvas);
 export const teardown = diceCanvas.teardown.bind(diceCanvas);
+
+export { DiceCanvas as DiceRenderer3D };
+export default DiceCanvas;

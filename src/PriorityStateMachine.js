@@ -134,7 +134,9 @@ function extractDomainState(state) {
     turnNumber: state.turnNumber,
     consecutivePassCount: state.consecutivePassCount,
     stack: state.stack ? JSON.parse(JSON.stringify(state.stack)) : [],
-    isTurnEnded: Boolean(state.isTurnEnded)
+    isTurnEnded: Boolean(state.isTurnEnded),
+    defendingPlayerIds: [...(state.defendingPlayerIds || [])],
+    defendingPlayerId: state.defendingPlayerId || null
   };
 }
 
@@ -250,8 +252,58 @@ export class PriorityStateMachine {
     this.isTurnEnded = false;
     this.strictTiming = Boolean(options.strictTiming);
     this.tabletopState = options.tabletopState || null;
+    this._tabletopState = this.tabletopState;
+    this.isGameOver = Boolean(options.isGameOver);
     this.combatState = options.combatState || null;
     this.eliminatedPlayers = new Set();
+    this.defendingPlayerIds = [];
+    this.defendingPlayerId = null;
+
+    // Auto-Pass Support [P9-P11]
+    this.autoPassEnabled = options.autoPassEnabled !== undefined ? options.autoPassEnabled : new Map();
+
+    // Phase Stops Support [P9-P11]
+    this.phaseStops = options.phaseStops instanceof Set ? options.phaseStops : new Set(Array.isArray(options.phaseStops) ? options.phaseStops : []);
+
+    // Ranked Clock Support [P14] (60s action limit, 600s reserve bank)
+    this.rankedClock = {
+      actionTimeLimitMs: 60000,
+      reserveBankMs: 600000,
+      playerClocks: new Map(),
+      active: Boolean(options.enableRankedClock),
+      startForPlayer: (playerId) => {
+        if (!this.rankedClock.playerClocks.has(playerId)) {
+          this.rankedClock.playerClocks.set(playerId, {
+            remainingBankMs: this.rankedClock.reserveBankMs,
+            currentActionRemainingMs: this.rankedClock.actionTimeLimitMs,
+            lastTick: Date.now()
+          });
+        }
+        const clock = this.rankedClock.playerClocks.get(playerId);
+        clock.currentActionRemainingMs = this.rankedClock.actionTimeLimitMs;
+        clock.lastTick = Date.now();
+        return clock;
+      },
+      tick: (playerId, elapsedMs) => {
+        const clock = this.rankedClock.playerClocks.get(playerId);
+        if (!clock) return null;
+        if (clock.currentActionRemainingMs >= elapsedMs) {
+          clock.currentActionRemainingMs -= elapsedMs;
+        } else {
+          const overflow = elapsedMs - clock.currentActionRemainingMs;
+          clock.currentActionRemainingMs = 0;
+          clock.remainingBankMs = Math.max(0, clock.remainingBankMs - overflow);
+        }
+        clock.lastTick = Date.now();
+        return clock;
+      },
+      getRemaining: (playerId) => {
+        return this.rankedClock.playerClocks.get(playerId) || {
+          remainingBankMs: this.rankedClock.reserveBankMs,
+          currentActionRemainingMs: this.rankedClock.actionTimeLimitMs
+        };
+      }
+    };
 
     // Event listeners & subscribers
     this._listeners = new Map();
@@ -273,6 +325,53 @@ export class PriorityStateMachine {
         this.emit(alarmEvent.type, alarmEvent);
       }
     });
+  }
+
+  setAutoPass(playerId, enabled) {
+    if (typeof playerId === 'boolean') {
+      this.autoPassEnabled = playerId;
+      this.emit('AUTO_PASS_CHANGED', { enabled: playerId });
+      return this.autoPassEnabled;
+    }
+    const val = Boolean(enabled);
+    if (this.autoPassEnabled instanceof Map) {
+      this.autoPassEnabled.set(playerId, val);
+    } else if (typeof this.autoPassEnabled === 'object' && this.autoPassEnabled !== null) {
+      this.autoPassEnabled[playerId] = val;
+    } else {
+      this.autoPassEnabled = val;
+    }
+    this.emit('AUTO_PASS_CHANGED', { playerId, enabled: val });
+    return val;
+  }
+
+  isAutoPassEnabled(playerId = this.priorityPlayerId) {
+    if (typeof this.autoPassEnabled === 'boolean') return this.autoPassEnabled;
+    if (this.autoPassEnabled instanceof Map) return Boolean(this.autoPassEnabled.get(playerId));
+    if (this.autoPassEnabled && typeof this.autoPassEnabled === 'object') return Boolean(this.autoPassEnabled[playerId]);
+    return false;
+  }
+
+  togglePhaseStop(phaseStep, playerId = null) {
+    const stepKey = String(phaseStep).toUpperCase();
+    const key = playerId ? `${playerId}:${stepKey}` : stepKey;
+    let enabled = false;
+    if (this.phaseStops.has(key)) {
+      this.phaseStops.delete(key);
+      enabled = false;
+    } else {
+      this.phaseStops.add(key);
+      enabled = true;
+    }
+    this.emit('PHASE_STOP_TOGGLED', { phaseStep: stepKey, playerId, enabled });
+    return enabled;
+  }
+
+  hasPhaseStop(phaseStep, playerId = null) {
+    if (!this.phaseStops) return false;
+    const stepKey = String(phaseStep).toUpperCase();
+    const key = playerId ? `${playerId}:${stepKey}` : stepKey;
+    return this.phaseStops.has(key) || this.phaseStops.has(stepKey);
   }
 
   // ==========================================
@@ -443,6 +542,10 @@ export class PriorityStateMachine {
       const nextTurnCount = (this.playerTurnCounts.get(nextActive) || 0) + 1;
       this.playerTurnCounts.set(nextActive, nextTurnCount);
 
+      if (this.startingPlayerId === playerId) {
+        this.startingPlayerId = nextActive;
+      }
+
       if (nextActive === this.startingPlayerId) {
         this.roundNumber++;
       }
@@ -588,7 +691,7 @@ export class PriorityStateMachine {
       item.sourcePlayerId = item.sourcePlayerId || item.controllerId;
       item.cardName = item.cardName || item.name || item.card?.name || 'Spell';
       item.name = item.name || item.cardName;
-      item.controllerName = item.controllerName || item.playerName || item.sourcePlayerName || (item.controllerId?.toLowerCase().includes('perkins') ? 'Perkins AI (Bot)' : item.controllerId);
+      item.controllerName = item.controllerName || item.playerName || item.sourcePlayerName || (String(item.controllerId || '').toLowerCase().includes('perkins') ? 'Perkins AI (Bot)' : item.controllerId);
 
       const casterId = item.sourcePlayerId || item.controllerId || this.activePlayerId;
       const nextPriorityPlayerId = this.nextPlayer(casterId);
@@ -644,11 +747,33 @@ export class PriorityStateMachine {
     return this.stack;
   }
 
+  set _stack(val) {
+    this.stack = Array.isArray(val) ? val : [];
+  }
+
   /**
    * Clears all items from the stack.
    */
   clearStack() {
     this.stack = [];
+  }
+
+  /**
+   * Resets combat state trackers.
+   */
+  resetCombat() {
+    this.defendingPlayerIds = [];
+    this.defendingPlayerId = null;
+  }
+
+  /**
+   * Resets active operational state.
+   */
+  reset() {
+    this.defendingPlayerIds = [];
+    this.defendingPlayerId = null;
+    this.stack = [];
+    this.consecutivePassCount = 0;
   }
 
   /**
@@ -921,6 +1046,9 @@ export class PriorityStateMachine {
    * @returns {string} New phase step
    */
   nextPhase(playerId) {
+    if (this.isGameOver || this._tabletopState?.isGameOver || this.tabletopState?.isGameOver || this.state?.isGameOver) {
+      return false;
+    }
     if (playerId && this.activePlayerId !== playerId) {
       throw new PriorityViolationError(`Only active player '${this.activePlayerId}' may advance phase.`);
     }
@@ -1120,6 +1248,8 @@ export class PriorityStateMachine {
     this.turnNumber = snapshot.turnNumber;
     this.consecutivePassCount = snapshot.consecutivePassCount;
     this.stack = JSON.parse(JSON.stringify(snapshot.stack));
+    this.defendingPlayerIds = Array.isArray(snapshot.defendingPlayerIds) ? [...snapshot.defendingPlayerIds] : [];
+    this.defendingPlayerId = snapshot.defendingPlayerId || null;
 
     this.emit('CHECKPOINT_RESTORED', {
       checkpointId: snapshot.checkpointId,
@@ -1203,6 +1333,11 @@ export class PriorityStateMachine {
    * @returns {any} Result of action
    */
   dispatch(actionType, payload = {}) {
+    const GAME_ACTIONS = ['PASS_PRIORITY', 'NEXT_PHASE', 'CAST_SPELL', 'CAST_SPELL_TO_STACK', 'ACTIVATE_ABILITY', 'ACTIVATE_ABILITY_TO_STACK'];
+    if ((this.isGameOver || this._tabletopState?.isGameOver || this.tabletopState?.isGameOver || this.state?.isGameOver) && GAME_ACTIONS.includes(actionType)) {
+      return false;
+    }
+
     switch (actionType) {
       case 'CAST_SPELL':
       case 'CAST_SPELL_TO_STACK': {
@@ -1419,6 +1554,9 @@ export class PriorityStateMachine {
    * @returns {Object} Result of PASS_PRIORITY
    */
   passPriority(playerId, options = {}) {
+    if (this.isGameOver || this._tabletopState?.isGameOver || this.tabletopState?.isGameOver || this.state?.isGameOver) {
+      return false;
+    }
     return this.dispatch('PASS_PRIORITY', { playerId, ...options });
   }
 

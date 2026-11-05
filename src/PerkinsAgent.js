@@ -85,7 +85,8 @@ export class PerkinsAgent {
       ? Boolean(options.coachEnabled)
       : PERKINS_DEFAULT_CONFIG.coachEnabled;
     this.language = options.language || PERKINS_DEFAULT_CONFIG.language;
-    this.starterDeck = options.starterDeck || null;
+    this.assignedDeck = options.assignedDeck || options.customDeck || options.starterDeck || null;
+    this.starterDeck = this.assignedDeck;
 
     // Subsystem bindings
     this.app = options.app || null;
@@ -376,6 +377,7 @@ export class PerkinsAgent {
    */
   async onStackAlarm(alarmState) {
     if (this.isDestroyed) return;
+    if (this.app?.pregameActive || this.app?.isRollOffActive) return;
     if (alarmState?.targetPlayerId && alarmState.targetPlayerId !== this.slotId) return;
 
     // Await an already running evaluation if one is in flight
@@ -657,6 +659,7 @@ export class PerkinsAgent {
    */
   async evaluateTurnPhase(phaseStep, injectedState = null) {
     if (this.isDestroyed) return null;
+    if (this.app?.pregameActive || this.app?.isRollOffActive) return null;
     if (this._isEvaluating) {
       // Re-entrancy (e.g. our own PASS_PRIORITY rotated the turn synchronously): do not drop the
       // new phase; remember it and re-evaluate once the current evaluation yields (INV-TURN-ROTATION-3).
@@ -952,6 +955,93 @@ export class PerkinsAgent {
     return this.evaluateTurnPhase('POSTCOMBAT_MAIN', state);
   }
 
+   /**
+   * Assigns a custom or preconstructed deck to this Perkins Bot instance [P39].
+   * @param {Object|null} deckData
+   * @returns {Object|null}
+   */
+  setAssignedDeck(deckData) {
+    this.assignedDeck = deckData || null;
+    this.starterDeck = this.assignedDeck;
+    return this.assignedDeck;
+  }
+
+  /**
+   * Selects the optimal opponent to attack or target in multiplayer [P41].
+   * Prioritizes living opponent who:
+   * 1) Is in imminent lethal range (life <= totalAttackPower or poison + totalInfectPower >= 10)
+   * 2) Has lowest defense / highest threat on board.
+   * 
+   * @param {Object} [state=null]
+   * @param {Array<Object|string>} [attackers=[]]
+   * @returns {string|null} Target opponent playerId
+   */
+  selectBestAttackTargetPlayer(state = null, attackers = []) {
+    if (!state) state = this.getProjectedState();
+    const livingOpponents = Object.entries(state?.players || {}).filter(([pId, p]) =>
+      pId !== this.slotId && !p.isEliminated
+    );
+    if (livingOpponents.length === 0) return null;
+    if (livingOpponents.length === 1) return livingOpponents[0][0];
+
+    let totalAttackPower = 0;
+    let totalInfectPower = 0;
+    const myPlayer = state?.players?.[this.slotId];
+    const myCreatures = myPlayer?.battlefield?.creatures || [];
+
+    for (const a of attackers) {
+      const card = typeof a === 'object'
+        ? a
+        : myCreatures.find(c => c && (c.instanceId === a || c.id === a));
+      if (!card) continue;
+      const p = Number(card.effectivePower ?? card.power) || 0;
+      const isInfect = Boolean(
+        card.keywords?.infect ||
+        card.keywords?.Infect ||
+        /infect/i.test(card.oracleText || card.text || '') ||
+        /inkmoth nexus/i.test(card.name || '')
+      );
+      if (isInfect) {
+        totalInfectPower += p;
+      } else {
+        totalAttackPower += p;
+      }
+    }
+
+    // 1) Imminent lethal range check
+    for (const [oppId, opp] of livingOpponents) {
+      const life = opp.resources?.life ?? 20;
+      const poison = opp.resources?.poison ?? opp.poisonCounters ?? 0;
+      const isLethalLife = totalAttackPower > 0 && life <= totalAttackPower;
+      const isLethalPoison = totalInfectPower > 0 && (poison + totalInfectPower) >= 10;
+      if (isLethalLife || isLethalPoison) {
+        return oppId;
+      }
+    }
+
+    // 2) Score opponents by threat on board and defense
+    let bestOppId = livingOpponents[0][0];
+    let bestScore = -Infinity;
+
+    for (const [oppId, opp] of livingOpponents) {
+      const life = opp.resources?.life ?? 20;
+      const poison = opp.resources?.poison ?? opp.poisonCounters ?? 0;
+      const creatures = opp.battlefield?.creatures || [];
+      const untappedBlockers = creatures.filter(c => !c.isTapped);
+
+      const blockerDefense = untappedBlockers.reduce((sum, b) => sum + (Number(b.effectiveToughness ?? b.toughness) || 0), 0);
+      const boardThreat = creatures.reduce((sum, c) => sum + (Number(c.effectivePower ?? c.power) || 0), 0);
+
+      const score = (boardThreat * 2) + (30 - life) + (poison * 2) - (blockerDefense * 1.5);
+      if (score > bestScore) {
+        bestScore = score;
+        bestOppId = oppId;
+      }
+    }
+
+    return bestOppId;
+  }
+
   /**
    * Evaluates combat attack declarations (INV-PERKINS-6).
    * 
@@ -987,14 +1077,14 @@ export class PerkinsAgent {
       return eligibleAttackers.map(c => c.instanceId);
     }
 
-    const maxBlockerPower = Math.max(...oppBlockers.map(b => Number(b.power) || 0));
-    const minBlockerToughness = Math.min(...oppBlockers.map(b => Number(b.toughness) || 1));
+    const maxBlockerPower = Math.max(...oppBlockers.map(b => Number(b.effectivePower ?? b.power) || 0));
+    const minBlockerToughness = Math.min(...oppBlockers.map(b => Number(b.effectiveToughness ?? b.toughness) || 1));
     const minBlockerCmc = Math.min(...oppBlockers.map(b => Number(b.cmc ?? this._parseCmc(b.manaCost)) || 0));
 
     const declaredAttackers = [];
     for (const c of eligibleAttackers) {
-      const power = Number(c.power) || 0;
-      const toughness = Number(c.toughness) || 0;
+      const power = Number(c.effectivePower ?? c.power) || 0;
+      const toughness = Number(c.effectiveToughness ?? c.toughness) || 0;
       const cmc = Number(c.cmc ?? this._parseCmc(c.manaCost)) || 0;
 
       // Rule A: c.toughness > maxBlockerPower (can attack and survive any single blocker)
@@ -1014,7 +1104,7 @@ export class PerkinsAgent {
   }
 
   /**
-   * Evaluates combat block declarations (INV-PERKINS-6).
+   * Evaluates combat block declarations (INV-PERKINS-6 & [P42]).
    * 
    * @param {Object} [state=null] - Sanitized tabletop state
    * @param {Array<Object>} [incomingAttackers=[]] - Attackers declared against Perkins
@@ -1031,38 +1121,83 @@ export class PerkinsAgent {
       return [];
     }
 
-    // Calculate total incoming unblocked damage
-    const totalDamage = incomingAttackers.reduce((sum, a) => sum + (Number(a.power) || 0), 0);
+    const hasInfect = (a) => Boolean(
+      a.keywords?.infect ||
+      a.keywords?.Infect ||
+      /infect/i.test(a.oracleText || a.text || '') ||
+      /inkmoth nexus/i.test(a.name || '')
+    );
+
+    let totalDamage = 0;
+    let totalInfectDamage = 0;
+    for (const a of incomingAttackers) {
+      const p = Number(a.effectivePower ?? a.power) || 0;
+      if (hasInfect(a)) {
+        totalInfectDamage += p;
+      } else {
+        totalDamage += p;
+      }
+    }
+
     const currentLife = myPlayer.resources?.life ?? 20;
+    const currentPoison = myPlayer.resources?.poison ?? myPlayer.poisonCounters ?? 0;
+
+    const isLethalLife = totalDamage >= currentLife;
+    const isLethalPoison = (currentPoison + totalInfectDamage) >= 10;
+    const isLethalIncoming = isLethalLife || isLethalPoison;
 
     const assignments = [];
     const availableBlockers = [...untappedBlockers];
 
     // Helper to sort creatures by value ascending: toughness, power, cmc
     const compareCreatureValueAscending = (a, b) => {
-      const tA = Number(a.toughness) || 0;
-      const tB = Number(b.toughness) || 0;
+      const tA = Number(a.effectiveToughness ?? a.toughness) || 0;
+      const tB = Number(b.effectiveToughness ?? b.toughness) || 0;
       if (tA !== tB) return tA - tB;
-      const pA = Number(a.power) || 0;
-      const pB = Number(b.power) || 0;
+      const pA = Number(a.effectivePower ?? a.power) || 0;
+      const pB = Number(b.effectivePower ?? b.power) || 0;
       if (pA !== pB) return pA - pB;
       const cA = Number(a.cmc ?? this._parseCmc(a.manaCost)) || 0;
       const cB = Number(b.cmc ?? this._parseCmc(b.manaCost)) || 0;
       return cA - cB;
     };
 
-    // Case 1: Lethal damage incoming -> Mandatory Chump Block Mode
-    if (totalDamage >= currentLife) {
-      // Sort attackers descending by power
-      const sortedAttackers = [...incomingAttackers].sort((a, b) => (Number(b.power) || 0) - (Number(a.power) || 0));
-      // Sort blockers ascending by value
+    // Case 1: Lethal damage or lethal infect poison incoming -> Mandatory Chump Block Mode [P42]
+    if (isLethalIncoming) {
+      const sortedAttackers = [...incomingAttackers].sort((a, b) => {
+        const aInf = hasInfect(a);
+        const bInf = hasInfect(b);
+        const aPow = Number(a.effectivePower ?? a.power) || 0;
+        const bPow = Number(b.effectivePower ?? b.power) || 0;
+
+        if (isLethalPoison && !isLethalLife) {
+          if (aInf !== bInf) return aInf ? -1 : 1;
+        } else if (isLethalLife && !isLethalPoison) {
+          if (aInf !== bInf) return aInf ? 1 : -1;
+        } else if (isLethalPoison && isLethalLife) {
+          const poisonMargin = (currentPoison + totalInfectDamage) - 10;
+          const lifeMargin = totalDamage - currentLife;
+          if (poisonMargin >= lifeMargin) {
+            if (aInf !== bInf) return aInf ? -1 : 1;
+          } else {
+            if (aInf !== bInf) return aInf ? 1 : -1;
+          }
+        }
+        return bPow - aPow;
+      });
+
       availableBlockers.sort(compareCreatureValueAscending);
 
-      let damageRemaining = totalDamage;
+      let remainingDamage = totalDamage;
+      let remainingInfect = totalInfectDamage;
+
       for (const attacker of sortedAttackers) {
         if (availableBlockers.length === 0) break;
-        if (damageRemaining < currentLife) break;
+        const safeFromLife = remainingDamage < currentLife;
+        const safeFromPoison = (currentPoison + remainingInfect) < 10;
+        if (safeFromLife && safeFromPoison) break;
 
+        const aPow = Number(attacker.effectivePower ?? attacker.power) || 0;
         const blockerIndex = availableBlockers.findIndex(b =>
           CombatDamageEngine.canCreatureBlock(b, attacker, this.tabletopState).canBlock
         );
@@ -1073,25 +1208,28 @@ export class PerkinsAgent {
           blockerId: blocker.instanceId,
           attackerId: attacker.instanceId
         });
-        damageRemaining -= (Number(attacker.power) || 0);
+
+        if (hasInfect(attacker)) {
+          remainingInfect -= aPow;
+        } else {
+          remainingDamage -= aPow;
+        }
       }
 
       return assignments;
     }
 
     // Case 2: Non-lethal -> Profitable or even trade
-    // 1) First look for a strictly profitable blocker (bPower >= aToughness && bToughness > aPower)
-    // 2) If none found, look for an even-trade blocker (bPower >= aToughness && aPower >= bToughness && (aPower >= bPower || aPower >= 2))
     for (const attacker of incomingAttackers) {
-      const aPower = Number(attacker.power) || 0;
-      const aToughness = Number(attacker.toughness) || 0;
+      const aPower = Number(attacker.effectivePower ?? attacker.power) || 0;
+      const aToughness = Number(attacker.effectiveToughness ?? attacker.toughness) || 0;
 
       // 1. Strictly profitable blocker
       let blockerIndex = availableBlockers.findIndex(b => {
         const canBlock = CombatDamageEngine.canCreatureBlock(b, attacker, this.tabletopState).canBlock;
         if (!canBlock) return false;
-        const bPower = Number(b.power) || 0;
-        const bToughness = Number(b.toughness) || 0;
+        const bPower = Number(b.effectivePower ?? b.power) || 0;
+        const bToughness = Number(b.effectiveToughness ?? b.toughness) || 0;
         return bPower >= aToughness && bToughness > aPower;
       });
 
@@ -1100,8 +1238,8 @@ export class PerkinsAgent {
         blockerIndex = availableBlockers.findIndex(b => {
           const canBlock = CombatDamageEngine.canCreatureBlock(b, attacker, this.tabletopState).canBlock;
           if (!canBlock) return false;
-          const bPower = Number(b.power) || 0;
-          const bToughness = Number(b.toughness) || 0;
+          const bPower = Number(b.effectivePower ?? b.power) || 0;
+          const bToughness = Number(b.effectiveToughness ?? b.toughness) || 0;
           const isEvenTrade = bPower >= aToughness && aPower >= bToughness;
           const isWorthyTrade = (aPower >= bPower || aPower >= 2 || Number(attacker.cmc ?? 0) >= Number(b.cmc ?? 0));
           return isEvenTrade && isWorthyTrade;

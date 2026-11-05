@@ -102,6 +102,13 @@ export class MulliganModal {
     if (!this.element) this.init();
     if (!this.element) return;
 
+    if (!this.element.parentNode) {
+      const target = this.container || (typeof document !== 'undefined' ? document.body : null);
+      if (target && typeof target.appendChild === 'function') {
+        target.appendChild(this.element);
+      }
+    }
+
     this.element.style.display = 'flex';
     this.element.classList.remove('hidden');
     this.render();

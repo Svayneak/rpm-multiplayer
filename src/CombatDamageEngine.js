@@ -66,6 +66,7 @@ export class CombatDamageEngine {
 
     let damageDealt = rawAmount;
     const hasInfect = !!keywords.infect;
+    const toxic = Number(keywords.toxic || 0);
     const hasLifelink = !!keywords.lifelink;
     const hasDeathtouch = !!keywords.deathtouch;
 
@@ -91,6 +92,10 @@ export class CombatDamageEngine {
           // Normal damage causes loss of life (CR 120.3a)
           targetPlayer.resources = targetPlayer.resources || {};
           targetPlayer.resources.life = (targetPlayer.resources.life ?? 20) - damageDealt;
+          // CR 702.164c: Combat damage from a creature with toxic N also gives N poison counters
+          if (isCombat && damageDealt > 0 && toxic > 0) {
+            targetPlayer.resources.poison = (targetPlayer.resources.poison || 0) + toxic;
+          }
         }
       }
 
@@ -107,7 +112,8 @@ export class CombatDamageEngine {
           isCombatDamage: Boolean(isCombat),
           targetDamageMarkedAfter: null,
           targetToughness: null,
-          summary
+          summary,
+          strikePhase: payload.strikePhase || (isCombat ? 'NORMAL_STRIKE' : null)
         });
       }
     } else if (targetType === 'CREATURE') {
@@ -154,8 +160,70 @@ export class CombatDamageEngine {
             isCombatDamage: Boolean(isCombat),
             targetDamageMarkedAfter: targetCreature.damageMarked ?? null,
             targetToughness: effectiveToughness,
-            summary
+            summary,
+            strikePhase: payload.strikePhase || (isCombat ? 'NORMAL_STRIKE' : null)
           });
+        }
+      }
+    } else if (targetType === 'BATTLE') {
+      let targetBattle = null;
+      for (const p of Object.values(tabletopState?.players || {})) {
+        const noncreatures = [
+          ...(p.battlefield?.noncreatures || []),
+          ...(p.battlefield?.lands || []),
+          ...(p.battlefield?.creatures || [])
+        ];
+        const found = noncreatures.find(c => c && (c.instanceId === targetId || c.id === targetId));
+        if (found) {
+          targetBattle = found;
+          break;
+        }
+      }
+
+      if (targetBattle) {
+        targetBattle.defense = Math.max(0, (targetBattle.defense ?? targetBattle.counters?.defense ?? 3) - damageDealt);
+        targetBattle.counters = targetBattle.counters || {};
+        targetBattle.counters.defense = targetBattle.defense;
+        targetBattle.defenseCounters = targetBattle.defense;
+
+        if (tabletopState && typeof tabletopState.recordTrace === 'function') {
+          const sName = sourceCard?.name || payload.sourceName || 'Creature';
+          const tName = targetBattle?.name || 'Battle';
+          const summary = `⚔️ ${sName} deals ${damageDealt} combat damage to Battle ${tName} (${targetBattle.defense} defense remaining)`;
+          tabletopState.recordTrace('COMBAT_TRACE', 'COMBAT_DAMAGE_STEP', {
+            sourceId: sourceCard?.instanceId || sourceId,
+            sourceName: sName,
+            targetId: targetBattle.instanceId || targetId,
+            targetName: tName,
+            amount: damageDealt,
+            isCombatDamage: Boolean(isCombat),
+            defenseRemaining: targetBattle.defense,
+            summary,
+            strikePhase: payload.strikePhase || (isCombat ? 'NORMAL_STRIKE' : null)
+          });
+        }
+
+        if (tabletopState.emit) {
+          tabletopState.emit('BATTLE_DAMAGE_DEALT', {
+            sourceId,
+            sourceCard,
+            targetId: targetBattle.instanceId || targetId,
+            targetBattle,
+            damage: damageDealt,
+            remainingDefense: targetBattle.defense
+          });
+        }
+
+        if (targetBattle.defense <= 0) {
+          targetBattle.isDefeated = true;
+          targetBattle.transformed = true;
+          if (tabletopState.emit) {
+            tabletopState.emit('BATTLE_DEFEATED', { battle: targetBattle, sourceId });
+            tabletopState.emit('BATTLE_TRANSFORMED', { battle: targetBattle, sourceId });
+          }
+          if (typeof tabletopState._transformBattle === 'function') {
+            tabletopState._transformBattle(targetBattle);
+          }
         }
       }
     }
@@ -177,6 +245,7 @@ export class CombatDamageEngine {
       damageDealt,
       prevented: false,
       isCombat,
+      strikePhase: payload.strikePhase || (isCombat ? 'NORMAL_STRIKE' : null),
       hasLifelink,
       hasInfect,
       hasDeathtouch
@@ -234,10 +303,26 @@ export class CombatDamageEngine {
    * @param {number} attackerPower - Effective power of attacker
    * @returns {{ blockerAssignments: Array<{ blockerId: string, damage: number }>, playerTrampleDamage: number }}
    */
-  static calculateAttackerDamageDistribution(attacker, blockers = [], attackerPower, tabletopState = null) {
+  static calculateAttackerDamageDistribution(attacker, blockers = [], attackerPower, tabletopState = null, damageAllocation = null) {
     const power = Math.max(0, attackerPower);
-    const hasTrample = !!(attacker.keywords?.trample || /trample/i.test(attacker.text || ''));
-    const hasDeathtouch = !!(attacker.keywords?.deathtouch || /deathtouch/i.test(attacker.text || ''));
+    let hasTrample = false;
+    let hasDeathtouch = false;
+    if (tabletopState && typeof tabletopState._hasKeyword === 'function') {
+      hasTrample = tabletopState._hasKeyword(attacker, 'trample');
+      hasDeathtouch = tabletopState._hasKeyword(attacker, 'deathtouch');
+    } else {
+      const kw = attacker.keywords || {};
+      hasTrample = Boolean(
+        kw.trample || kw.Trample || attacker.hasTrample ||
+        (Array.isArray(kw) && kw.some(k => String(k).toLowerCase() === 'trample')) ||
+        /trample/i.test(attacker.text || attacker.oracleText || '')
+      );
+      hasDeathtouch = Boolean(
+        kw.deathtouch || kw.Deathtouch || attacker.hasDeathtouch ||
+        (Array.isArray(kw) && kw.some(k => String(k).toLowerCase() === 'deathtouch')) ||
+        /deathtouch/i.test(attacker.text || attacker.oracleText || '')
+      );
+    }
 
     const blockerAssignments = [];
     let remainingPower = power;
@@ -245,6 +330,24 @@ export class CombatDamageEngine {
     if (!blockers || blockers.length === 0) {
       // Unblocked attacker deals all damage directly to player
       return { blockerAssignments: [], playerTrampleDamage: power };
+    }
+
+    // Check explicit damageAllocation for multiple blockers (P20)
+    const alloc = damageAllocation?.[attacker.instanceId || attacker.id] || damageAllocation;
+    if (alloc && typeof alloc === 'object' && blockers.length >= 2) {
+      let totalAllocated = 0;
+      for (const blocker of blockers) {
+        const bId = blocker.instanceId || blocker.id;
+        const rawAmt = Number(alloc[bId] ?? 0);
+        const amt = Math.max(0, Math.min(power - totalAllocated, rawAmt));
+        blockerAssignments.push({ blockerId: bId, damage: amt });
+        totalAllocated += amt;
+      }
+      const leftover = Math.max(0, power - totalAllocated);
+      return {
+        blockerAssignments,
+        playerTrampleDamage: hasTrample ? leftover : 0
+      };
     }
 
     for (const blocker of blockers) {
@@ -346,6 +449,21 @@ export class CombatDamageEngine {
       ? tabletopState.abilityEngine.evaluatePermanentLayers(blocker, tabletopState)
       : blocker;
 
+    // 0. Can't block restriction check (e.g. Skrelv, Defector Mite)
+    const cannotBlock = Boolean(
+      blocker.cantBlock ||
+      blocker.cannotBlock ||
+      blocker.compiledMechanics?.cantBlock ||
+      evalBlocker?.cantBlock ||
+      evalBlocker?.cannotBlock ||
+      evalBlocker?.compiledMechanics?.cantBlock ||
+      /can't block|cannot block/i.test(blocker.oracleText || blocker.text || '') ||
+      /can't block|cannot block/i.test(evalBlocker?.oracleText || evalBlocker?.text || '')
+    );
+    if (cannotBlock) {
+      return { canBlock: false, reason: 'CANT_BLOCK' };
+    }
+
     // 1. Unblockable check
     const isUnblockable = Boolean(
       evalAttacker?.keywords?.unblockable ||
@@ -415,6 +533,93 @@ export class CombatDamageEngine {
    */
   static canDeclareAsAttacker(card, state) {
     return canDeclareAsAttacker(card, state);
+  }
+
+  /**
+   * Resolves a combat damage step across attackers, blockers, and defending player resources,
+   * enforcing Infect (CR 702.90) and Toxic (CR 702.164).
+   */
+  resolveDamageStep(attackers = [], blockers = [], assignments = {}, playerResources = {}, defendingPlayerId = null, stepType = 'NORMAL') {
+    const playerPoisonDeltas = {};
+    const playerLifeDeltas = {};
+    const creatureDamageDeltas = {};
+
+    for (const pid of Object.keys(playerResources || {})) {
+      playerPoisonDeltas[pid] = 0;
+      playerLifeDeltas[pid] = 0;
+    }
+    if (defendingPlayerId && playerPoisonDeltas[defendingPlayerId] === undefined) {
+      playerPoisonDeltas[defendingPlayerId] = 0;
+      playerLifeDeltas[defendingPlayerId] = 0;
+    }
+    for (const attacker of (attackers || [])) {
+      const aDefPid = attacker?.defendingPlayerId;
+      if (aDefPid && playerPoisonDeltas[aDefPid] === undefined) {
+        playerPoisonDeltas[aDefPid] = 0;
+        playerLifeDeltas[aDefPid] = 0;
+      }
+    }
+
+    for (const attacker of (attackers || [])) {
+      if (!attacker) continue;
+      const effectivePower = Number(attacker.power ?? attacker.effectivePower ?? 0);
+      const keywords = attacker.keywords || {};
+      const hasInfect = Boolean(keywords.infect);
+      const toxic = Number(keywords.toxic || 0);
+      const hasLifelink = Boolean(keywords.lifelink);
+      const targetPid = attacker.defendingPlayerId || defendingPlayerId;
+
+      const attackerBlockers = (blockers || []).filter(b => b && assignments?.[attacker.instanceId]?.includes(b.instanceId));
+
+      if (attackerBlockers.length === 0) {
+        if (targetPid && effectivePower > 0) {
+          if (hasInfect) {
+            playerPoisonDeltas[targetPid] = (playerPoisonDeltas[targetPid] || 0) + effectivePower;
+          } else {
+            playerLifeDeltas[targetPid] = (playerLifeDeltas[targetPid] || 0) - effectivePower;
+            if (toxic > 0) {
+              playerPoisonDeltas[targetPid] = (playerPoisonDeltas[targetPid] || 0) + toxic;
+            }
+          }
+
+          if (hasLifelink && attacker.controllerId) {
+            playerLifeDeltas[attacker.controllerId] = (playerLifeDeltas[attacker.controllerId] || 0) + effectivePower;
+          }
+        }
+      } else {
+        const dist = CombatDamageEngine.calculateAttackerDamageDistribution(attacker, attackerBlockers, effectivePower);
+        for (const assign of dist.blockerAssignments) {
+          creatureDamageDeltas[assign.blockerId] = (creatureDamageDeltas[assign.blockerId] || 0) + assign.damage;
+        }
+        if (dist.playerTrampleDamage > 0 && targetPid) {
+          if (hasInfect) {
+            playerPoisonDeltas[targetPid] = (playerPoisonDeltas[targetPid] || 0) + dist.playerTrampleDamage;
+          } else {
+            playerLifeDeltas[targetPid] = (playerLifeDeltas[targetPid] || 0) - dist.playerTrampleDamage;
+            if (toxic > 0) {
+              playerPoisonDeltas[targetPid] = (playerPoisonDeltas[targetPid] || 0) + toxic;
+            }
+          }
+        }
+      }
+    }
+
+    for (const [pid, dPoison] of Object.entries(playerPoisonDeltas)) {
+      if (playerResources?.[pid] && dPoison !== 0) {
+        playerResources[pid].poison = (playerResources[pid].poison || 0) + dPoison;
+      }
+    }
+    for (const [pid, dLife] of Object.entries(playerLifeDeltas)) {
+      if (playerResources?.[pid] && dLife !== 0) {
+        playerResources[pid].life = (playerResources[pid].life ?? 20) + dLife;
+      }
+    }
+
+    return {
+      playerPoisonDeltas,
+      playerLifeDeltas,
+      creatureDamageDeltas
+    };
   }
 }
 

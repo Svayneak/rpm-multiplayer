@@ -50,9 +50,11 @@ import {
   evaluateDeckSlots
 } from './VictoryFanfare.js';
 import { PerkinsAgent, PERKINS_DEFAULT_CONFIG, PERKINS_COACH_DIALOGUES } from './PerkinsAgent.js';
-import { generateInstanceId } from './ZoneModel.js';
+import { generateInstanceId, ZoneModel } from './ZoneModel.js';
 import { TabRouter, TABS, LOCKED_TABS_DURING_MATCH } from './view/TabRouter.js';
-import { DeckValidator, VALIDATION_ERRORS, ORACLE_UNLIMITED_CARDS } from './DeckValidator.js';
+import { DeckValidator, VALIDATION_ERRORS, ORACLE_UNLIMITED_CARDS, BASIC_LAND_COLORS, DUAL_LAND_METADATA } from './DeckValidator.js';
+import { ScryfallService, LocalStorageCacheAdapter, MemoryCacheAdapter } from './ScryfallService.js';
+import { OracleEffectCompiler, compileCardMechanics, smokeTestCard } from './OracleEffectCompiler.js';
 import { LobbyManager, LOBBY_STATUS } from './LobbyManager.js';
 import { MatchmakingQueue } from './MatchmakingQueue.js';
 import { TurnRollOffManager, generateAuthoritativeD20 } from './TurnRollOffManager.js';
@@ -69,6 +71,10 @@ import { SearchSelectGridModal } from './view/SearchSelectGridModal.js';
 import { TargetSelectorModal } from './view/TargetSelectorModal.js';
 import { PermanentActionDrawer } from './view/PermanentActionDrawer.js';
 import { DamageAssignmentModal } from './view/DamageAssignmentModal.js';
+import { RPMDiceRollOverlay } from './view/RPMDiceRollOverlay.js';
+import { CastAvailabilityManager } from './CastAvailabilityManager.js';
+import { DeckSlotManager, CompatibilityReviewQueue } from './deckbuilder/DeckSlotManager.js';
+import { PRECONSTRUCTED_STARTER_DECKS, getPreconstructedDeckById } from './deckbuilder/PreconstructedDecks.js';
 
 /**
  * Standard MTG Zone Drawers
@@ -119,10 +125,13 @@ export class RPMAppController {
     this.traceLogger = options.traceLogger || defaultProcessTraceLogger;
     this.showTraceLog = Boolean(options.showTraceLog);
     this._selectedAttackers = new Set();
+    this.attackerTargets = {};
     this._blockerAssignments = new Map();
     this._activeAttackerTargetId = null;
     this._lastLoggedTurnHandoverKey = null;
     this._selectedLandId = null;
+    this.autoPassEnabled = false;
+    this.phaseStops = new Set(['COMBAT']);
 
     if (this.traceLogger) {
       this._wireTraceLogger(this.traceLogger);
@@ -153,13 +162,18 @@ export class RPMAppController {
     this.perkinsAgent = null;
 
     // 1. Storage & Profiles
+    this.storage = options.storage || (typeof localStorage !== 'undefined' ? localStorage : null);
     this.storageAdapter = options.storageAdapter || new StorageAdapter(options);
     this.profileManager = options.profileManager || new ProfileManager({
       storageAdapter: this.storageAdapter,
       ...options
     });
 
-    // 2. Deckbuilder AI
+    // 2. Deckbuilder AI & Scryfall Service
+    this.scryfallService = options.scryfallService || new ScryfallService({
+      cacheAdapter: options.cacheAdapter || (typeof localStorage !== 'undefined' ? new LocalStorageCacheAdapter() : new MemoryCacheAdapter()),
+      fetchFn: options.fetchFn
+    });
     this.deckbuilderAI = options.deckbuilderAI || new DeckbuilderAI({
       storage: this.storageAdapter,
       defaultUserId: this.myPlayerId
@@ -261,6 +275,16 @@ export class RPMAppController {
       }
     });
 
+    // Deck Slot Manager & Compatibility Review Queue ([P27, P28, P29])
+    this.deckSlotManager = options.deckSlotManager || new DeckSlotManager({
+      storage: (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null)
+    });
+    this.compatibilityReviewQueue = options.compatibilityReviewQueue || new CompatibilityReviewQueue({
+      storage: (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null)
+    });
+    this.botAssignedDecks = options.botAssignedDecks || {};
+    this.botFastForward = Boolean(options.botFastForward);
+
     // 11. Feature 19, 20 & 21 Interactive Modals
     this.pregameEnabled = options.pregame === true;
     this.pregameActive = false;
@@ -283,14 +307,77 @@ export class RPMAppController {
       }
     });
 
-    this.actionDrawer = options.actionDrawer || new PermanentActionDrawer({
+    this.actionDrawer = options.actionDrawer || options.permanentDrawer || new PermanentActionDrawer({
       onActivateAbility: (data) => this.handleAbilityActivated(data),
-      onTapForMana: (data) => this.handleDrawerTapMana(data)
+      onTapForMana: (data) => this.handleDrawerTapMana(data),
+      onEquipToCreature: ({ equipment, targetCreature, playerId }) => {
+        if (this.tabletopState) {
+          if (typeof this.tabletopState.activateEquipAbility === 'function') {
+            try {
+              const effectiveCost = typeof this.tabletopState.computeEquipCost === 'function'
+                ? this.tabletopState.computeEquipCost(playerId, equipment, targetCreature)
+                : null;
+              const isFree = effectiveCost === '{0}';
+              if (isFree) {
+                this.showToast?.('⚒️ [Forge Anew]: First equip ability this turn costs {0}!');
+                console.log('[RPM] ⚒️ [Forge Anew]: First equip ability this turn costs {0}!');
+              }
+              this.tabletopState.activateEquipAbility(playerId, equipment.instanceId, targetCreature.instanceId, { isFree });
+            } catch (err) {
+              this.showWarningBanner(`⚠️ ${err.message || 'Cannot equip permanent'}`);
+              return;
+            }
+          } else if (typeof this.tabletopState.attachPermanentToCreature === 'function') {
+            this.tabletopState.attachPermanentToCreature(playerId, equipment.instanceId, targetCreature.instanceId);
+          } else if (typeof this.tabletopState.attachPermanent === 'function') {
+            this.tabletopState.attachPermanent(equipment.instanceId, targetCreature.instanceId);
+          }
+        }
+        this.reconcileDOM();
+      }
     });
+    this.permanentDrawer = this.actionDrawer;
+    if (this.tabletopState) {
+      if (typeof this.tabletopState.attachPermanentToCreature !== 'function' && typeof this.tabletopState.attachPermanent === 'function') {
+        this.tabletopState.attachPermanentToCreature = (playerId, equipmentId, targetCreatureId) => {
+          return this.tabletopState.attachPermanent(equipmentId, targetCreatureId);
+        };
+      }
+      if (typeof this.tabletopState.evaluateCreatureStats !== 'function') {
+        this.tabletopState.evaluateCreatureStats = (cr, playerId) => {
+          if (this.tabletopState.abilityEngine && typeof this.tabletopState.abilityEngine.evaluateCreatureStats === 'function') {
+            return this.tabletopState.abilityEngine.evaluateCreatureStats(cr, this.tabletopState);
+          }
+          return {
+            power: cr?.power ?? 1,
+            toughness: cr?.toughness ?? 1,
+            effectivePower: cr?.power ?? 1,
+            effectiveToughness: cr?.toughness ?? 1,
+            keywords: cr?.keywords || {}
+          };
+        };
+      }
+    }
 
     this.damageModal = options.damageModal || new DamageAssignmentModal({
       onConfirmAssignment: (data) => this.handleDamageConfirmed(data)
     });
+
+    // 12. RPM Step 1 Emblem Dice Roll Overlay & Viewport
+    this.diceRollOverlay = options.diceRollOverlay || new RPMDiceRollOverlay({
+      app: this,
+      bannerDurationMs: options.bannerDurationMs ?? 1500
+    });
+
+    if (this.tabletopState && typeof this.tabletopState.getActionCombinationsForSpell !== 'function') {
+      this.tabletopState.getActionCombinationsForSpell = (playerId, card, castMode) => {
+        return this._getActionCombinationsForSpell(playerId, card, castMode);
+      };
+    }
+    this._hoverPreviewTimer = null;
+    this._longPressTimer = null;
+    this._activePreviewCard = null;
+    this._hasBoundGlobalTooltipDismiss = false;
 
     // Handle container option if provided
     if (options.container) {
@@ -345,6 +432,10 @@ export class RPMAppController {
 
     this.isMatchActiveFlag = Boolean(options.isMatchActive);
     this._hasMatchStarted = Boolean(options.hasMatchStarted);
+    this.matchHistory = options.matchHistory || [];
+    this._isVictoryModalOpen = false;
+    this._isDeckbuilderModalOpen = false;
+    this._isRecapModalOpen = false;
     this.selectedHandCardId = null;
     this.turnRollOffManager = null;
     this.isRollOffActive = false;
@@ -353,6 +444,23 @@ export class RPMAppController {
     this.queueSearchStartTime = null;
     this.queueSearchInterval = null;
     this.activeDeckSlot = 1;
+    this.activeDeckData = null;
+    try {
+      const storage = (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null);
+      if (storage) {
+        const savedSlot = storage.getItem('rpm_active_deck_slot');
+        if (savedSlot) {
+          this.activeDeckSlot = parseInt(savedSlot, 10) || 1;
+        }
+        const rawMap = storage.getItem('rpm_saved_decks_by_slot');
+        if (rawMap) {
+          const slotMap = JSON.parse(rawMap);
+          if (slotMap && slotMap[this.activeDeckSlot]) {
+            this.activeDeckData = slotMap[this.activeDeckSlot];
+          }
+        }
+      }
+    } catch (_) {}
 
     // Lobby & Matchmaking
     this.lobbyManager = options.lobbyManager || new LobbyManager({ roomCode: 'LOBBY1' });
@@ -375,6 +483,27 @@ export class RPMAppController {
       this.startRollOff();
     });
     this.matchmakingQueue = options.matchmakingQueue || new MatchmakingQueue();
+  }
+
+  get perkEngine() {
+    return this.randomPerk;
+  }
+
+  set perkEngine(val) {
+    this.randomPerk = val;
+  }
+
+  /**
+   * Returns true if running in interactive browser UI mode (not headless / Node test runner).
+   * @returns {boolean}
+   */
+  isInteractiveBrowserMode() {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return false;
+    if (typeof process !== 'undefined' && process.env && (process.env.NODE_ENV === 'test' || process.versions?.node)) {
+      return false;
+    }
+    if (typeof window !== 'undefined' && window.__RPM_HEADLESS_TEST__) return false;
+    return true;
   }
 
   isMatchActive() {
@@ -483,6 +612,7 @@ export class RPMAppController {
     this._hasMatchStarted = true;
     this.isMatchActiveFlag = true;
     this.isRollOffActive = false;
+    this._openingHandActionsResolved = false;
 
     // Purge and sanitize TabletopStateManager (INV-LOBBY-6, Screenshot 1 Bug Fix)
     const seatedSlots = this.lobbyManager ? this.lobbyManager.getSeatedSlots() : [];
@@ -499,7 +629,11 @@ export class RPMAppController {
     if (this.tabletopState) {
       this.tabletopState.isGameOver = false;
       this.tabletopState.winnerId = null;
-      const prevPlayers = this.tabletopState.players || {};
+      this.tabletopState.stack = [];
+      this.tabletopState._stack = [];
+      this.tabletopState.combatState = { attackers: [], blockers: [] };
+      this.tabletopState.turnNumber = 1;
+      this.tabletopState.roundNumber = 1;
       this.tabletopState.players = {};
       for (const pid of this.playerIds) {
         const slot = seatedSlots.find(s => s.playerId === pid);
@@ -509,28 +643,33 @@ export class RPMAppController {
             this.tabletopState.registerPlayer(pid, name);
           } catch (_) {}
         }
-        if (prevPlayers[pid]) {
-          this.tabletopState.players[pid] = prevPlayers[pid];
-        } else if (!this.tabletopState.players[pid]) {
-          this.tabletopState.players[pid] = {
-            id: pid,
-            playerId: pid,
-            name,
-            resources: { life: 20, poison: 0, energy: 0, manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 } },
-            zones: { hand: [], library: [], graveyard: [], exile: [], battlefield: [] },
-            battlefield: { lands: [], creatures: [], noncreatures: [], planeswalkers: [] },
-            hand: [],
-            library: [],
-            graveyard: [],
-            exile: [],
-            isEliminated: false
-          };
-        }
+        this.tabletopState.players[pid] = {
+          id: pid,
+          playerId: pid,
+          name,
+          resources: { life: 20, poison: 0, energy: 0, manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }, landsPlayedThisTurn: 0, maxLandsPerTurn: 1 },
+          zones: { hand: [], library: [], graveyard: [], exile: [], battlefield: [] },
+          battlefield: { lands: [], creatures: [], noncreatures: [], planeswalkers: [] },
+          hand: [],
+          library: [],
+          graveyard: [],
+          exile: [],
+          isEliminated: false,
+          turnsTaken: 0
+        };
       }
     }
 
     if (this.priorityMachine) {
       this.priorityMachine.players = [...this.playerIds];
+      this.priorityMachine.turnNumber = 1;
+      this.priorityMachine.roundNumber = 1;
+      this.priorityMachine.stack = [];
+      this.priorityMachine._stack = [];
+      this.priorityMachine.consecutivePassCount = 0;
+      if (this.priorityMachine.playerTurnCounts && typeof this.priorityMachine.playerTurnCounts.clear === 'function') {
+        this.priorityMachine.playerTurnCounts.clear();
+      }
       const startId = this.priorityMachine.startingPlayerId || this.priorityMachine.activePlayerId || this.playerIds[0];
       this.priorityMachine.startingPlayerId = startId;
       this.priorityMachine.activePlayerId = startId;
@@ -538,6 +677,22 @@ export class RPMAppController {
       if (this.tabletopState) {
         this.tabletopState.startingPlayerId = startId;
         this.tabletopState.priorityMachine = this.priorityMachine;
+      }
+    }
+
+    if (this.perkEngine && typeof this.perkEngine.reconfigure === 'function') {
+      this.perkEngine.reconfigure(this.playerIds.length);
+    }
+
+    // Dismiss lingering modals from previous matches
+    if (this.container) {
+      const victoryModal = this.container.querySelector('#victory-modal');
+      if (victoryModal) victoryModal.classList.add('hidden');
+      const mulliganModalEl = this.container.querySelector('#mulligan-modal');
+      if (mulliganModalEl) mulliganModalEl.classList.add('hidden');
+      const castModeModal = this.container.querySelector('#cast-mode-selector-modal');
+      if (castModeModal) {
+        try { castModeModal.remove(); } catch (_) {}
       }
     }
 
@@ -612,7 +767,22 @@ export class RPMAppController {
 
     this.tabRouter.navigate('ARENA', this.getMatchState(), this.isSpectator());
     this.dealStartingHands();
+    if (!this.pregameEnabled && !this.pregameActive && !this.isRollOffActive) {
+      this._resolveOpeningHandActions();
+    }
     this.reconcileDOM();
+
+    // Synchronize deck manifest with relayClient if active online session exists
+    if (this.relayClient && (this.relayClient.roomCode || this.relayClient.sessionId || this.relayClient.socket?.readyState === 1)) {
+      try {
+        const manifest = typeof this.exportDeckManifest === 'function' ? this.exportDeckManifest(this.myPlayerId) : null;
+        if (manifest && typeof this.registerDeckManifest === 'function') {
+          this.registerDeckManifest(manifest, this.myPlayerId);
+        }
+      } catch (err) {
+        console.warn('[RPM] Non-fatal manifest sync error:', err);
+      }
+    }
 
     this.authManager?.dispatchTelemetry('MATCH_START', null, {
       playerIds: this.playerIds,
@@ -663,72 +833,21 @@ export class RPMAppController {
   }
 
   showGameOverModal(data = {}) {
-    const modalRoot = this.container?.querySelector('#modal-root');
-    if (!modalRoot) return;
-
-    const existing = modalRoot.querySelector('#game-over-modal');
-    if (existing) {
-      try { existing.remove(); } catch (_) {}
-    }
-
-    const winnerId = data.winnerId;
-    const isWinner = Boolean(winnerId && winnerId === this.myPlayerId);
-    let winnerName = 'Opponent';
-    if (isWinner) {
-      winnerName = this.username || 'You';
-    } else {
-      const p = this.tabletopState?.players?.[winnerId];
-      if (p && p.name && !this._isRawUuid(p.name)) {
-        winnerName = p.name;
-      } else if (winnerId && winnerId.toLowerCase().includes('perkins')) {
-        winnerName = 'Perkins AI (Bot)';
+    const winnerId = data.winnerId || this.tabletopState?.winnerId;
+    let winnerName = data.winnerName;
+    if (!winnerName) {
+      if (winnerId === this.myPlayerId) {
+        winnerName = this.username || 'You';
       } else {
-        const slot = this.lobbyManager?.getSeatedSlots?.()?.find(s => s.playerId === winnerId);
-        winnerName = slot?.username || (winnerId ? `Player (${winnerId.substring(0, 6).toUpperCase()})` : 'Opponent');
+        const p = this.tabletopState?.players?.[winnerId];
+        winnerName = p?.name || this.getFriendlyPlayerName(winnerId);
       }
     }
-
-    modalRoot.setAttribute('aria-hidden', 'false');
-    const gameOverModal = document.createElement('div');
-    gameOverModal.id = 'game-over-modal';
-    gameOverModal.className = 'modal-backdrop game-over-modal-backdrop';
-    gameOverModal.innerHTML = `
-      <div class="modal-dialog-box" role="dialog" aria-modal="true" aria-label="Game Over">
-        <h2 style="color: ${isWinner ? '#22c55e' : '#ef4444'}; margin-top: 0;">
-          ${isWinner ? '🏆 VICTORY!' : '💀 DEFEAT'}
-        </h2>
-        <p style="color: #cbd5e1; font-size: 1rem; line-height: 1.5;">
-          ${isWinner ? 'Congratulations! You are the last surviving player.' : `${winnerName} has won the match.`}
-        </p>
-        <div class="modal-actions" style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
-          <button id="btn-game-over-lobby" class="btn btn-primary">Return to Lobby</button>
-        </div>
-      </div>
-    `;
-
-    const btnLobby = gameOverModal.querySelector('#btn-game-over-lobby');
-    const cleanup = () => {
-      try { gameOverModal.remove(); } catch (_) {}
-      const remaining = modalRoot.querySelectorAll('.modal-dialog-box');
-      if (remaining.length === 0) {
-        modalRoot.setAttribute('aria-hidden', 'true');
-      }
-    };
-
-    btnLobby?.addEventListener('click', () => {
-      cleanup();
-      this.tabRouter.unlockAll?.();
-      this.tabRouter.reset('LOBBY');
-      this.reconcileDOM();
+    this.openModal('VICTORY_FANFARE', {
+      winnerId,
+      winnerName,
+      ...data
     });
-
-    modalRoot.appendChild(gameOverModal);
-
-    if (isWinner && this.audioEnabled && this.victoryFanfare) {
-      try {
-        this.victoryFanfare.playChiptune();
-      } catch (_) {}
-    }
   }
 
   showConcedeModal(onConfirm, onCancel) {
@@ -832,6 +951,15 @@ export class RPMAppController {
           await this.authManager.instantDevLogin(email, username, '1995-01-01');
         } else if (typeof this.authManager.loginWithDevBypass === 'function') {
           await this.authManager.loginWithDevBypass(email, username);
+        }
+      }
+      this._syncAuthUser();
+      if (this.authManager && !this.authManager.isOnboarded()) {
+        const existingDeck = this.activeDeckData || this.getActiveDeckForPlayer(this.myPlayerId);
+        if (existingDeck && Array.isArray(existingDeck.mainboard) && existingDeck.mainboard.length > 0 && typeof this.authManager.saveActiveDeck === 'function') {
+          try {
+            await this.authManager.saveActiveDeck(existingDeck.id || `custom_${Date.now()}`, existingDeck);
+          } catch (_) {}
         }
       }
       cleanup();
@@ -972,6 +1100,16 @@ export class RPMAppController {
     }, 3500);
   }
 
+  _escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
   _isRawUuid(str) {
     if (typeof str !== 'string') return false;
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
@@ -1002,6 +1140,99 @@ export class RPMAppController {
     return { colorKey: 'c', glyph: 'ms-c' };
   }
 
+  /**
+   * Retrieves the active deck for a player (or current human player).
+   * Supports activeDeckData in memory, AuthManager active deck, or saved deck by slot in localStorage.
+   * @param {string} [playerId=this.myPlayerId]
+   * @returns {Object|null}
+   */
+  getActiveDeckForPlayer(playerId = this.myPlayerId) {
+    if (playerId !== this.myPlayerId) {
+      return null;
+    }
+    if (this.activeDeckData) {
+      return this.activeDeckData;
+    }
+    if (this.authManager && this.authManager.user && this.authManager.user.activeDeckData) {
+      return this.authManager.user.activeDeckData;
+    }
+    try {
+      const storage = (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null);
+      if (storage) {
+        const slot = storage.getItem('rpm_active_deck_slot') || this.activeDeckSlot || 1;
+        const rawMap = storage.getItem('rpm_saved_decks_by_slot');
+        if (rawMap) {
+          const slotMap = JSON.parse(rawMap);
+          if (slotMap && slotMap[slot]) {
+            return slotMap[slot];
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /**
+   * Loads a saved deck from a specific slot into active deck state.
+   * @param {number|string} slotNum
+   * @returns {Object|null}
+   */
+  _loadDeckSlot(slotNum) {
+    this.activeDeckSlot = Number(slotNum) || 1;
+    try {
+      const storage = (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null);
+      if (storage) {
+        storage.setItem('rpm_active_deck_slot', String(this.activeDeckSlot));
+        const rawMap = storage.getItem('rpm_saved_decks_by_slot');
+        if (rawMap) {
+          const slotMap = JSON.parse(rawMap);
+          if (slotMap && slotMap[this.activeDeckSlot]) {
+            this.activeDeckData = slotMap[this.activeDeckSlot];
+            return slotMap[this.activeDeckSlot];
+          }
+        }
+      }
+    } catch (_) {}
+    this.activeDeckData = null;
+    return null;
+  }
+
+  exportDeckManifest(playerId = this.myPlayerId) {
+    if (this.tabletopState && typeof this.tabletopState.exportDeckManifest === 'function' && this.tabletopState.exportDeckManifest !== this.exportDeckManifest) {
+      return this.tabletopState.exportDeckManifest(playerId);
+    }
+    const player = this.tabletopState?.players?.[playerId];
+    const deck = this.getActiveDeckForPlayer(playerId);
+    const libraryCards = Array.isArray(player?.library) ? player.library : [];
+    const mainboard = (deck && Array.isArray(deck.mainboard))
+      ? deck.mainboard
+      : (libraryCards.length > 0
+        ? libraryCards.map(c => ({ name: c.name, count: 1, typeLine: c.typeLine || c.type || '' }))
+        : []);
+    return {
+      playerId,
+      playerName: player?.name || this.username,
+      activeDeckSlot: this.activeDeckSlot || 1,
+      format: this.deckbuilderMode || 'FREE_CONSTRUCT',
+      cardsCount: libraryCards.length || mainboard.length,
+      mainboard,
+      timestamp: Date.now()
+    };
+  }
+
+  registerDeckManifest(manifest, playerId = this.myPlayerId) {
+    if (this.tabletopState && typeof this.tabletopState.registerDeckManifest === 'function' && this.tabletopState.registerDeckManifest !== this.registerDeckManifest) {
+      this.tabletopState.registerDeckManifest(manifest, playerId);
+    }
+    if (this.relayClient) {
+      if (typeof this.relayClient.registerDeckManifest === 'function') {
+        this.relayClient.registerDeckManifest(manifest, playerId);
+      } else if (typeof this.relayClient.sendAction === 'function') {
+        this.relayClient.sendAction('DECK_MANIFEST', { manifest, playerId });
+      }
+    }
+  }
+
   dealStartingHands() {
     const starterCardNames = [
       'Steam Vents', 'Mountain', 'Swamp', 'Lightning Bolt', 'Goblin Guide', 'Monastery Swiftspear', 'Lava Spike'
@@ -1012,52 +1243,102 @@ export class RPMAppController {
         if (!p.zones) {
           p.zones = { hand: [], library: [], graveyard: [], exile: [], battlefield: [] };
         }
-        const buildCardInstance = (name, idx, zoneName) => {
-          const meta = getHydratedCardMetadata(name);
-          const imgUri = meta?.imageUri || meta?.imageUrl || '';
+        const buildCardInstance = (cardOrName, idx, zoneName) => {
+          const name = typeof cardOrName === 'string' ? cardOrName : (cardOrName?.name || 'Card');
+          const fallbackMeta = getHydratedCardMetadata(name);
+          let meta = (typeof cardOrName === 'object' && cardOrName !== null)
+            ? { ...(fallbackMeta || {}), ...cardOrName }
+            : (fallbackMeta ? { ...fallbackMeta } : null);
+
+          const norm = name.trim().toLowerCase();
+          let typeLine = meta?.typeLine || meta?.type_line || meta?.type || fallbackMeta?.typeLine || '';
+          if (!typeLine) {
+            if (BASIC_LAND_COLORS[norm] || norm.includes('mountain') || norm.includes('swamp') || norm.includes('plains') || norm.includes('island') || norm.includes('forest') || norm.includes('vents') || norm.includes('fountain') || norm.includes('grave') || norm.includes('crypt') || norm.includes('ground') || norm.includes('garden') || norm.includes('shrine') || norm.includes('pool') || norm.includes('tomb') || norm.includes('foundry')) {
+              typeLine = 'Land';
+            } else if (norm.includes('bolt') || norm.includes('spike') || norm.includes('charm') || norm.includes('shock') || norm.includes('counter')) {
+              typeLine = 'Instant';
+            } else {
+              typeLine = 'Card';
+            }
+          }
+
+          const isCreature = typeLine.toLowerCase().includes('creature');
+          const isLand = typeLine.toLowerCase().includes('land');
+          const imgUri = meta?.imageUri || meta?.imageUrl || fallbackMeta?.imageUri || '';
+          const oracleText = meta?.oracleText || meta?.oracle_text || meta?.text || fallbackMeta?.oracleText || '';
+
           const card = {
             instanceId: `card_${pid}_${zoneName}_${idx}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            name: meta?.name || name,
-            typeLine: meta?.typeLine || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
-            type: meta?.type || (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 'Land' : (name.includes('Bolt') || name.includes('Spike') ? 'Instant' : 'Creature')),
-            manaCost: meta?.manaCost !== undefined ? meta.manaCost : (name.includes('Bolt') || name.includes('Spike') || name.includes('Guide') || name.includes('Swiftspear') ? '{R}' : ''),
-            cmc: meta?.cmc ?? (name.includes('Mountain') || name.includes('Swamp') || name.includes('Vents') ? 0 : 1),
-            oracleText: meta?.oracleText || '',
+            name: meta?.name || fallbackMeta?.name || name,
+            typeLine,
+            type: typeLine,
+            manaCost: meta?.manaCost !== undefined ? meta.manaCost : (fallbackMeta?.manaCost !== undefined ? fallbackMeta.manaCost : (isLand ? '' : (name.includes('Bolt') || name.includes('Spike') ? '{R}' : '{1}'))),
+            cmc: meta?.cmc ?? fallbackMeta?.cmc ?? (isLand ? 0 : 1),
+            oracleText,
             imageUri: imgUri,
             imageUrl: imgUri,
-            power: meta?.power,
-            toughness: meta?.toughness,
-            loyalty: meta?.loyalty,
-            colors: meta?.colors || [],
+            power: isCreature ? (meta?.power ?? fallbackMeta?.power ?? 1) : undefined,
+            toughness: isCreature ? (meta?.toughness ?? fallbackMeta?.toughness ?? 1) : undefined,
+            loyalty: meta?.loyalty ?? fallbackMeta?.loyalty,
+            colors: meta?.colors || fallbackMeta?.colors || [],
+            cardFaces: meta?.cardFaces || meta?.card_faces || fallbackMeta?.cardFaces || null,
+            layout: meta?.layout || fallbackMeta?.layout || 'normal',
             owner: pid,
             ownerId: pid,
             controllerId: pid,
             zone: zoneName,
             isTapped: false,
-            effect: meta?.effect,
-            keywords: meta?.keywords ? { ...meta?.keywords } : undefined,
-            isShockland: meta?.isShockland,
-            hasSummoningSickness: meta?.hasSummoningSickness,
-            isSummoningSick: meta?.isSummoningSick
+            effect: meta?.effect || fallbackMeta?.effect,
+            keywords: (meta?.keywords || fallbackMeta?.keywords) ? { ...(fallbackMeta?.keywords || {}), ...(meta?.keywords || {}) } : undefined,
+            isShockland: meta?.isShockland ?? fallbackMeta?.isShockland,
+            hasSummoningSickness: isCreature ? meta?.hasSummoningSickness : false,
+            isSummoningSick: isCreature ? meta?.isSummoningSick : false
           };
+
           if (TabletopStateManager && typeof TabletopStateManager.hydrateCardMechanics === 'function') {
             TabletopStateManager.hydrateCardMechanics(card);
           }
           return card;
         };
-        if (!p.zones.hand || p.zones.hand.length === 0) {
-          p.zones.hand = starterCardNames.map((name, idx) => buildCardInstance(name, idx, 'HAND'));
-          p.hand = p.zones.hand;
-        }
-        if (!p.library || p.library.length === 0) {
-          const pool = [
-            'Mountain', 'Steam Vents', 'Lightning Bolt', 'Lava Spike',
-            'Goblin Guide', 'Monastery Swiftspear', 'Mountain', 'Lightning Bolt',
-            'Lava Spike', 'Goblin Guide', 'Monastery Swiftspear', 'Steam Vents'
-          ];
-          const libCards = Array.from({ length: 53 }, (_, idx) => buildCardInstance(pool[idx % pool.length], idx, 'LIBRARY'));
-          p.library = libCards;
-          p.zones.library = [...libCards];
+
+        const activeDeck = this.getActiveDeckForPlayer(pid);
+        const hasCustomMainboard = activeDeck && Array.isArray(activeDeck.mainboard) && activeDeck.mainboard.length > 0;
+
+        if (hasCustomMainboard) {
+          const fullMainboardCards = activeDeck.mainboard.flatMap(c => {
+            const count = Number(c.count) || 1;
+            return Array.from({ length: count }, () => (typeof c === 'object' ? { ...c } : c));
+          });
+
+          const shouldShuffle = Boolean(this.options?.shuffleDeck || (typeof this.isInteractiveBrowserMode === 'function' && this.isInteractiveBrowserMode()));
+          const deckPool = (shouldShuffle && ZoneModel?.shuffleArray) ? ZoneModel.shuffleArray([...fullMainboardCards]) : [...fullMainboardCards];
+
+          if (!p.zones.hand || p.zones.hand.length === 0) {
+            const handCards = deckPool.slice(0, 7);
+            p.zones.hand = handCards.map((item, idx) => buildCardInstance(item, idx, 'HAND'));
+            p.hand = p.zones.hand;
+          }
+          if (!p.library || p.library.length === 0) {
+            const libCards = deckPool.slice(7);
+            const libInstances = libCards.map((item, idx) => buildCardInstance(item, idx, 'LIBRARY'));
+            p.library = (shouldShuffle && ZoneModel?.shuffleArray) ? ZoneModel.shuffleArray(libInstances) : libInstances;
+            p.zones.library = [...p.library];
+          }
+        } else {
+          if (!p.zones.hand || p.zones.hand.length === 0) {
+            p.zones.hand = starterCardNames.map((name, idx) => buildCardInstance(name, idx, 'HAND'));
+            p.hand = p.zones.hand;
+          }
+          if (!p.library || p.library.length === 0) {
+            const pool = [
+              'Mountain', 'Steam Vents', 'Lightning Bolt', 'Lava Spike',
+              'Goblin Guide', 'Monastery Swiftspear', 'Mountain', 'Lightning Bolt',
+              'Lava Spike', 'Goblin Guide', 'Monastery Swiftspear', 'Steam Vents'
+            ];
+            const libCards = Array.from({ length: 53 }, (_, idx) => buildCardInstance(pool[idx % pool.length], idx, 'LIBRARY'));
+            p.library = libCards;
+            p.zones.library = [...libCards];
+          }
         }
       }
     }
@@ -1141,17 +1422,86 @@ export class RPMAppController {
     this.reconcileDOM();
   }
 
-  castSpellToStack(card, chosenTarget = null) {
+  castSpellToStack(card, chosenTarget = null, chosenMode = null) {
     if (card && typeof TabletopStateManager?.hydrateCardMechanics === 'function') {
       TabletopStateManager.hydrateCardMechanics(card);
     }
     const p = this.tabletopState?.players?.[this.myPlayerId];
+
+    const hasAdventure = (card?.typeLine || card?.type || '').includes('//') ||
+      /adventure/i.test(card?.typeLine || card?.oracleText || '') ||
+      /callous\s+sell-sword/i.test(card?.name || '');
+
+    if (hasAdventure) {
+      if (!card.compiledMechanics) card.compiledMechanics = {};
+      if (!Array.isArray(card.compiledMechanics.castModes) || card.compiledMechanics.castModes.length < 2) {
+        if (/callous\s+sell-sword/i.test(card.name || '') || (card.typeLine || '').includes('//')) {
+          card.compiledMechanics.castModes = [
+            {
+              mode: 'MAIN',
+              name: 'Callous Sell-Sword',
+              manaCost: '{1}{B}',
+              typeLine: 'Creature — Human Soldier',
+              oracleText: card.oracleText || '',
+              power: 2,
+              toughness: 2,
+              exileOnResolve: false,
+              isPermanent: true,
+              requiresTarget: false
+            },
+            {
+              mode: 'ADVENTURE',
+              name: 'Burn Together',
+              manaCost: '{R}',
+              typeLine: 'Sorcery — Adventure',
+              oracleText: 'Burn Together deals damage equal to target creature you control\'s power to any target. Then sacrifice that creature.',
+              exileOnResolve: true,
+              isPermanent: false,
+              requiresTarget: true
+            }
+          ];
+        }
+      }
+    }
+
+    if ((card?.zone === 'exile' || card?.onAdventure) && card?.onAdventure === true) {
+      chosenMode = 'MAIN';
+    }
+
+    if (!chosenMode && !card?.selectedCastMode && this.container && card?.compiledMechanics?.castModes?.length > 1) {
+      this._openCastModeSelectorModal(card);
+      return;
+    }
+
+    let modeObj = null;
+    const effectiveMode = chosenMode || card?.selectedCastMode || null;
+    if (effectiveMode && Array.isArray(card?.compiledMechanics?.castModes)) {
+      modeObj = card.compiledMechanics.castModes.find(m => m.mode === effectiveMode) || null;
+    }
+    if (modeObj) {
+      card.selectedCastMode = modeObj.mode;
+      card.activeCastMode = modeObj.mode;
+    }
+
+    const effectiveManaCost = modeObj?.manaCost || card?.manaCost;
+    const effectiveTypeLine = modeObj?.typeLine || card?.typeLine || '';
+    const effectiveOracleText = modeObj?.oracleText || card?.oracleText || '';
+    const effectiveName = modeObj?.name || card?.name;
+
+    const checkCard = {
+      ...card,
+      name: effectiveName,
+      manaCost: effectiveManaCost,
+      typeLine: effectiveTypeLine,
+      oracleText: effectiveOracleText
+    };
+
     if (this.tabletopState && typeof this.tabletopState.canPlayerCastOrPlay === 'function') {
-      const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, card, this.priorityMachine);
+      const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, checkCard, this.priorityMachine, { castMode: modeObj?.mode });
       if (check && !check.allowed) {
         this.tabletopState?.recordTrace?.('UI_REJECTION', 'CAST_SPELL_REJECTED', {
           playerId: this.myPlayerId,
-          cardName: card?.name,
+          cardName: effectiveName,
           reason: check.message
         });
         this.showWarningBanner(`⚠️ ${check.message || 'Cannot cast spell'}`);
@@ -1159,9 +1509,97 @@ export class RPMAppController {
       }
     }
 
-    const typeLine = String(card?.typeLine || card?.type || '').toLowerCase();
-    const isSpellWithTarget = (typeLine.includes('instant') || typeLine.includes('sorcery') || typeLine.includes('aura')) &&
-      Boolean(card?.effect?.targetType || card?.requiresTarget || /target/i.test(card?.oracleText || card?.text || ''));
+    const typeLineLower = effectiveTypeLine.toLowerCase();
+    const isInstantOrSorceryOrAura = typeLineLower.includes('instant') || typeLineLower.includes('sorcery') || typeLineLower.includes('aura');
+    const requiresTarget = Boolean(
+      modeObj?.requiresTarget ||
+      modeObj?.effect?.targetType ||
+      card?.effect?.targetType ||
+      card?.requiresTarget ||
+      /target/i.test(effectiveOracleText)
+    );
+    const isSpellWithTarget = isInstantOrSorceryOrAura && requiresTarget;
+
+    const combinations = (effectiveMode !== 'MAIN')
+      ? ((typeof this.tabletopState?.getActionCombinationsForSpell === 'function')
+          ? this.tabletopState.getActionCombinationsForSpell(this.myPlayerId, checkCard, effectiveMode)
+          : this._getActionCombinationsForSpell(this.myPlayerId, checkCard, effectiveMode))
+      : [];
+
+    if (effectiveMode !== 'MAIN' && combinations && combinations.length > 0 && !chosenTarget && !card?._combinationChosen) {
+      if (this.targetModal && typeof this.targetModal.openCombinationSelector === 'function' && Boolean(this.container)) {
+        if (!this.targetModal.element && this.container) {
+          const modalHost = this.container.querySelector('#modal-root') || this.container;
+          if (typeof this.targetModal.mount === 'function') {
+            this.targetModal.mount(modalHost);
+          } else {
+            this.targetModal.container = modalHost;
+            this.targetModal.init();
+          }
+        }
+        this._pendingSpellToCast = card;
+        this._stagedCast = card;
+        const confirmComboCallback = (selectedCombo) => {
+          this._pendingSpellToCast = null;
+          this._stagedCast = null;
+          card._combinationChosen = true;
+          this.castSpellToStack(card, selectedCombo, effectiveMode);
+          card._combinationChosen = false;
+        };
+        this.targetModal.openCombinationSelector({
+          spell: checkCard,
+          combinations,
+          prompt: `Elige combinación para ${checkCard.name || 'el hechizo'}:`,
+          onSelectCombination: confirmComboCallback,
+          onConfirm: confirmComboCallback,
+          onCancel: () => {
+            this._pendingSpellToCast = null;
+            this._stagedCast = null;
+            this.render?.();
+            this.reconcileDOM?.();
+          }
+        });
+        return;
+      }
+    }
+
+    const dualTargets = this.tabletopState?.getValidTargetCandidatesForCard?.(this.myPlayerId, checkCard);
+    if (dualTargets?.requiresDualTarget && !chosenTarget && (!card?.targets || card.targets.length < 2)) {
+      if (this.targetModal) {
+        if (!this.targetModal.element && this.container) {
+          const modalHost = this.container.querySelector('#modal-root') || this.container;
+          if (typeof this.targetModal.mount === 'function') {
+            this.targetModal.mount(modalHost);
+          } else {
+            this.targetModal.container = modalHost;
+            this.targetModal.init();
+          }
+        }
+        if (Boolean(this.container)) {
+          this._pendingSpellToCast = card;
+          this._stagedCast = card;
+          this.targetModal.openDualTarget({
+            spell: checkCard,
+            step1Prompt: dualTargets.step1Prompt || `Step 1: Choose Creature for ${effectiveName}`,
+            step1Candidates: dualTargets.step1Candidates || dualTargets.candidatesStep1 || dualTargets.creatures || [],
+            step2Prompt: dualTargets.step2Prompt || `Step 2: Choose Equipment for ${effectiveName}`,
+            step2Candidates: dualTargets.step2Candidates || dualTargets.candidatesStep2 || dualTargets.equipment || [],
+            onComplete: (data) => {
+              this._pendingSpellToCast = null;
+              this._stagedCast = null;
+              this.castSpellToStack(card, { targetId: data.targetId, equipmentId: data.equipmentId, targets: data.targets }, chosenMode);
+            },
+            onCancel: () => {
+              this._pendingSpellToCast = null;
+              this._stagedCast = null;
+              this.render?.();
+              this.reconcileDOM?.();
+            }
+          });
+          return;
+        }
+      }
+    }
 
     if (isSpellWithTarget && !chosenTarget && !card?.targetId && (!Array.isArray(card?.targets) || card.targets.length === 0) && this.targetModal) {
       if (!this.targetModal.element && this.container) {
@@ -1183,7 +1621,7 @@ export class RPMAppController {
           this.render?.();
           this.reconcileDOM?.();
         };
-        this.targetModal.open(card, this.tabletopState, this.myPlayerId, {
+        this.targetModal.open(checkCard, this.tabletopState, this.myPlayerId, {
           onSelectTarget: (data) => this.handleTargetSelected(data),
           onCancel: () => {
             this._pendingSpellToCast = null;
@@ -1205,15 +1643,15 @@ export class RPMAppController {
     }
 
     let manaAlreadyPaid = false;
-    if (card && card.manaCost && this.tabletopState && typeof this.tabletopState.autoTapForMana === 'function') {
+    if (effectiveManaCost && this.tabletopState && typeof this.tabletopState.autoTapForMana === 'function') {
       try {
-        this.tabletopState.autoTapForMana(this.myPlayerId, card.manaCost);
+        this.tabletopState.autoTapForMana(this.myPlayerId, effectiveManaCost);
         manaAlreadyPaid = true;
       } catch (err) {
         this.tabletopState?.recordTrace?.('UI_REJECTION', 'CAST_SPELL_MANA_REJECTED', {
           playerId: this.myPlayerId,
-          cardName: card?.name,
-          manaCost: card?.manaCost,
+          cardName: effectiveName,
+          manaCost: effectiveManaCost,
           reason: err.message
         });
         this.showWarningBanner(`⚠️ ${err.message || 'Insufficient mana'}`);
@@ -1221,35 +1659,166 @@ export class RPMAppController {
       }
     }
     if (p) {
-      p.zones.hand = (p.zones.hand || []).filter(c => (c.instanceId || c.id || c.name) !== (card.instanceId || card.id || card.name));
-      p.hand = p.zones.hand;
+      if (card.zone === 'exile' || card.onAdventure) {
+        card.onAdventure = false;
+        p.exile = (p.exile || []).filter(c => (c.instanceId || c.id || c.name) !== (card.instanceId || card.id || card.name));
+        if (p.zones) p.zones.exile = p.exile;
+      } else {
+        p.zones = p.zones || {};
+        p.zones.hand = (p.zones.hand || []).filter(c => (c.instanceId || c.id || c.name) !== (card.instanceId || card.id || card.name));
+        p.hand = p.zones.hand;
+      }
     }
     this.selectedHandCardId = null;
 
     const targetId = chosenTarget?.targetId || chosenTarget?.id || card?.targetId || (Array.isArray(card?.targets) ? card.targets[0] : null) || null;
+    const equipmentId = chosenTarget?.equipmentId || card?.equipmentId || (Array.isArray(card?.targets) && card.targets.length > 1 ? card.targets[1] : null) || null;
+    const creatureId = chosenTarget?.creatureId || null;
     const targetName = chosenTarget?.targetName || chosenTarget?.name || null;
-    const targets = targetId ? [targetId] : (Array.isArray(card?.targets) ? card.targets : []);
+    let targets = [];
+    if (chosenTarget?.targets && Array.isArray(chosenTarget.targets)) {
+      targets = chosenTarget.targets;
+    } else if (Array.isArray(card?.targets) && card.targets.length > 0) {
+      targets = card.targets;
+    } else if (creatureId && targetId) {
+      targets = [creatureId, targetId];
+    } else if (targetId && equipmentId) {
+      targets = [targetId, equipmentId];
+    } else if (targetId) {
+      targets = [targetId];
+    }
+
+    if (creatureId) card.creatureId = creatureId;
+    if (equipmentId) card.equipmentId = equipmentId;
+    if (targetId) card.targetId = targetId;
+    if (chosenTarget && (chosenTarget.creatureId || chosenTarget.equipmentId || chosenTarget.label)) {
+      card.selectedCombination = chosenTarget;
+    }
+
+    if (creatureId && card.effect && typeof card.effect === 'object') {
+      card.effect.sourceCreatureId = creatureId;
+    }
+    if (targetId && card.effect && typeof card.effect === 'object') {
+      card.effect.damageTargetId = targetId;
+    }
+
+    const effectiveCastMode = modeObj?.mode || effectiveMode || null;
 
     this.dispatchAction({
       type: 'CAST_SPELL',
       manaAlreadyPaid,
+      castMode: effectiveCastMode,
+      manaCost: effectiveManaCost,
+      cardName: effectiveName,
       targetId,
+      equipmentId,
+      creatureId,
       targetName,
       targets,
+      selectedCombination: chosenTarget?.label || chosenTarget?.creatureId || chosenTarget?.equipmentId ? chosenTarget : null,
       payload: {
         playerId: this.myPlayerId,
         controllerId: this.myPlayerId,
         controllerName: this.username || 'You',
         card,
-        cardName: card.name,
+        cardName: effectiveName,
         cardInstanceId: card.instanceId,
+        castMode: effectiveCastMode,
+        manaCost: effectiveManaCost,
         manaAlreadyPaid,
+        creatureId,
         targetId,
+        equipmentId,
         targetName,
-        targets
+        targets,
+        selectedCombination: chosenTarget?.label || chosenTarget?.creatureId || chosenTarget?.equipmentId ? chosenTarget : null,
+        combination: chosenTarget?.label ? chosenTarget : null
       }
     }, { origin: 'LOCAL' });
     this.reconcileDOM();
+  }
+
+  _openCastModeSelectorModal(card) {
+    const modalRoot = this.container?.querySelector('#modal-root') || this.container;
+    if (!modalRoot) return;
+
+    const existing = modalRoot.querySelector('#cast-mode-selector-modal');
+    if (existing) {
+      try { existing.remove(); } catch (_) {}
+    }
+
+    modalRoot.setAttribute('aria-hidden', 'false');
+    modalRoot.style.pointerEvents = 'auto';
+
+    const modal = document.createElement('div');
+    modal.id = 'cast-mode-selector-modal';
+    modal.className = 'modal-backdrop cast-mode-modal-backdrop visible';
+    modal.style.cssText = 'position: fixed; inset: 0; background: rgba(0, 0, 0, 0.75); display: flex; align-items: center; justify-content: center; z-index: 9999;';
+
+    const playerCreatures = this.tabletopState?.players?.[this.myPlayerId]?.battlefield?.creatures || [];
+    const hasCreatureToSac = playerCreatures.length > 0;
+
+    const modes = card.compiledMechanics?.castModes || [];
+    let buttonsHtml = '';
+    modes.forEach((modeObj, idx) => {
+      const isAdv = modeObj.mode === 'ADVENTURE' || (modeObj.typeLine || '').toLowerCase().includes('adventure') || /burn together/i.test(modeObj.name || '');
+      const icon = isAdv ? '✨' : '⚔️';
+      let label = '';
+      let disabledAttr = '';
+      if (isAdv) {
+        if (!hasCreatureToSac) {
+          disabledAttr = 'disabled title="Requires a creature you control to sacrifice"';
+          label = `${icon} Cast ${modeObj.name || 'Burn Together'} (${modeObj.manaCost || '{R}'} — Sorcery — Adventure) [Requires a creature to sacrifice]`;
+        } else {
+          label = `${icon} Cast ${modeObj.name || 'Burn Together'} (${modeObj.manaCost || '{R}'} — Sorcery — Adventure)`;
+        }
+      } else {
+        label = `${icon} Cast ${modeObj.name || 'Callous Sell-Sword'} (${modeObj.manaCost || '{1}{B}'} — Creature 2/2)`;
+      }
+      buttonsHtml += `<button class="btn btn-primary btn-cast-mode" data-mode-idx="${idx}" ${disabledAttr} style="padding: 12px 16px; font-size: 0.95rem; text-align: left; margin-bottom: 8px; width: 100%; cursor: ${disabledAttr ? 'not-allowed; opacity: 0.5' : 'pointer'};">${this._escapeHtml(label)}</button>`;
+    });
+
+    modal.innerHTML = `
+      <div class="modal-dialog-box" role="dialog" aria-modal="true" aria-label="Select Cast Mode" style="background: #1e293b; border: 1px solid var(--rpm-border, #334155); border-radius: 8px; padding: 20px; max-width: 480px; width: 90%; color: #f8fafc; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
+        <div class="modal-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #334155; padding-bottom: 8px;">
+          <h3 style="margin: 0; font-size: 1.15rem; color: var(--rpm-aqua, #38bdf8);">✨ Choose Cast Mode</h3>
+          <button class="modal-close-btn btn-icon" style="color: #ffffff; font-size: 1.2rem; cursor: pointer; background: transparent; border: none;">&times;</button>
+        </div>
+        <p style="font-size: 0.9rem; color: #cbd5e1; margin-bottom: 16px;">
+          Choose which face / half of <strong>${this._escapeHtml(card.name)}</strong> to cast:
+        </p>
+        <div class="cast-modes-buttons" style="display: flex; flex-direction: column;">
+          ${buttonsHtml}
+        </div>
+        <div class="modal-actions" style="display: flex; justify-content: flex-end; margin-top: 12px;">
+          <button id="btn-cancel-cast-mode" class="btn btn-secondary" style="padding: 8px 16px; cursor: pointer;">Cancel</button>
+        </div>
+      </div>
+    `;
+
+    const cleanup = () => {
+      try { modal.remove(); } catch (_) {}
+      if (!this.diceRollOverlay?.isOpen && !this.targetModal?.isOpen && !this._isVictoryModalOpen) {
+        modalRoot.setAttribute('aria-hidden', 'true');
+        modalRoot.style.pointerEvents = 'none';
+      }
+    };
+
+    modal.querySelector('.modal-close-btn')?.addEventListener('click', cleanup);
+    modal.querySelector('#btn-cancel-cast-mode')?.addEventListener('click', cleanup);
+
+    modal.querySelectorAll('.btn-cast-mode').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-mode-idx'), 10);
+        const chosen = modes[idx];
+        cleanup();
+        if (chosen) {
+          this.castSpellToStack(card, null, chosen.mode);
+        }
+      });
+    });
+
+    modalRoot.appendChild(modal);
   }
 
   playLandByName(landName) {
@@ -1361,6 +1930,74 @@ export class RPMAppController {
     this.reconcileDOM();
   }
 
+  /**
+   * Assigns a specific deck source (Random, Precon Starter, or Custom Slot) to a Perkins Bot [P39].
+   * @param {string|number} botSlotId - Seat number (2..6) or bot playerId ('p2', 'perkins', etc.)
+   * @param {string} deckSourceId - 'RANDOM' | precon id | 'slot_1'..'slot_6'
+   */
+  assignDeckToBot(botSlotId, deckSourceId = 'RANDOM') {
+    const key = String(botSlotId);
+    this.botAssignedDecks[key] = deckSourceId || 'RANDOM';
+
+    let resolvedDeck = null;
+    if (deckSourceId && deckSourceId !== 'RANDOM') {
+      if (deckSourceId.startsWith('slot_')) {
+        resolvedDeck = this.deckSlotManager?.getSlotDeck(deckSourceId) || null;
+        if (!resolvedDeck) {
+          const slotNum = Number(deckSourceId.replace('slot_', ''));
+          if (Number.isFinite(slotNum)) {
+            resolvedDeck = this._loadDeckSlot?.(slotNum) || null;
+          }
+        }
+      } else {
+        resolvedDeck = getPreconstructedDeckById(deckSourceId) || getStarterDeck(deckSourceId) || null;
+      }
+    }
+
+    if (this.perkinsAgent && (String(this.perkinsAgent.slotId) === key || key === '2' || key === 'p2' || key === 'perkins')) {
+      if (typeof this.perkinsAgent.setAssignedDeck === 'function') {
+        this.perkinsAgent.setAssignedDeck(resolvedDeck);
+      } else {
+        this.perkinsAgent.assignedDeck = resolvedDeck;
+        this.perkinsAgent.starterDeck = resolvedDeck;
+      }
+    }
+    return resolvedDeck;
+  }
+
+  /**
+   * Toggles Fast-Forward mode (50ms bot thinking delay vs 450ms normal) [P40].
+   * @param {boolean} [forceValue]
+   * @returns {boolean}
+   */
+  toggleBotFastForward(forceValue) {
+    this.botFastForward = typeof forceValue === 'boolean' ? forceValue : !this.botFastForward;
+    const delay = this.botFastForward ? 50 : 450;
+    if (this.perkinsAgent) {
+      this.perkinsAgent.thinkingDelayMs = delay;
+    }
+    if (Array.isArray(this.botAgents)) {
+      for (const bot of this.botAgents) {
+        if (bot) bot.thinkingDelayMs = delay;
+      }
+    }
+    this.reconcileDOM?.();
+    return this.botFastForward;
+  }
+
+  /**
+   * Enqueues a legal Assisted Play or Unsupported deck into CompatibilityReviewQueue [P27].
+   * @param {Object} deckPayload
+   */
+  submitDeckToReviewQueue(deckPayload = {}) {
+    if (!this.compatibilityReviewQueue) {
+      this.compatibilityReviewQueue = new CompatibilityReviewQueue();
+    }
+    const entry = this.compatibilityReviewQueue.enqueueReviewRequest(deckPayload);
+    this.showToast?.(`📩 Deck "${entry.deckName}" submitted to Compatibility Review Queue!`);
+    return entry;
+  }
+
   async triggerDiceRoll(diceType = 'dice') {
     if (diceType === 'd20' || this.isRollOffActive) {
       return await this.submitRollOff();
@@ -1449,6 +2086,7 @@ export class RPMAppController {
     }
 
     if (this.turnRollOffManager.isRoundComplete()) {
+      const roundRolls = Object.fromEntries(this.turnRollOffManager.currentRolls.entries());
       const res = this.turnRollOffManager.evaluateRound();
       this.rollOffResult = res;
       if (res.isComplete) {
@@ -1456,9 +2094,11 @@ export class RPMAppController {
           ? res.sortedPlayers[0]
           : this.playerIds[0];
 
-        // Determine circular clockwise seat order starting from winner
+        // Determine circular clockwise seat order starting from winner (or keep [myPlayerId, opponent] for 1v1 pregame)
         let orderedPlayers;
-        if (Array.isArray(this.playerIds) && this.playerIds.includes(winnerId)) {
+        if (this.pregameEnabled && Array.isArray(this.playerIds) && this.playerIds.length === 2 && this.playerIds.includes(this.myPlayerId)) {
+          orderedPlayers = [this.myPlayerId, ...this.playerIds.filter(p => p !== this.myPlayerId)];
+        } else if (Array.isArray(this.playerIds) && this.playerIds.includes(winnerId)) {
           const idx = this.playerIds.indexOf(winnerId);
           orderedPlayers = [...this.playerIds.slice(idx), ...this.playerIds.slice(0, idx)];
         } else if (Array.isArray(res.sortedPlayers)) {
@@ -1476,6 +2116,9 @@ export class RPMAppController {
         }
         this.isRollOffActive = false;
         this.startMatch({ playerIds: orderedPlayers });
+        if (this.pregameEnabled && orderedPlayers.length >= 2) {
+          this._beginPregame({ rolls: roundRolls, winnerId });
+        }
       }
     }
     this.reconcileDOM();
@@ -1621,6 +2264,12 @@ export class RPMAppController {
         console.warn('[app] diceCanvas init error:', err);
       });
     }
+
+    // 7. Interactive RPM Dice Roll Mode
+    if (this.isInteractiveBrowserMode() || this.options.awaitHumanRollConfirmation) {
+      this.perkEngine.awaitHumanRollConfirmation = true;
+      this.perkEngine.humanPlayerId = this.myPlayerId;
+    }
   }
 
   /**
@@ -1666,6 +2315,9 @@ export class RPMAppController {
     }
     if (this.cardModal && typeof this.cardModal.destroy === 'function') {
       try { this.cardModal.destroy(); } catch (_) {}
+    }
+    if (this.diceRollOverlay && typeof this.diceRollOverlay.destroy === 'function') {
+      try { this.diceRollOverlay.destroy(); } catch (_) {}
     }
     if (this.relayClient) {
       try {
@@ -1990,6 +2642,9 @@ export class RPMAppController {
     if (this.targetModal && typeof this.targetModal.mount === 'function') {
       this.targetModal.mount(modalRoot);
     }
+    if (this.diceRollOverlay && typeof this.diceRollOverlay.mount === 'function') {
+      this.diceRollOverlay.mount(modalRoot);
+    }
   }
 
   // ==========================================================================
@@ -2019,19 +2674,27 @@ export class RPMAppController {
             try { bot?.destroy?.(); } catch (_) {}
           }
         }
+        if (this.tabletopState) {
+          this.tabletopState.isGameOver = true;
+        }
+        if (this.priorityMachine) {
+          this.priorityMachine.isGameOver = true;
+        }
         this.isMatchActiveFlag = false;
         this._hasMatchStarted = false;
         this.tabRouter.unlockAll?.();
         const winnerId = data?.winnerId || this.tabletopState?.winnerId;
         const winnerName = (winnerId && this.tabletopState?.players?.[winnerId]?.name) || (winnerId === this.myPlayerId ? this.username : (winnerId ? `Player ${winnerId.toUpperCase()}` : null));
+        this.archiveMatchRecord({ winnerId, winnerName });
         if (winnerId && typeof this.handleMatchVictory === 'function') {
           this.handleMatchVictory({
             winner: winnerId,
             winnerId,
             winnerName
           });
+        } else {
+          this.showGameOverModal(data);
         }
-        this.showGameOverModal(data);
         this.reconcileDOM();
       };
       this.tabletopState.on('GAME_OVER', onGameOver);
@@ -2208,12 +2871,32 @@ export class RPMAppController {
         this.addTurnCommandLog(msg, { playerId: data?.activePlayerId });
         this.reconcileDOM();
       };
+      const onAwaitRoll = (data) => {
+        if (this.isDestroyed) {
+          data?.callback?.('ROLL');
+          return;
+        }
+        if (this.diceRollOverlay) {
+          this.diceRollOverlay.open(data);
+        } else if (typeof data?.callback === 'function') {
+          data.callback('ROLL');
+        }
+      };
+      const onDeclined = (data) => {
+        if (this.isDestroyed) return;
+        const pName = this.getFriendlyPlayerName(data?.activePlayerId || data?.playerId);
+        const msg = data?.logMessage || `🛑 [RPM Step 1]: ${pName} declined to roll the RPM Emblem dice.`;
+        this.addTurnCommandLog(msg, { playerId: data?.activePlayerId || data?.playerId });
+        this.reconcileDOM();
+      };
 
       this.randomPerk.on('PERK_STEP1_TRIGGERED', onStep1);
       this.randomPerk.on('PERK_DICE_ROLLED', onRolled);
       this.randomPerk.on('PERK_ROLL_MISS', onMiss);
       this.randomPerk.on('PERK_STEP2_TRIGGERED', onStep2);
       this.randomPerk.on('PERK_RESOLVED', onResolved);
+      this.randomPerk.on('RPM_AWAIT_PLAYER_ROLL', onAwaitRoll);
+      this.randomPerk.on('PERK_ROLL_DECLINED', onDeclined);
 
       this._unsubscribers.push(() => {
         this.randomPerk.off('PERK_STEP1_TRIGGERED', onStep1);
@@ -2221,6 +2904,124 @@ export class RPMAppController {
         this.randomPerk.off('PERK_ROLL_MISS', onMiss);
         this.randomPerk.off('PERK_STEP2_TRIGGERED', onStep2);
         this.randomPerk.off('PERK_RESOLVED', onResolved);
+        this.randomPerk.off('RPM_AWAIT_PLAYER_ROLL', onAwaitRoll);
+        this.randomPerk.off('PERK_ROLL_DECLINED', onDeclined);
+      });
+    }
+
+    const onAwaitSacrifice = (data) => {
+      if (this.isDestroyed || !data) return;
+      const targetPid = data.playerId || this.myPlayerId;
+      if (targetPid !== this.myPlayerId) return;
+
+      const p = this.tabletopState?.players?.[this.myPlayerId];
+      const creatures = data.candidateCreatures || data.candidates || p?.battlefield?.creatures || [];
+      if (!creatures || creatures.length === 0) {
+        if (typeof data.callback === 'function') data.callback(null);
+        return;
+      }
+
+      if (this.targetModal && typeof this.targetModal.openSacrificeSelector === 'function') {
+        this.targetModal.openSacrificeSelector({
+          spell: data.spell || { name: data.sourceName || 'Sacrifice Choice' },
+          candidates: creatures,
+          prompt: data.prompt || 'Elige una criatura para sacrificar:',
+          onSelectCandidate: (chosen) => {
+            if (typeof data.callback === 'function') {
+              data.callback(chosen);
+            } else if (typeof data.onSelect === 'function') {
+              data.onSelect(chosen);
+            } else if (this.tabletopState && typeof this.tabletopState.sacrificePermanent === 'function') {
+              this.tabletopState.sacrificePermanent(this.myPlayerId, chosen.instanceId || chosen.id);
+            }
+            this.reconcileDOM();
+          },
+          onCancel: () => {
+            if (typeof data.onCancel === 'function') data.onCancel();
+          }
+        });
+      }
+    };
+
+    if (this.tabletopState && typeof this.tabletopState.on === 'function') {
+      this.tabletopState.on('AWAIT_PLAYER_SACRIFICE_CHOICE', onAwaitSacrifice);
+      const onOptionalEtb = (data) => {
+        if (this.isDestroyed || (data?.playerId && data.playerId !== this.myPlayerId)) return;
+        this.openOptionalTriggerModal({
+          title: "⚡ Sigarda's Aid (Attach Equipment)",
+          description: `¿Deseas anexar gratis ${data?.equipment?.name || 'este equipo'} a una de tus criaturas?`,
+          confirmLabel: '⚡ Anexar Gratis',
+          declineLabel: '✋ Rechazar',
+          onConfirm: () => { if (typeof data?.onConfirm === 'function') data.onConfirm(); },
+          onDecline: () => { if (typeof data?.onDecline === 'function') data.onDecline(); }
+        });
+      };
+      const onLeylinePrompt = (data) => {
+        if (this.isDestroyed || (data?.playerId && data.playerId !== this.myPlayerId)) return;
+        this.openOptionalTriggerModal({
+          title: '⚡ Leyline Axe (CR 103.6)',
+          description: 'Tienes Leyline Axe en tu mano inicial. ¿Deseas comenzar el juego con él en el campo de batalla gratis?',
+          confirmLabel: '⚡ Bajar Gratis',
+          declineLabel: '✋ Mantener en Mano',
+          onConfirm: () => { if (typeof data?.onConfirm === 'function') data.onConfirm(); },
+          onDecline: () => { if (typeof data?.onDecline === 'function') data.onDecline(); }
+        });
+      };
+      this.tabletopState.on('OPTIONAL_ETB_AUTO_ATTACH', onOptionalEtb);
+      this.tabletopState.on('PREGAME_LEYLINE_PROMPT', onLeylinePrompt);
+
+      const onTriggerTargetRequired = (payload) => {
+        if (this.isDestroyed || !payload) return;
+        if (payload.controllerId === this.myPlayerId) {
+          if (this.targetModal && typeof this.targetModal.openTriggerTargetSelector === 'function' && Boolean(this.container)) {
+            if (!this.targetModal.element && this.container) {
+              const modalHost = this.container.querySelector('#modal-root') || this.container;
+              if (typeof this.targetModal.mount === 'function') {
+                this.targetModal.mount(modalHost);
+              } else {
+                this.targetModal.container = modalHost;
+                this.targetModal.init();
+              }
+            }
+            this.targetModal.openTriggerTargetSelector(payload, (chosenIdOrDecline) => {
+              if (this.tabletopState && typeof this.tabletopState.resolvePendingTriggerChoice === 'function') {
+                this.tabletopState.resolvePendingTriggerChoice(payload.triggerId, chosenIdOrDecline);
+              }
+              this.reconcileDOM();
+            });
+          } else {
+            const fallbackChoice = payload.candidates?.[0]?.id || payload.candidates?.[0]?.instanceId || 'DECLINE';
+            if (this.tabletopState && typeof this.tabletopState.resolvePendingTriggerChoice === 'function') {
+              this.tabletopState.resolvePendingTriggerChoice(payload.triggerId, fallbackChoice);
+            }
+            this.reconcileDOM();
+          }
+        } else {
+          const bestId = payload.candidates?.[0]?.id || payload.candidates?.[0]?.instanceId || 'DECLINE';
+          if (this.tabletopState && typeof this.tabletopState.resolvePendingTriggerChoice === 'function') {
+            this.tabletopState.resolvePendingTriggerChoice(payload.triggerId, bestId);
+          }
+          this.reconcileDOM();
+        }
+      };
+
+      this.tabletopState.on('TRIGGER_TARGET_REQUIRED', onTriggerTargetRequired);
+
+      this._unsubscribers.push(() => {
+        if (typeof this.tabletopState.off === 'function') {
+          this.tabletopState.off('AWAIT_PLAYER_SACRIFICE_CHOICE', onAwaitSacrifice);
+          this.tabletopState.off('OPTIONAL_ETB_AUTO_ATTACH', onOptionalEtb);
+          this.tabletopState.off('PREGAME_LEYLINE_PROMPT', onLeylinePrompt);
+          this.tabletopState.off('TRIGGER_TARGET_REQUIRED', onTriggerTargetRequired);
+        }
+      });
+    }
+    if (this.randomPerk && typeof this.randomPerk.on === 'function') {
+      this.randomPerk.on('AWAIT_PLAYER_SACRIFICE_CHOICE', onAwaitSacrifice);
+      this._unsubscribers.push(() => {
+        if (typeof this.randomPerk.off === 'function') {
+          this.randomPerk.off('AWAIT_PLAYER_SACRIFICE_CHOICE', onAwaitSacrifice);
+        }
       });
     }
 
@@ -2409,10 +3210,19 @@ export class RPMAppController {
     }
 
     // Intercept with contextual auth / deck modals if requireAuth is active (INV-AUTH-GATE-2)
+    this._syncAuthUser();
     if (this.requireAuth && this.authManager) {
       if (!this.authManager.isAuthenticated()) {
         this.showAuthModal(() => this.startPerkinsMatch(deckIdOrOptions, maybeOptions));
         return null;
+      }
+      if (!this.authManager.isOnboarded()) {
+        const existingDeck = this.activeDeckData || this.getActiveDeckForPlayer(this.myPlayerId);
+        if (existingDeck && Array.isArray(existingDeck.mainboard) && existingDeck.mainboard.length > 0 && typeof this.authManager.saveActiveDeck === 'function') {
+          try {
+            await this.authManager.saveActiveDeck(existingDeck.id || `custom_${Date.now()}`, existingDeck);
+          } catch (_) {}
+        }
       }
       if (!this.authManager.isOnboarded()) {
         this.showDeckModal(() => this.startPerkinsMatch(deckIdOrOptions, maybeOptions));
@@ -2537,9 +3347,15 @@ export class RPMAppController {
     agent.attach(this);
     this.perkinsAgent = agent;
 
-    this.startMatch();
-    if (this.pregameEnabled) {
-      this._beginPregame();
+    this.startMatch({ playerIds: [this.myPlayerId, botSeatId] });
+    if (this.pregameEnabled && options.pregame !== false) {
+      const useInteractiveRollOff = (options.interactiveRollOff === true) ||
+        (options.interactiveRollOff !== false && typeof this.isInteractiveBrowserMode === 'function' && this.isInteractiveBrowserMode());
+      if (useInteractiveRollOff) {
+        this.startRollOff([this.myPlayerId, botSeatId]);
+      } else {
+        this._beginPregame();
+      }
     }
     return agent;
   }
@@ -2607,6 +3423,12 @@ export class RPMAppController {
     // CR 103: only pre-game actions are accepted until GAME_ACTIVE
     if (this.pregameActive && !/^(EXECUTE_STARTING_ROLL|SELECT_PLAY_OR_DRAW|DRAW_INITIAL_HANDS|DECIDE_MULLIGAN|PUT_ON_BOTTOM)$/.test(String(actionType))) {
       this.showToast?.('Pre-game in progress: finish the mulligan first');
+      return;
+    }
+
+    // Definitive GAME_OVER lockdown
+    const GAME_ACTIONS = ['PASS_PRIORITY', 'NEXT_PHASE', 'CAST_SPELL', 'PLAY_LAND', 'DECLARE_ATTACKERS', 'DECLARE_BLOCKERS'];
+    if (this.tabletopState?.isGameOver && GAME_ACTIONS.includes(actionType)) {
       return;
     }
 
@@ -2692,9 +3514,22 @@ export class RPMAppController {
           : [];
         const explicitTargetId = isTargetable ? (payload.targetId || action.targetId || (formattedTargets.length > 0 ? formattedTargets[0] : null)) : null;
 
+        const explicitCreatureId = payload.creatureId || action.creatureId || cardObj?.creatureId || null;
+        const explicitEquipmentId = payload.equipmentId || action.equipmentId || cardObj?.equipmentId || null;
+        const explicitSelectedCombination = payload.selectedCombination || payload.combination || action.selectedCombination || cardObj?.selectedCombination || null;
+
         if (cardObj) {
           cardObj.targetId = explicitTargetId;
           cardObj.targets = formattedTargets;
+          if (explicitCreatureId) cardObj.creatureId = explicitCreatureId;
+          if (explicitEquipmentId) cardObj.equipmentId = explicitEquipmentId;
+          if (explicitSelectedCombination) cardObj.selectedCombination = explicitSelectedCombination;
+        }
+
+        const castMode = payload.castMode || action.castMode || cardObj.activeCastMode || cardObj.selectedCastMode || null;
+        if (cardObj && castMode) {
+          cardObj.activeCastMode = castMode;
+          cardObj.selectedCastMode = castMode;
         }
 
         if (this.priorityMachine) {
@@ -2705,8 +3540,13 @@ export class RPMAppController {
             sourcePlayerId,
             controllerName,
             cardName,
+            castMode,
+            activeCastMode: castMode,
             targetId: explicitTargetId,
-            targets: formattedTargets
+            targets: formattedTargets,
+            creatureId: explicitCreatureId,
+            equipmentId: explicitEquipmentId,
+            selectedCombination: explicitSelectedCombination
           };
           this.priorityMachine.pushStack(item);
         }
@@ -2871,10 +3711,11 @@ export class RPMAppController {
     const payload = action.payload || action;
     const targetId = payload.playerId || action.playerId || this.myPlayerId;
     const attackerIds = payload.attackers || action.attackers || payload.attackersList || [];
+    const defendingPlayerId = payload.defendingPlayerId || action.defendingPlayerId || null;
 
     if (this.tabletopState && typeof this.tabletopState.declareAttackers === 'function') {
       try {
-        this.tabletopState.declareAttackers(targetId, attackerIds);
+        this.tabletopState.declareAttackers(targetId, attackerIds, defendingPlayerId, payload.attackerTargets || action.attackerTargets);
       } catch (err) {
         console.warn('[_handleDeclareAttackers] Error declaring attackers:', err.message);
       }
@@ -3129,18 +3970,21 @@ export class RPMAppController {
           try { bot?.destroy?.(); } catch (_) {}
         }
       }
+      if (this.tabletopState) {
+        this.tabletopState.isGameOver = true;
+      }
+      if (this.priorityMachine) {
+        this.priorityMachine.isGameOver = true;
+      }
       this.isMatchActiveFlag = false;
       this._hasMatchStarted = false;
       const winnerId = survivors[0][0];
       const winnerName = survivors[0][1]?.name || winnerId;
+      this.archiveMatchRecord({ winnerId, winnerName });
       this.handleMatchVictory({
         winner: winnerId,
         winnerId,
         winnerName
-      });
-      this.showGameOverModal({
-        winnerId,
-        survivingPlayer: survivors[0][1]
       });
     }
 
@@ -3482,6 +4326,13 @@ export class RPMAppController {
         }
       }
     }
+
+    if (this.perkEngine) {
+      this.perkEngine.humanPlayerId = this.myPlayerId;
+    }
+    if (this.randomPerk) {
+      this.randomPerk.humanPlayerId = this.myPlayerId;
+    }
   }
 
   /**
@@ -3509,7 +4360,29 @@ export class RPMAppController {
    * @param {Object} [meta={}]
    */
   addTurnCommandLog(text, meta = {}) {
-    return this.appendExecutionLog('Turn Cmd', text, meta);
+    if (!text || typeof text !== 'string') return null;
+    const now = Date.now();
+    const normalized = text.replace(/\s*\(You\)/gi, '').trim();
+
+    if (!this._recentTurnCommandLogs) {
+      this._recentTurnCommandLogs = [];
+    }
+    this._recentTurnCommandLogs = this._recentTurnCommandLogs.filter(e => (now - e.time) < 2500);
+
+    const isDuplicate = this._recentTurnCommandLogs.some(e =>
+      e.normText === normalized && (now - e.time) <= 250
+    );
+    if (isDuplicate) {
+      return null;
+    }
+
+    this._recentTurnCommandLogs.push({ normText: normalized, time: now });
+    if (!this.turnCommandLogs) this.turnCommandLogs = [];
+    const entry = this.appendExecutionLog('Turn Cmd', text, meta);
+    if (entry) {
+      this.turnCommandLogs.push(entry);
+    }
+    return entry;
   }
 
   /**
@@ -3584,10 +4457,7 @@ export class RPMAppController {
         const name = payload?.name || payload?.itemId || 'Spell/Ability';
         this.appendExecutionLog('Stack', `✨ Stack Item Resolved: ${name} (${payload?.type || 'SPELL'})`, { origin: 'STACK' });
       } else if (category === 'PERK_TRACE' && payload?.summary) {
-        const existing = this.executionLog?.some(l => l.text === payload.summary);
-        if (!existing) {
-          this.addTurnCommandLog(payload.summary, { playerId: payload.activePlayerId, origin: 'PERK_TRACE' });
-        }
+        // PERK_TRACE events (PERK_STEP1_TRIGGERED, PERK_DICE_ROLLED, etc.) are logged directly by RandomPerkEngine event handlers
       } else if (action === 'PHASE_TRANSITION') {
         const step = payload?.currentPhaseStep || entry.step;
         const turn = payload?.turnNumber ?? entry.turn ?? 1;
@@ -3624,14 +4494,18 @@ export class RPMAppController {
   _syncCombatBlockTargetState() {
     const psmForAttack = this.priorityMachine;
     const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+    const defendingPid = psmForAttack?.defendingPlayerId || this.tabletopState?.combatState?.defendingPlayerId || activeCombatAttackers[0]?.defendingPlayerId;
+    const isUnderAttack = (psmForAttack?.currentPhaseStep === 'DECLARE_BLOCKERS' || (psmForAttack?.currentPhaseStep === 'DECLARE_ATTACKERS' && psmForAttack?.priorityPlayerId === this.myPlayerId)) &&
+      (defendingPid === this.myPlayerId || this.tabletopState?.players?.[this.myPlayerId]?.underAttack === true) &&
+      (activeCombatAttackers.length > 0);
+
     const isBlockWindow = !!psmForAttack &&
       !this.isSpectator() &&
       !this.pregameActive &&
       psmForAttack.activePlayerId !== this.myPlayerId &&
       activeCombatAttackers.length > 0 &&
       !this.tabletopState?.combatState?.blockersDeclared &&
-      (psmForAttack.currentPhaseStep === 'DECLARE_BLOCKERS' ||
-       (psmForAttack.currentPhaseStep === 'DECLARE_ATTACKERS' && psmForAttack.priorityPlayerId === this.myPlayerId));
+      isUnderAttack;
 
     if (!this._blockerAssignments) this._blockerAssignments = new Map();
     if (!isBlockWindow) {
@@ -3659,13 +4533,18 @@ export class RPMAppController {
     if (!this.container || this.isDestroyed) return;
     this._syncAuthUser();
 
-    // Ensure modal host remains unblocked if target modal is currently open
-    if (this.targetModal?.isOpen) {
-      const modalRoot = this.container.querySelector('#modal-root');
-      if (modalRoot) {
-        modalRoot.setAttribute('aria-hidden', 'false');
-        modalRoot.style.pointerEvents = 'auto';
-      }
+    // Keep #modal-root interactive whenever any active modal layer is open
+    const isAnyModalActive = Boolean(
+      this.diceRollOverlay?.isOpen ||
+      this.targetModal?.isOpen ||
+      this._isVictoryModalOpen ||
+      this._isDeckbuilderModalOpen ||
+      this._isRecapModalOpen
+    );
+    const modalRoot = this.container?.querySelector('#modal-root');
+    if (modalRoot && isAnyModalActive) {
+      modalRoot.setAttribute('aria-hidden', 'false');
+      modalRoot.style.pointerEvents = 'auto';
     }
 
     // 1. Header Bar & Nav Tabs
@@ -3788,12 +4667,17 @@ export class RPMAppController {
                 // If active player has selected attackers during DECLARE_ATTACKERS, commit them first
                 if (step === 'DECLARE_ATTACKERS' && this._selectedAttackers && this._selectedAttackers.size > 0) {
                   const ids = Array.from(this._selectedAttackers);
+                  const attackerTargetsPayload = { ...this.attackerTargets };
+                  const defId = this._selectedDefendingPlayerId;
                   this._selectedAttackers.clear();
+                  this.attackerTargets = {};
                   this.dispatchAction({
                     type: 'DECLARE_ATTACKERS',
                     playerId: this.myPlayerId,
                     attackers: ids,
-                    payload: { playerId: this.myPlayerId, attackers: ids }
+                    attackerTargets: attackerTargetsPayload,
+                    defendingPlayerId: defId,
+                    payload: { playerId: this.myPlayerId, attackers: ids, attackerTargets: attackerTargetsPayload, defendingPlayerId: defId }
                   }, { origin: 'LOCAL' });
                 }
                 if (typeof this.priorityMachine.nextPhase === 'function') {
@@ -3801,9 +4685,12 @@ export class RPMAppController {
                 }
               } else {
                 // Defending / non-active player: check block window
+                const defendingPid = this.priorityMachine.defendingPlayerId || this.tabletopState?.combatState?.defendingPlayerId || activeCombatAttackers[0]?.defendingPlayerId;
+                const isUnderAttack = (defendingPid === this.myPlayerId || this.tabletopState?.players?.[this.myPlayerId]?.underAttack === true);
                 const isBlockWindow = !this.tabletopState?.combatState?.blockersDeclared &&
                   (step === 'DECLARE_BLOCKERS' || (step === 'DECLARE_ATTACKERS' && this.priorityMachine.priorityPlayerId === this.myPlayerId)) &&
-                  activeCombatAttackers.length > 0;
+                  activeCombatAttackers.length > 0 &&
+                  isUnderAttack;
 
                 if (isBlockWindow) {
                   const assignments = this._blockerAssignments
@@ -3842,10 +4729,17 @@ export class RPMAppController {
           ? step.stepMatch.includes(currentStep)
           : step.id === currentStep;
 
+        const hasStop = this.hasPhaseStop(step.id);
         const pill = document.createElement('div');
-        pill.className = `phase-step ${isMatch ? 'active phase-active-step' : ''}`;
+        pill.className = `phase-step ${isMatch ? 'active phase-active-step' : ''} ${hasStop ? 'phase-stop-active' : ''}`;
         pill.setAttribute('data-step', step.id);
-        pill.textContent = (isMatch ? '🌟 ' : '') + step.label;
+        pill.style.cursor = 'pointer';
+        pill.title = `Click to toggle phase stop for ${step.label} (${hasStop ? 'Stop Active' : 'No Stop'})`;
+        pill.textContent = `${isMatch ? '🌟 ' : ''}${hasStop ? '🛑 ' : ''}${step.label}`;
+        pill.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.togglePhaseStop(step.id);
+        });
         stepList.appendChild(pill);
       });
     }
@@ -4074,10 +4968,51 @@ export class RPMAppController {
         `;
       }).join('');
 
+      // Opponent Noncreature Permanents (Artifacts, Enchantments, Planeswalkers, Battles)
+      const bNoncreatures = [
+        ...(Array.isArray(oppData?.battlefield?.noncreatures) ? oppData.battlefield.noncreatures : []),
+        ...(Array.isArray(oppData?.battlefield?.planeswalkers) ? oppData.battlefield.planeswalkers : [])
+      ];
+      const zNoncreatures = Array.isArray(oppData?.zones?.battlefield)
+        ? oppData.zones.battlefield.filter(c => {
+            const tl = (c.type_line || c.typeLine || c.type || '').toLowerCase();
+            return c.subzone === 'noncreatures' || c.subzone === 'planeswalkers' || (((tl.includes('artifact') || tl.includes('enchantment') || tl.includes('planeswalker') || tl.includes('battle')) && !tl.includes('creature') && !tl.includes('land')));
+          })
+        : [];
+      const oppNoncreatures = bNoncreatures.length >= zNoncreatures.length ? bNoncreatures : zNoncreatures;
+
+      const noncreaturesHtml = oppNoncreatures.map(nc => {
+        const isTapped = Boolean(nc.isTapped);
+        const name = nc.name || 'Permanent';
+        const instId = nc.instanceId || nc.id || '';
+        let attachedLabel = '';
+        if (nc.attachedTo) {
+          let targetCr = (oppCreatures || []).find(cr => cr && (cr.instanceId === nc.attachedTo || cr.id === nc.attachedTo));
+          if (!targetCr && this.tabletopState) {
+            for (const pl of Object.values(this.tabletopState.players || {})) {
+              const found = (pl.battlefield?.creatures || []).find(cr => cr && (cr.instanceId === nc.attachedTo || cr.id === nc.attachedTo));
+              if (found) { targetCr = found; break; }
+            }
+          }
+          attachedLabel = ` <span class="attached-badge">🔗 Equipped: ${this._escapeHtml(targetCr?.name || 'Creature')}</span>`;
+        }
+        return `
+          <div class="opponent-noncreature-card battlefield-card-chip ${isTapped ? 'is-tapped card-tapped' : ''}"
+               data-instance-id="${instId}"
+               data-tapped="${isTapped ? 'true' : 'false'}"
+               style="${isTapped ? 'opacity: 0.62;' : ''}"
+               title="${name}${nc.attachedTo ? ' (Attached)' : ''} - Click to inspect">
+            <span class="noncreature-name">${name}${attachedLabel}${isTapped ? ' ↺' : ''}</span>
+          </div>
+        `;
+      }).join('');
+
       const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
       const attackerIdSet = new Set(
         activeCombatAttackers.map(a => typeof a === 'string' ? a : (a?.creatureId || a?.instanceId || a?.id)).filter(Boolean)
       );
+      const defendingPid = this.priorityMachine?.defendingPlayerId || this.tabletopState?.combatState?.defendingPlayerId || activeCombatAttackers[0]?.defendingPlayerId;
+      const isUnderAttack = (defendingPid === this.myPlayerId || this.tabletopState?.players?.[this.myPlayerId]?.underAttack === true);
       const isBlockWindow = Boolean(
         this.priorityMachine &&
         !this.isSpectator() &&
@@ -4085,6 +5020,7 @@ export class RPMAppController {
         this.priorityMachine.activePlayerId !== this.myPlayerId &&
         activeCombatAttackers.length > 0 &&
         !this.tabletopState?.combatState?.blockersDeclared &&
+        isUnderAttack &&
         (this.priorityMachine.currentPhaseStep === 'DECLARE_BLOCKERS' ||
          (this.priorityMachine.currentPhaseStep === 'DECLARE_ATTACKERS' && this.priorityMachine.priorityPlayerId === this.myPlayerId))
       );
@@ -4097,15 +5033,35 @@ export class RPMAppController {
         const name = cr.name || 'Creature';
         const stats = this.tabletopState?.abilityEngine?.evaluateCreatureStats
           ? this.tabletopState.abilityEngine.evaluateCreatureStats(cr, this.tabletopState)
-          : { power: cr.power ?? 2, toughness: cr.toughness ?? 2 };
+          : (typeof this.tabletopState?.evaluateCreatureStats === 'function'
+            ? this.tabletopState.evaluateCreatureStats(cr, oppId)
+            : { power: cr.power, toughness: cr.toughness, keywords: cr.keywords || {} });
+        let counterBadges = '';
+        let counterTitle = '';
+        if (cr.counters) {
+          if (cr.counters['+1/+1']) {
+            counterBadges += `<span class="counter-badge" style="background: #10b981; color: #0f172a; font-weight: bold; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;">+1/+1 ×${cr.counters['+1/+1']}</span>`;
+            counterTitle += ` [+1/+1 ×${cr.counters['+1/+1']}]`;
+          }
+          if (cr.counters['-1/-1']) {
+            counterBadges += `<span class="counter-badge" style="background: #ef4444; color: #ffffff; font-weight: bold; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;">-1/-1 ×${cr.counters['-1/-1']}</span>`;
+            counterTitle += ` [-1/-1 ×${cr.counters['-1/-1']}]`;
+          }
+        }
         const pt = `${stats.power}/${stats.toughness}`;
+        const effectiveKeywords = stats.keywords || {};
+        const activeKws = Object.keys(effectiveKeywords).filter(k => effectiveKeywords[k] && k === k.toLowerCase());
+        const kwTitle = activeKws.length > 0 ? ` [${activeKws.map(k => k.charAt(0).toUpperCase() + k.slice(1)).join(', ')}]` : '';
         return `
           <div class="opponent-creature-card battlefield-card-chip ${isTapped ? 'is-tapped card-tapped' : ''} ${isAttacking ? 'is-attacking attacking' : ''} ${isSelectedTarget ? 'attacker-target-selected' : ''}"
                data-instance-id="${instId}"
                data-tapped="${isTapped ? 'true' : 'false'}"
+               data-power="${stats.power}"
+               data-toughness="${stats.toughness}"
+               data-keywords="${activeKws.join(',')}"
                style="${isAttacking ? 'border: 1px solid #ef4444; background: rgba(127, 29, 29, 0.35); cursor: pointer;' : ''}${isSelectedTarget ? ' box-shadow: 0 0 0 2px #f59e0b;' : ''}"
-               title="${name} (${pt})${isAttacking ? ' - Attacking! Click to target with blocker' : ' - Click to inspect'}">
-            <span class="creature-name">${name} (${pt})${isAttacking ? ' ⚔️' : ''}${isSelectedTarget ? ' <span class="badge-target" style="background:#f59e0b; color:#000; font-size:10px; font-weight:bold; padding:1px 4px; border-radius:3px; margin-left:4px;">🎯 TARGET</span>' : ''}${isTapped ? ' ↺' : ''}</span>
+               title="${name} (${pt})${counterTitle}${kwTitle}${isAttacking ? ' - Attacking! Click to target with blocker' : ' - Click to inspect'}">
+            <span class="creature-name">${name} (${pt})${counterBadges}${isAttacking ? ' ⚔️' : ''}${isSelectedTarget ? ' <span class="badge-target" style="background:#f59e0b; color:#000; font-size:10px; font-weight:bold; padding:1px 4px; border-radius:3px; margin-left:4px;">🎯 TARGET</span>' : ''}${isTapped ? ' ↺' : ''}</span>
           </div>
         `;
       }).join('');
@@ -4135,13 +5091,53 @@ export class RPMAppController {
           </div>
         </div>
         ` : ''}
+        ${oppNoncreatures.length > 0 ? `
+        <div class="opponent-noncreatures-container">
+          <div class="opponent-noncreatures-header">
+            <span class="noncreatures-title">Other Permanents (<span class="noncreatures-count">${oppNoncreatures.length}</span>)</span>
+          </div>
+          <div class="opponent-noncreatures-strip" data-player-id="${oppId}">
+            ${noncreaturesHtml}
+          </div>
+        </div>
+        ` : ''}
         <div class="opponent-drawers-row">
           <button class="btn btn-drawer-hand" ${isEliminated ? 'disabled' : ''}>Hand (${handCount})</button>
           <button class="btn btn-drawer-creatures" ${isEliminated ? 'disabled' : ''}>Creatures (${creatureCount})</button>
-          <button class="btn btn-drawer-grave">Grave (${graveCount})</button>
-          <button class="btn btn-drawer-exile">Exile (${exileCount})</button>
+          <button class="btn btn-drawer-grave" data-player-id="${oppId}" data-zone="graveyard">Grave (${graveCount})</button>
+          <button class="btn btn-drawer-exile" data-player-id="${oppId}" data-zone="exile">Exile (${exileCount})</button>
         </div>
       `;
+
+      const btnOppGrave = oppCard.querySelector('.btn-drawer-grave');
+      if (btnOppGrave) {
+        btnOppGrave.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this.openZoneBrowser(oppId, 'graveyard');
+        });
+      }
+      const btnOppExile = oppCard.querySelector('.btn-drawer-exile');
+      if (btnOppExile) {
+        btnOppExile.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this.openZoneBrowser(oppId, 'exile');
+        });
+      }
+
+      // Bind click on opponent noncreatures to inspect card
+      const noncreatureCards = oppCard.querySelectorAll('.opponent-noncreature-card');
+      noncreatureCards.forEach((el, idx) => {
+        const nc = oppNoncreatures[idx];
+        if (!nc) return;
+        el.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (this.cardModal && typeof this.cardModal.show === 'function') {
+            this.cardModal.show(nc);
+          } else if (typeof this.openModal === 'function') {
+            this.openModal('CARD_OVERLAY', nc);
+          }
+        });
+      });
 
       // Bind click on opponent lands to inspect card
       const landCards = oppCard.querySelectorAll('.opponent-land-card');
@@ -4216,6 +5212,55 @@ export class RPMAppController {
     }
 
     const isGameOver = Boolean(this.tabletopState?.isGameOver);
+
+    let btnAutoPass = this.container.querySelector('#btn-toggle-autopass');
+    if (!btnAutoPass) {
+      const controls = this.container.querySelector('.stack-controls');
+      if (controls) {
+        btnAutoPass = document.createElement('button');
+        btnAutoPass.id = 'btn-toggle-autopass';
+        btnAutoPass.className = 'btn btn-autopass';
+        btnAutoPass.textContent = '⚡ Auto-Pass: OFF';
+        btnAutoPass.title = 'Toggle Auto-Pass Priority (Hotkey: Enter)';
+        controls.appendChild(btnAutoPass);
+        btnAutoPass.addEventListener('click', () => this.toggleAutoPass());
+      }
+    }
+    if (btnAutoPass) {
+      if (isSpec) {
+        btnAutoPass.style.display = 'none';
+        btnAutoPass.disabled = true;
+      } else {
+        btnAutoPass.style.display = 'inline-flex';
+        btnAutoPass.disabled = isGameOver;
+        btnAutoPass.textContent = this.autoPassEnabled ? '⚡ Auto-Pass: ON' : '⚡ Auto-Pass: OFF';
+        btnAutoPass.classList.toggle('active', Boolean(this.autoPassEnabled));
+      }
+    }
+
+    let btnFastForward = this.container.querySelector('#btn-fast-forward-bots');
+    if (!btnFastForward) {
+      const controls = this.container.querySelector('.stack-controls');
+      if (controls) {
+        btnFastForward = document.createElement('button');
+        btnFastForward.id = 'btn-fast-forward-bots';
+        btnFastForward.className = 'btn btn-fast-forward-bots';
+        btnFastForward.textContent = '⏩ Fast-Forward Bots (1x)';
+        btnFastForward.title = 'Accelerate Perkins AI bot turns (50ms delay)';
+        controls.appendChild(btnFastForward);
+        btnFastForward.addEventListener('click', () => this.toggleBotFastForward());
+      }
+    }
+    if (btnFastForward) {
+      const myPlayer = this.tabletopState?.players?.[this.myPlayerId];
+      const isEliminated = Boolean(myPlayer?.isEliminated);
+      const isBotActive = this.priorityMachine && this.priorityMachine.activePlayerId !== this.myPlayerId;
+      btnFastForward.style.display = 'inline-flex';
+      btnFastForward.disabled = isGameOver;
+      btnFastForward.textContent = this.botFastForward ? '⏩ Fast-Forward Bots (4x ON)' : '⏩ Fast-Forward Bots (1x)';
+      btnFastForward.classList.toggle('active', Boolean(this.botFastForward));
+      btnFastForward.classList.toggle('fast-forward-highlight', Boolean(isEliminated || isBotActive));
+    }
 
     const btnPass = this.container.querySelector('#btn-pass-priority');
     if (btnPass) {
@@ -4329,6 +5374,8 @@ export class RPMAppController {
     const poison = pData?.resources?.poison ?? 0;
     const energy = pData?.resources?.energy ?? 0;
     const mana = pData?.resources?.manaPool || { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    const undoableTaps = pData?._undoableManaTaps || this.tabletopState?.getPlayer?.(this.myPlayerId)?._undoableManaTaps || [];
+    const hasUndoable = Array.isArray(undoableTaps) && undoableTaps.length > 0;
     const hand = Array.isArray(pData?.zones?.hand) ? pData.zones.hand : (Array.isArray(pData?.hand) ? pData.hand : []);
 
     // Random Perk Upkeep Dormancy (INV-PERK-UI-1)
@@ -4353,6 +5400,16 @@ export class RPMAppController {
     const lands = bLands.length >= zLands.length ? bLands : zLands;
     const creatures = Array.isArray(pData?.battlefield?.creatures) ? bCreatures : zCreatures;
 
+    const bNoncreatures = [
+      ...(Array.isArray(pData?.battlefield?.noncreatures) ? pData.battlefield.noncreatures : []),
+      ...(Array.isArray(pData?.battlefield?.planeswalkers) ? pData.battlefield.planeswalkers : [])
+    ];
+    const zNoncreatures = battlefieldCards.filter(c => {
+      const tl = (c.typeLine || c.type || '').toLowerCase();
+      return c.subzone === 'noncreatures' || c.subzone === 'planeswalkers' || (((tl.includes('artifact') || tl.includes('enchantment') || tl.includes('planeswalker') || tl.includes('battle')) && !tl.includes('creature') && !tl.includes('land')));
+    });
+    const noncreatures = bNoncreatures.length >= zNoncreatures.length ? bNoncreatures : zNoncreatures;
+
     const psmForAttack = this.priorityMachine;
     const isAttackWindow = !!psmForAttack &&
       !this.isSpectator() &&
@@ -4360,8 +5417,12 @@ export class RPMAppController {
       psmForAttack.currentPhaseStep === 'DECLARE_ATTACKERS' &&
       psmForAttack.activePlayerId === this.myPlayerId;
     const attackState = { activePlayerId: psmForAttack?.activePlayerId, currentPhaseStep: psmForAttack?.currentPhaseStep };
-    if (!isAttackWindow) this._selectedAttackers = new Set();
+    if (!isAttackWindow) {
+      this._selectedAttackers = new Set();
+      this.attackerTargets = {};
+    }
     if (!this._selectedAttackers) this._selectedAttackers = new Set();
+    if (!this.attackerTargets) this.attackerTargets = {};
     const attackCandidateIds = new Set(
       isAttackWindow
         ? creatures.filter(c => c && canDeclareAsAttacker({ ...c, controllerId: c.controllerId || this.myPlayerId }, attackState)).map(c => c.instanceId)
@@ -4371,16 +5432,47 @@ export class RPMAppController {
       if (!attackCandidateIds.has(sel)) this._selectedAttackers.delete(sel);
     }
 
-    // Interactive Blocker Window (CR 509.1) when defending against opponent/bot attackers
+    // Interactive Blocker Window (CR 509.1) & Spectate Ongoing Combat Banner
     const activeCombatAttackers = this.tabletopState?.combatState?.attackers || [];
+    const defendingPid = psmForAttack?.defendingPlayerId || this.tabletopState?.combatState?.defendingPlayerId || activeCombatAttackers[0]?.defendingPlayerId;
+    const isCombatStep = psmForAttack?.currentPhaseStep === 'DECLARE_BLOCKERS' ||
+      (psmForAttack?.currentPhaseStep === 'DECLARE_ATTACKERS' && psmForAttack?.priorityPlayerId === this.myPlayerId);
+    const isUnderAttack = isCombatStep &&
+      (defendingPid === this.myPlayerId || pData?.underAttack === true) &&
+      (activeCombatAttackers.length > 0);
+
     const isBlockWindow = !!psmForAttack &&
       !this.isSpectator() &&
       !this.pregameActive &&
       psmForAttack.activePlayerId !== this.myPlayerId &&
       activeCombatAttackers.length > 0 &&
       !this.tabletopState?.combatState?.blockersDeclared &&
-      (psmForAttack.currentPhaseStep === 'DECLARE_BLOCKERS' ||
-       (psmForAttack.currentPhaseStep === 'DECLARE_ATTACKERS' && psmForAttack.priorityPlayerId === this.myPlayerId));
+      isUnderAttack;
+
+    const isSpectatingOtherCombat = !!psmForAttack &&
+      !this.isSpectator() &&
+      !this.pregameActive &&
+      psmForAttack.activePlayerId !== this.myPlayerId &&
+      activeCombatAttackers.length > 0 &&
+      defendingPid &&
+      defendingPid !== this.myPlayerId;
+
+    const aliveOpponents = (this.playerIds || []).filter(pid => pid !== this.myPlayerId && !this.tabletopState?.players?.[pid]?.isEliminated);
+    if (!this._selectedDefendingPlayerId || !aliveOpponents.includes(this._selectedDefendingPlayerId)) {
+      this._selectedDefendingPlayerId = aliveOpponents[0] || null;
+    }
+    if (isAttackWindow && this._selectedAttackers) {
+      for (const atkId of this._selectedAttackers) {
+        if (!this.attackerTargets[atkId]) {
+          this.attackerTargets[atkId] = this._selectedDefendingPlayerId || aliveOpponents[0];
+        }
+      }
+      for (const atkId of Object.keys(this.attackerTargets)) {
+        if (!this._selectedAttackers.has(atkId)) {
+          delete this.attackerTargets[atkId];
+        }
+      }
+    }
     if (!this._blockerAssignments) this._blockerAssignments = new Map();
     let attackerIds = [];
     if (!isBlockWindow) {
@@ -4428,14 +5520,17 @@ export class RPMAppController {
         <div class="counters-group">
           <span class="badge">Poison: ${poison}</span>
           <span class="badge">Energy: ${energy}</span>
+          <button id="player-btn-grave" class="btn btn-xs btn-drawer-grave" style="padding: 1px 6px; font-size: 0.72rem; cursor: pointer;">Grave (${(pData?.graveyard || pData?.zones?.graveyard || []).length})</button>
+          <button id="player-btn-exile" class="btn btn-xs btn-drawer-exile" style="padding: 1px 6px; font-size: 0.72rem; cursor: pointer;">Exile (${(pData?.exile || pData?.zones?.exile || []).length})</button>
         </div>
         <div class="mana-pool-chips">
-          <span class="mana-chip chip-w">W:${mana.W || 0}</span>
-          <span class="mana-chip chip-u">U:${mana.U || 0}</span>
-          <span class="mana-chip chip-b">B:${mana.B || 0}</span>
-          <span class="mana-chip chip-r">R:${mana.R || 0}</span>
-          <span class="mana-chip chip-g">G:${mana.G || 0}</span>
-          <span class="mana-chip chip-c">C:${mana.C || 0}</span>
+          <span class="mana-chip chip-w" data-color="W" style="${(mana.W || 0) > 0 && hasUndoable ? 'cursor: pointer;' : ''}">W:${mana.W || 0}</span>
+          <span class="mana-chip chip-u" data-color="U" style="${(mana.U || 0) > 0 && hasUndoable ? 'cursor: pointer;' : ''}">U:${mana.U || 0}</span>
+          <span class="mana-chip chip-b" data-color="B" style="${(mana.B || 0) > 0 && hasUndoable ? 'cursor: pointer;' : ''}">B:${mana.B || 0}</span>
+          <span class="mana-chip chip-r" data-color="R" style="${(mana.R || 0) > 0 && hasUndoable ? 'cursor: pointer;' : ''}">R:${mana.R || 0}</span>
+          <span class="mana-chip chip-g" data-color="G" style="${(mana.G || 0) > 0 && hasUndoable ? 'cursor: pointer;' : ''}">G:${mana.G || 0}</span>
+          <span class="mana-chip chip-c" data-color="C" style="${(mana.C || 0) > 0 && hasUndoable ? 'cursor: pointer;' : ''}">C:${mana.C || 0}</span>
+          ${hasUndoable ? `<button id="btn-undo-mana-tap" class="btn btn-xs btn-outline btn-undo-mana" title="Undo last mana tap" style="margin-left: 6px; padding: 1px 6px; font-size: 0.75rem; cursor: pointer;">↩️ Undo Tap</button>` : ''}
         </div>
         <div class="command-emblem-badge ${isDormant ? 'dormant' : 'active'}">
           <span id="command-emblem-text">${emblemText}</span>
@@ -4451,6 +5546,33 @@ export class RPMAppController {
             return `<span class="battlefield-card-chip land-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''} ${isSelected ? 'selected-land' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" style="${c.isTapped ? 'opacity: 0.62;' : ''}" title="${c.name} (${c.isTapped ? 'Tapped' : 'Untapped - Click to tap for mana'})">${c.name} ${c.isTapped ? '(Tapped) ↺' : ''}${isSelected && !c.isTapped && isMulti ? ` <span class="land-color-selector" style="display:inline-flex; gap:4px; margin-left:6px;">${profile.map(col => `<button class="btn btn-xs btn-color-choice" data-color="${col}" data-instance-id="${c.instanceId || c.id}" style="padding:1px 6px; font-size:0.75rem; border-radius:3px; background:${col === 'R' ? '#ef4444' : col === 'U' ? '#3b82f6' : '#64748b'}; color:#fff; border:none; cursor:pointer;">{${col}}</button>`).join('')}</span>` : ''}</span>`;
           }).join('')}</div>
         </div>
+        <div id="battlefield-noncreatures" class="battlefield-strip battlefield-noncreatures">
+          <div class="strip-label">Other Permanents (<span class="noncreatures-count">${noncreatures.length}</span>)</div>
+          <div class="strip-cards">${noncreatures.map(c => {
+            const isTapped = Boolean(c.isTapped);
+            const tl = (c.typeLine || c.type || '').toLowerCase();
+            let typeBadge = '[Permanent]';
+            if (tl.includes('enchantment')) typeBadge = '[Enchantment]';
+            else if (tl.includes('equipment')) typeBadge = '[Equipment]';
+            else if (tl.includes('artifact')) typeBadge = '[Artifact]';
+            else if (tl.includes('planeswalker')) typeBadge = '[Planeswalker]';
+            else if (tl.includes('battle')) typeBadge = '[Battle]';
+
+            let attachedLabel = '';
+            if (c.attachedTo) {
+              let targetCr = (pData?.battlefield?.creatures || []).find(cr => cr && (cr.instanceId === c.attachedTo || cr.id === c.attachedTo));
+              if (!targetCr && this.tabletopState) {
+                for (const pl of Object.values(this.tabletopState.players || {})) {
+                  const found = (pl.battlefield?.creatures || []).find(cr => cr && (cr.instanceId === c.attachedTo || cr.id === c.attachedTo));
+                  if (found) { targetCr = found; break; }
+                }
+              }
+              attachedLabel = ` <span class="attached-badge">🔗 Equipped: ${this._escapeHtml(targetCr?.name || 'Creature')}</span>`;
+            }
+
+            return `<span class="battlefield-card-chip noncreature-chip ${isTapped ? 'tapped is-tapped card-tapped' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${isTapped ? 'true' : 'false'}" style="${isTapped ? 'opacity: 0.62;' : ''}" title="${c.name} ${typeBadge}${c.attachedTo ? ' (Attached)' : ''} - Click to inspect or attach"><span class="badge-type-label" style="opacity: 0.75; font-size: 0.7rem; margin-right: 4px;">${typeBadge}</span>${c.name}${attachedLabel}${isTapped ? ' ↺' : ''}</span>`;
+          }).join('')}</div>
+        </div>
         <div id="battlefield-creatures" class="battlefield-strip battlefield-creatures">
           <div class="strip-label">Creatures (<span class="creatures-count">${creatures.length}</span>)</div>
           <div class="strip-cards">${creatures.map(c => {
@@ -4458,11 +5580,58 @@ export class RPMAppController {
             const assignedAttacker = isAssignedBlocker ? resolveAttackerObj(this._blockerAssignments.get(c.instanceId)) : null;
             const stats = this.tabletopState?.abilityEngine?.evaluateCreatureStats
               ? this.tabletopState.abilityEngine.evaluateCreatureStats(c, this.tabletopState)
-              : { power: c.power ?? 1, toughness: c.toughness ?? 1 };
+              : (typeof this.tabletopState?.evaluateCreatureStats === 'function'
+                ? this.tabletopState.evaluateCreatureStats(c, this.myPlayerId)
+                : { power: c.power, toughness: c.toughness, keywords: c.keywords || {} });
+            let counterBadges = '';
+            let counterTitle = '';
+            if (c.counters) {
+              if (c.counters['+1/+1']) {
+                counterBadges += `<span class="counter-badge" style="background: #10b981; color: #0f172a; font-weight: bold; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;">+1/+1 ×${c.counters['+1/+1']}</span>`;
+                counterTitle += ` [+1/+1 ×${c.counters['+1/+1']}]`;
+              }
+              if (c.counters['-1/-1']) {
+                counterBadges += `<span class="counter-badge" style="background: #ef4444; color: #ffffff; font-weight: bold; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;">-1/-1 ×${c.counters['-1/-1']}</span>`;
+                counterTitle += ` [-1/-1 ×${c.counters['-1/-1']}]`;
+              }
+            }
             const pt = ` (${stats.power}/${stats.toughness})`;
-            return `<span class="battlefield-card-chip creature-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''} ${c.isAttacking ? 'is-attacking attacking' : ''} ${c.isBlocking || isAssignedBlocker ? 'is-blocking blocking' : ''} ${attackCandidateIds.has(c.instanceId) ? 'attack-candidate' : ''} ${this._selectedAttackers.has(c.instanceId) ? 'attack-selected' : ''} ${blockerCandidateIds.has(c.instanceId) ? 'blocker-candidate' : ''} ${isAssignedBlocker ? 'blocker-selected' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" title="${c.name}${pt}${attackCandidateIds.has(c.instanceId) ? ' - Click to select as attacker' : ''}${blockerCandidateIds.has(c.instanceId) ? ' - Click to assign as blocker' : ''}">${c.name}${pt}${c.isAttacking ? ' ⚔️' : ''}${c.isBlocking || isAssignedBlocker ? ` 🛡️${assignedAttacker ? ` → ${assignedAttacker.name}` : ''}` : ''}${c.isTapped ? ' ↺' : ''}</span>`;
+            const effectiveKeywords = stats.keywords || {};
+            const activeKws = Object.keys(effectiveKeywords).filter(k => effectiveKeywords[k] && k === k.toLowerCase());
+            const kwTitle = activeKws.length > 0 ? ` [${activeKws.map(k => k.charAt(0).toUpperCase() + k.slice(1)).join(', ')}]` : '';
+            return `<span class="battlefield-card-chip creature-chip ${c.isTapped ? 'tapped is-tapped card-tapped' : ''} ${c.isAttacking ? 'is-attacking attacking' : ''} ${c.isBlocking || isAssignedBlocker ? 'is-blocking blocking' : ''} ${attackCandidateIds.has(c.instanceId) ? 'attack-candidate' : ''} ${this._selectedAttackers.has(c.instanceId) ? 'attack-selected' : ''} ${blockerCandidateIds.has(c.instanceId) ? 'blocker-candidate' : ''} ${isAssignedBlocker ? 'blocker-selected' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${c.isTapped ? 'true' : 'false'}" data-power="${stats.power}" data-toughness="${stats.toughness}" data-keywords="${activeKws.join(',')}" title="${c.name}${pt}${counterTitle}${kwTitle}${attackCandidateIds.has(c.instanceId) ? ' - Click to select as attacker' : ''}${blockerCandidateIds.has(c.instanceId) ? ' - Click to assign as blocker' : ''}">${c.name}${pt}${counterBadges}${c.isAttacking ? ' ⚔️' : ''}${c.isBlocking || isAssignedBlocker ? ` 🛡️${assignedAttacker ? ` → ${assignedAttacker.name}` : ''}` : ''}${c.isTapped ? ' ↺' : ''}</span>`;
           }).join('')}</div>
-          ${isAttackWindow ? `<div class="attack-confirm-bar"><button id="btn-confirm-attackers" class="btn btn-primary" ${this._selectedAttackers.size === 0 ? 'disabled' : ''}>⚔️ Confirm Attackers (${this._selectedAttackers.size})</button><span class="attack-hint">${attackCandidateIds.size === 0 ? 'No creatures can attack - press Next Phase' : 'Select attackers, then confirm (or press Next Phase to skip combat)'}</span></div>` : ''}
+          ${isAttackWindow ? `
+            <div class="attack-confirm-bar" style="display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+              <button id="btn-confirm-attackers" class="btn btn-primary" ${this._selectedAttackers.size === 0 ? 'disabled' : ''}>⚔️ Confirm Attackers (${this._selectedAttackers.size})</button>
+              <button id="btn-attack-all-eligible" class="btn btn-secondary btn-attack-all" ${attackCandidateIds.size === 0 ? 'disabled' : ''}>⚔️ Attack All Eligible (${attackCandidateIds.size})</button>
+              ${aliveOpponents.length > 1 ? `
+                <div class="defender-target-selector-group" style="display: inline-flex; align-items: center; gap: 4px;">
+                  <span style="font-size: 0.78rem; font-weight: bold; color: #f59e0b;">🎯 Defending Player:</span>
+                  ${aliveOpponents.map(oppPid => {
+                    const oppData = this.tabletopState?.players?.[oppPid];
+                    const oppName = this.getFriendlyPlayerName(oppPid);
+                    const oppLife = oppData?.life ?? 20;
+                    const isSel = oppPid === this._selectedDefendingPlayerId;
+                    return `<button type="button" class="btn btn-sm btn-select-defender-target" data-defender-id="${oppPid}" style="padding: 2px 8px; font-size: 0.75rem; border-radius: 4px; border: 1px solid ${isSel ? '#f59e0b' : '#475569'}; background: ${isSel ? '#78350f' : '#1e293b'}; color: ${isSel ? '#fef3c7' : '#cbd5e1'}; cursor: pointer;">${oppName} (Life: ${oppLife})${isSel ? ' (Target)' : ''}</button>`;
+                  }).join('')}
+                </div>
+              ` : ''}
+              ${this._selectedAttackers.size > 0 ? `
+                <div class="attacker-target-selector-group" style="display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;">
+                  ${[...this._selectedAttackers].map(atkId => {
+                    const cr = creatures.find(c => c && (c.instanceId === atkId || c.id === atkId));
+                    const crName = cr?.name || 'Creature';
+                    const targetOppId = this.attackerTargets[atkId] || this._selectedDefendingPlayerId || aliveOpponents[0];
+                    const foundBattle = this.tabletopState?.findPermanentById?.(targetOppId)?.card;
+                    const oppName = foundBattle ? `${foundBattle.name} 🏰` : this.getFriendlyPlayerName(targetOppId);
+                    return `<button type="button" class="btn btn-sm btn-cycle-attacker-target" data-attacker-id="${atkId}" style="padding: 2px 8px; font-size: 0.75rem; border-radius: 4px; border: 1px solid #3b82f6; background: #1e3a8a; color: #dbeafe; cursor: pointer;" title="Click to cycle defender target for ${crName}">🎯 ${crName} → ${oppName}</button>`;
+                  }).join('')}
+                </div>
+              ` : ''}
+              <span class="attack-hint" style="font-size: 0.78rem; color: #cbd5e1;">${attackCandidateIds.size === 0 ? 'No creatures can attack - press Next Phase' : 'Select attackers, then confirm (or press Next Phase to skip combat)'}</span>
+            </div>
+          ` : ''}
           ${isBlockWindow ? `
             <div class="block-confirm-bar" style="display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
               <button id="btn-confirm-blockers" class="btn btn-primary">🛡️ Confirm Blockers (${this._blockerAssignments.size})</button>
@@ -4478,6 +5647,11 @@ export class RPMAppController {
               <span class="block-hint" style="font-size: 0.78rem; color: #cbd5e1;">${blockerCandidateIds.size === 0 ? 'No untapped creatures to block — click No Blocks' : `Click your creature to block ${resolveAttackerObj(this._activeAttackerTargetId)?.name || 'attacker'}, then confirm`}</span>
             </div>
           ` : ''}
+          ${isSpectatingOtherCombat ? `
+            <div class="combat-spectate-banner" style="padding: 6px 12px; margin-top: 6px; background: #1e293b; border-left: 3px solid #3b82f6; border-radius: 4px; font-size: 0.8rem; color: #94a3b8;">
+              👀 <strong>Combat Ongoing:</strong> ${this.getFriendlyPlayerName(psmForAttack.activePlayerId)} is attacking ${this.getFriendlyPlayerName(defendingPid)}. You are not being attacked.
+            </div>
+          ` : ''}
         </div>
       </div>
       <div id="player-hand" class="player-hand-grid"></div>
@@ -4485,12 +5659,63 @@ export class RPMAppController {
 
     // Attack declaration: candidate selection + explicit confirmation (CR 508.1)
     if (isAttackWindow) {
+      dashboard.querySelectorAll('.btn-select-defender-target').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const defId = btn.getAttribute('data-defender-id');
+          if (defId) {
+            this._selectedDefendingPlayerId = defId;
+            this.reconcileDOM();
+          }
+        });
+      });
+
+      const btnAttackAll = dashboard.querySelector('#btn-attack-all-eligible');
+      if (btnAttackAll) {
+        btnAttackAll.addEventListener('click', () => {
+          for (const candId of attackCandidateIds) {
+            this._selectedAttackers.add(candId);
+            if (!this.attackerTargets[candId]) {
+              this.attackerTargets[candId] = this._selectedDefendingPlayerId || aliveOpponents[0];
+            }
+          }
+          this.reconcileDOM();
+        });
+      }
+
+      dashboard.querySelectorAll('.btn-cycle-attacker-target').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const atkId = btn.getAttribute('data-attacker-id');
+          if (!atkId) return;
+          const battleTargets = [];
+          for (const pl of Object.values(this.tabletopState?.players || {})) {
+            for (const nc of (pl.battlefield?.noncreatures || [])) {
+              if (nc && (/battle/i.test(nc.typeLine || nc.type || '') || /invasion of gobakhan/i.test(nc.name || ''))) {
+                battleTargets.push(nc.instanceId || nc.id);
+              }
+            }
+          }
+          const allTargets = [...aliveOpponents, ...battleTargets];
+          if (allTargets.length > 1) {
+            const currentTgt = this.attackerTargets[atkId] || this._selectedDefendingPlayerId || allTargets[0];
+            const currentIndex = allTargets.indexOf(currentTgt);
+            const nextIndex = (currentIndex + 1) % allTargets.length;
+            this.attackerTargets[atkId] = allTargets[nextIndex];
+            this.reconcileDOM();
+          }
+        });
+      });
+
       dashboard.querySelectorAll('.attack-candidate').forEach(chip => {
         chip.addEventListener('click', () => {
           const id = chip.getAttribute('data-instance-id');
           if (!id) return;
-          if (this._selectedAttackers.has(id)) this._selectedAttackers.delete(id);
-          else this._selectedAttackers.add(id);
+          if (this._selectedAttackers.has(id)) {
+            this._selectedAttackers.delete(id);
+            delete this.attackerTargets[id];
+          } else {
+            this._selectedAttackers.add(id);
+            this.attackerTargets[id] = this._selectedDefendingPlayerId || aliveOpponents[0];
+          }
           this.reconcileDOM();
         });
       });
@@ -4499,12 +5724,22 @@ export class RPMAppController {
         confirmBtn.addEventListener('click', () => {
           const ids = [...this._selectedAttackers];
           if (ids.length === 0) return;
+          const attackerTargetsPayload = { ...this.attackerTargets };
+          const defId = this._selectedDefendingPlayerId;
           this._selectedAttackers = new Set();
+          this.attackerTargets = {};
           this.dispatchAction({
             type: 'DECLARE_ATTACKERS',
             playerId: this.myPlayerId,
             attackers: ids,
-            payload: { playerId: this.myPlayerId, attackers: ids }
+            attackerTargets: attackerTargetsPayload,
+            defendingPlayerId: defId,
+            payload: {
+              playerId: this.myPlayerId,
+              attackers: ids,
+              attackerTargets: attackerTargetsPayload,
+              defendingPlayerId: defId
+            }
           }, { origin: 'LOCAL' });
         });
       }
@@ -4594,6 +5829,36 @@ export class RPMAppController {
           }, { origin: 'LOCAL' });
         });
       });
+
+      // Bind undo mana tap and mana chip click interactions
+      const btnUndo = dashboard.querySelector('#btn-undo-mana-tap');
+      btnUndo?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (this.tabletopState && typeof this.tabletopState.undoLastManaTap === 'function') {
+          this.tabletopState.undoLastManaTap(this.myPlayerId);
+          this.reconcileDOM();
+        }
+      });
+
+      const manaChips = dashboard.querySelectorAll('.mana-pool-chips .mana-chip');
+      manaChips.forEach(chip => {
+        chip.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const col = chip.getAttribute('data-color');
+          if (!col) return;
+          const currentPool = pData?.resources?.manaPool || {};
+          if ((currentPool[col] || 0) <= 0) return;
+
+          if (this.tabletopState && typeof this.tabletopState.undoLastManaTap === 'function') {
+            try {
+              this.tabletopState.undoLastManaTap(this.myPlayerId, col);
+              this.reconcileDOM();
+            } catch (err) {
+              this.showToast?.(err.message || 'Cannot undo mana tap');
+            }
+          }
+        });
+      });
     }
 
     // Populate interactive hand
@@ -4614,39 +5879,80 @@ export class RPMAppController {
       hand.forEach(card => {
         const cardId = card.instanceId || card.id || card.name;
         const isSelected = this.selectedHandCardId === cardId;
+        const isLand = (card.typeLine || card.type || '').toLowerCase().includes('land');
+        const avail = CastAvailabilityManager.evaluateCardAvailability(
+          this.tabletopState,
+          this.myPlayerId,
+          card,
+          this.priorityMachine
+        );
+        const isPlayable = Boolean(avail?.allowed || (Array.isArray(avail?.availableModes) && avail.availableModes.length > 0));
         const chip = document.createElement('div');
-        chip.className = `hand-card-chip ${isSelected ? 'selected' : ''}`;
+        chip.className = `hand-card-chip ${isSelected ? 'selected' : ''} ${isPlayable ? 'card-playable-glow' : ''}`;
         chip.textContent = card.name || 'Card';
 
+        this._attachCardHoverPreview(chip, card);
+
+        const hasMultipleModes = Boolean(
+          (avail.allModes && avail.allModes.length > 1) ||
+          (card.typeLine || '').includes('//') ||
+          (card.name || '').includes('//') ||
+          /adventure/i.test(card.typeLine || '') ||
+          /callous\s+sell-sword/i.test(card.name || '') ||
+          (Array.isArray(card.compiledMechanics?.castModes) && card.compiledMechanics.castModes.length > 1)
+        );
+
+        // [P5] Golden border auto-tap preview on hover over playable spell in hand
+        if (!isLand && isPlayable) {
+          chip.addEventListener('pointerenter', () => {
+            const landEls = Array.from(dashboard.querySelectorAll('#battlefield-lands .land-chip:not(.is-tapped)'));
+            const cmc = Number(card.cmc ?? 1) || 1;
+            landEls.slice(0, cmc).forEach(el => el.classList.add('land-autotap-preview'));
+          });
+          chip.addEventListener('pointerleave', () => {
+            dashboard.querySelectorAll('#battlefield-lands .land-autotap-preview').forEach(el => el.classList.remove('land-autotap-preview'));
+          });
+        }
+
         if (isSelected) {
-          const isLand = (card.typeLine || card.type || '').toLowerCase().includes('land');
+
+          let actionButtonsHtml = '';
+          if (isLand) {
+            let canPlayLand = true;
+            let landReason = '';
+            if (this.tabletopState && typeof this.tabletopState.canPlayLand === 'function') {
+              const check = this.tabletopState.canPlayLand(this.myPlayerId);
+              if (typeof check === 'boolean') canPlayLand = check;
+              else if (check && !check.allowed) {
+                canPlayLand = false;
+                landReason = check.message || 'Cannot play land';
+              }
+            }
+            actionButtonsHtml = `<button id="btn-play-land" class="btn btn-popover-action" ${!canPlayLand ? 'disabled title="' + this._escapeHtml(landReason) + '"' : ''}>🏔️ Jugar Tierra</button>`;
+          } else if (hasMultipleModes) {
+            const modes = (avail.allModes && avail.allModes.length > 0)
+              ? avail.allModes
+              : (CastAvailabilityManager.getCastableModes(this.tabletopState, this.myPlayerId, card) || []);
+
+            actionButtonsHtml = modes.map(m => {
+              const isAdv = m.mode === 'ADVENTURE' || (m.typeLine || '').toLowerCase().includes('adventure');
+              const icon = isAdv ? '✨' : '⚔️';
+              const disabledAttr = !m.isAvailable ? `disabled title="${this._escapeHtml(m.unselectableReason || m.timingReason || 'No disponible')}"` : '';
+              return `<button class="btn btn-popover-action btn-popover-cast-mode" data-mode="${m.mode}" ${disabledAttr}>${icon} Lanzar ${m.name || card.name} (${m.manaCost || ''})</button>`;
+            }).join('');
+          } else {
+            actionButtonsHtml = `<button id="btn-cast-spell" class="btn btn-popover-action" ${!isPlayable ? 'disabled' : ''}>⚔️ Lanzar ${card.name} (${card.manaCost || ''})</button>`;
+          }
+
           const popover = document.createElement('div');
           popover.className = 'hand-card-popover';
           popover.innerHTML = `
-            ${isLand
-              ? `<button id="btn-play-land" class="btn btn-popover-action">🏔️ Play Land</button>`
-              : `<button id="btn-cast-spell" class="btn btn-popover-action">⚡ Cast to Stack</button>`
-            }
-            <button id="btn-inspect-card" class="btn btn-popover-inspect">🔍 Inspect</button>
-            <button id="btn-close-popover" class="btn btn-popover-close">✖️</button>
+            ${actionButtonsHtml}
+            <button id="btn-close-popover" class="btn btn-popover-close">✕ Cancelar</button>
           `;
-
-          let playOrCastAllowed = true;
-          let playOrCastMessage = '';
-          if (this.tabletopState && typeof this.tabletopState.canPlayerCastOrPlay === 'function') {
-            const check = this.tabletopState.canPlayerCastOrPlay(this.myPlayerId, card, this.priorityMachine);
-            if (check && !check.allowed) {
-              playOrCastAllowed = false;
-              playOrCastMessage = check.message || '';
-            }
-          }
 
           const btnPlay = popover.querySelector('#btn-play-land');
           if (btnPlay) {
-            if (!playOrCastAllowed) {
-              btnPlay.disabled = true;
-              btnPlay.title = playOrCastMessage;
-            }
             btnPlay.addEventListener('click', (ev) => {
               ev.stopPropagation();
               if (btnPlay.disabled) return;
@@ -4656,10 +5962,6 @@ export class RPMAppController {
 
           const btnCast = popover.querySelector('#btn-cast-spell');
           if (btnCast) {
-            if (!playOrCastAllowed) {
-              btnCast.disabled = true;
-              btnCast.title = playOrCastMessage;
-            }
             btnCast.addEventListener('click', (ev) => {
               ev.stopPropagation();
               if (btnCast.disabled) return;
@@ -4667,13 +5969,14 @@ export class RPMAppController {
             });
           }
 
-          const btnInspect = popover.querySelector('#btn-inspect-card');
-          if (btnInspect) {
-            btnInspect.addEventListener('click', (ev) => {
+          popover.querySelectorAll('.btn-popover-cast-mode').forEach(btn => {
+            btn.addEventListener('click', (ev) => {
               ev.stopPropagation();
-              this.openModal('CARD_OVERLAY', card);
+              if (btn.disabled) return;
+              const mode = btn.getAttribute('data-mode');
+              this.castSpellToStack(card, null, mode);
             });
-          }
+          });
 
           const btnClose = popover.querySelector('#btn-close-popover');
           if (btnClose) {
@@ -4684,6 +5987,61 @@ export class RPMAppController {
             });
           }
 
+          chip.appendChild(popover);
+        }
+
+        chip.addEventListener('click', (ev) => {
+          if (ev.target.closest('.hand-card-popover')) return;
+          this.selectedHandCardId = (this.selectedHandCardId === cardId ? null : cardId);
+          this.reconcileDOM();
+        });
+
+        handGrid.appendChild(chip);
+      });
+
+      // Also display cards on Adventure in exile (CR 715.3d) so player can cast the Creature mode from exile
+      const exileCards = Array.isArray(pData?.exile) ? pData.exile : (Array.isArray(pData?.zones?.exile) ? pData.zones.exile : []);
+      const adventureExiled = exileCards.filter(c => c && c.onAdventure);
+      adventureExiled.forEach(card => {
+        const cardId = card.instanceId || card.id || card.name;
+        const isSelected = this.selectedHandCardId === cardId;
+        const avail = CastAvailabilityManager.evaluateCardAvailability(
+          this.tabletopState,
+          this.myPlayerId,
+          card,
+          this.priorityMachine
+        );
+        const isPlayable = Boolean(avail?.allowed || (Array.isArray(avail?.availableModes) && avail.availableModes.length > 0));
+        const chip = document.createElement('div');
+        chip.className = `hand-card-chip adventure-exile-chip ${isSelected ? 'selected' : ''} ${isPlayable ? 'card-playable-glow' : ''}`;
+        chip.style.borderColor = '#38bdf8';
+        chip.textContent = `${card.name || 'Card'} [On Adventure]`;
+
+        this._attachCardHoverPreview(chip, card);
+
+        if (isSelected) {
+          const popover = document.createElement('div');
+          popover.className = 'hand-card-popover';
+          popover.innerHTML = `
+            <button id="btn-cast-spell" class="btn btn-popover-action" ${!isPlayable ? 'disabled' : ''}>⚔️ Lanzar ${card.name} (${card.manaCost || ''})</button>
+            <button id="btn-close-popover" class="btn btn-popover-close">✕ Cancelar</button>
+          `;
+          const btnCast = popover.querySelector('#btn-cast-spell');
+          if (btnCast) {
+            btnCast.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              if (btnCast.disabled) return;
+              this.castSpellToStack(card, null, 'MAIN');
+            });
+          }
+          const btnClose = popover.querySelector('#btn-close-popover');
+          if (btnClose) {
+            btnClose.addEventListener('click', (ev) => {
+              ev.stopPropagation();
+              this.selectedHandCardId = null;
+              this.reconcileDOM();
+            });
+          }
           chip.appendChild(popover);
         }
 
@@ -4721,7 +6079,33 @@ export class RPMAppController {
             return;
           }
 
-          if (land.isTapped) return;
+          if (land.isTapped && !land.name?.toLowerCase()?.includes('inkmoth')) return;
+
+          const landName = (land.name || '').trim();
+          const landNameLower = landName.toLowerCase();
+          const isInkmoth = landNameLower.includes('inkmoth nexus');
+          const isStartingTown = landNameLower.includes('starting town');
+          const isSpireOfIndustry = landNameLower.includes('spire of industry');
+          const isSpecialModeLand = isInkmoth || isStartingTown || isSpireOfIndustry;
+
+          const hasNonManaAbilities = Boolean(
+            isInkmoth ||
+            land.compiledMechanics?.activatedAbilities?.some(a => !a.isManaAbility && a.action !== 'TAP_MANA') ||
+            land.abilities?.some(a => !a.isManaAbility && !a.produces && a.action !== 'TAP_MANA')
+          );
+
+          if (isSpecialModeLand || hasNonManaAbilities) {
+            const drawerContext = {
+              friendlyCreatures: pData?.battlefield?.creatures || [],
+              tabletopState: this.tabletopState,
+              abilities: land.abilities || land.compiledMechanics?.activatedAbilities || []
+            };
+            const drawer = this.actionDrawer || this.permanentDrawer;
+            if (drawer && typeof drawer.open === 'function') {
+              drawer.open(land, this.myPlayerId, chip, drawerContext);
+            }
+            return;
+          }
 
           const profile = this.tabletopState?._getLandManaProfile ? this.tabletopState._getLandManaProfile(land) : [];
           if (profile.length > 1) {
@@ -4743,6 +6127,77 @@ export class RPMAppController {
               reason: err.message
             });
             this.showToast(err.message || 'Cannot tap land');
+          }
+        });
+      });
+
+      // [P8] Bind Graveyard & Exile drawer browser buttons
+      const btnPlayerGrave = dashboard.querySelector('#player-btn-grave');
+      if (btnPlayerGrave) {
+        btnPlayerGrave.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.openZoneBrowser(this.myPlayerId, 'graveyard');
+        });
+      }
+      const btnPlayerExile = dashboard.querySelector('#player-btn-exile');
+      if (btnPlayerExile) {
+        btnPlayerExile.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.openZoneBrowser(this.myPlayerId, 'exile');
+        });
+      }
+
+      // [P7] Attachment linked highlight between Creatures and attached Equipment/Auras
+      const creatureChips = dashboard.querySelectorAll('#battlefield-creatures .creature-chip');
+      creatureChips.forEach((crChip, idx) => {
+        const cr = creatures[idx];
+        if (!cr) return;
+        this._attachCardHoverPreview(crChip, cr);
+        const crId = cr.instanceId || cr.id;
+        crChip.addEventListener('pointerenter', () => {
+          dashboard.querySelectorAll('#battlefield-noncreatures .noncreature-chip').forEach((ncChip, ncIdx) => {
+            const nc = noncreatures[ncIdx];
+            if (nc && nc.attachedTo === crId) {
+              ncChip.classList.add('attachment-linked-highlight');
+              crChip.classList.add('attachment-linked-highlight');
+            }
+          });
+        });
+        crChip.addEventListener('pointerleave', () => {
+          dashboard.querySelectorAll('.attachment-linked-highlight').forEach(el => el.classList.remove('attachment-linked-highlight'));
+        });
+      });
+
+      // Bind click on noncreature permanents (inspect or attach equipment via PermanentActionDrawer)
+      const noncreatureChips = dashboard.querySelectorAll('#battlefield-noncreatures .noncreature-chip');
+      noncreatureChips.forEach((chip, idx) => {
+        const item = noncreatures[idx];
+        if (!item) return;
+        this._attachCardHoverPreview(chip, item);
+        if (item.attachedTo) {
+          chip.addEventListener('pointerenter', () => {
+            chip.classList.add('attachment-linked-highlight');
+            dashboard.querySelectorAll(`#battlefield-creatures .creature-chip[data-instance-id="${item.attachedTo}"]`).forEach(el => {
+              el.classList.add('attachment-linked-highlight');
+            });
+          });
+          chip.addEventListener('pointerleave', () => {
+            dashboard.querySelectorAll('.attachment-linked-highlight').forEach(el => el.classList.remove('attachment-linked-highlight'));
+          });
+        }
+        chip.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const pCreatures = pData?.battlefield?.creatures || [];
+          const drawerContext = {
+            friendlyCreatures: pCreatures,
+            tabletopState: this.tabletopState
+          };
+          if (this.permanentDrawer && typeof this.permanentDrawer.open === 'function') {
+            this.permanentDrawer.open(item, this.myPlayerId, chip, drawerContext);
+          } else if (this.actionDrawer && typeof this.actionDrawer.open === 'function') {
+            this.actionDrawer.open(item, this.myPlayerId, chip, drawerContext);
+          } else if (typeof this.openModal === 'function') {
+            this.openModal('CARD_OVERLAY', item);
           }
         });
       });
@@ -4991,7 +6446,7 @@ export class RPMAppController {
           if (this.rollOffResult?.isComplete) {
             const sorted = this.rollOffResult.sortedPlayers || [];
             const winner = sorted[0];
-            statusText.textContent = `Turn order resolved! ${winner === this.myPlayerId ? 'You take' : `Player ${winner.toUpperCase()} takes`} Turn 1. Starting match...`;
+            statusText.textContent = `Turn order resolved! ${winner === this.myPlayerId ? 'You take' : `${this.getFriendlyPlayerName(winner)} takes`} Turn 1. Starting match...`;
           } else if (hasTies) {
             statusText.textContent = `Round ${round} (Tie Breaker): Tied players re-roll!`;
           } else {
@@ -5003,7 +6458,7 @@ export class RPMAppController {
           const rolls = Array.from(this.turnRollOffManager.currentRolls.entries());
           resultsList.innerHTML = rolls.map(([pid, val]) => `
             <div class="roll-result-chip">
-              <span class="roll-player">${pid === this.myPlayerId ? 'You' : pid.toUpperCase()}:</span>
+              <span class="roll-player">${pid === this.myPlayerId ? 'You' : this.getFriendlyPlayerName(pid)}:</span>
               <span class="roll-val">🎲 ${val}</span>
             </div>
           `).join('');
@@ -5210,13 +6665,23 @@ export class RPMAppController {
           </div>
           <div class="deck-validator-section">
             <h4>Decklist Validator (Oracle 4-Of Override):</h4>
+            <div class="deck-name-container">
+              <input type="text" id="deckbuilder-name-input" class="deck-name-input" placeholder="Deck Name (e.g. Mono-Red Burn)" />
+            </div>
             <textarea id="deckbuilder-text-input" class="deck-input-area" placeholder="Paste decklist here...&#10;4 Lightning Bolt&#10;20 Relentless Rats&#10;20 Mountain"></textarea>
             <div class="deck-validator-controls">
               <button id="btn-validate-deck" class="btn btn-primary">Validate Decklist</button>
               <button id="btn-save-active-deck" class="btn btn-special" style="margin-left: 10px;">💾 Save Active Deck</button>
               <div id="deck-validation-badge" class="deck-validation-badge"></div>
             </div>
+            <div id="deck-save-confirmation-banner" class="deck-save-confirmation-banner" style="display: none;">
+              <span class="banner-text">✅ Deck saved!</span>
+              <button id="btn-deck-go-to-lobby" class="btn btn-primary btn-sm">⚔️ Go to Lobby</button>
+            </div>
             <ul id="deck-validation-errors" class="deck-validation-errors"></ul>
+          </div>
+          <div class="active-deck-preview-section">
+            <div id="active-deck-preview-panel" class="active-deck-preview-panel"></div>
           </div>
         </div>
       `;
@@ -5227,10 +6692,97 @@ export class RPMAppController {
         btn.addEventListener('click', async () => {
           const sId = btn.getAttribute('data-starter-id');
           const starter = getStarterDeck(sId);
-          if (starter && this.authManager) {
-            await this.authManager.saveActiveDeck(starter.id, starter);
-            this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
-            this.reconcileDOM();
+          if (starter) {
+            const nameInput = view.querySelector('#deckbuilder-name-input');
+            const textarea = view.querySelector('#deckbuilder-text-input');
+            const deckName = starter.title || starter.name || starter.archetype;
+            if (nameInput) nameInput.value = deckName;
+
+            const mainLines = (starter.mainboard || []).map(c => `${c.count || 1} ${c.name}`).join('\n');
+            const sideLines = (starter.sideboard || []).length > 0
+              ? '\n\nSideboard\n' + starter.sideboard.map(c => `${c.count || 1} ${c.name}`).join('\n')
+              : '';
+            const rawText = mainLines + sideLines;
+            if (textarea) textarea.value = rawText;
+
+            const badge = view.querySelector('#deck-validation-badge');
+            if (badge) {
+              badge.className = 'deck-validation-badge';
+              badge.textContent = '🔄 Consulting Scryfall Oracle API & running card smoke tests...';
+            }
+
+            const report = await DeckValidator.validateAndHydrateDeck(rawText, {
+              format: this.deckbuilderMode,
+              scryfallService: this.scryfallService
+            });
+            this._renderDeckValidationReport(view, report);
+
+            const mainboard = (report.hydratedCards && report.hydratedCards.length > 0)
+              ? report.hydratedCards.filter(c => c.section !== 'sideboard' && !c.isSideboard)
+              : (report.mainboard || starter.mainboard || []);
+            const sideboard = (report.hydratedCards && report.hydratedCards.length > 0)
+              ? report.hydratedCards.filter(c => c.section === 'sideboard' || Boolean(c.isSideboard))
+              : (report.sideboard || starter.sideboard || []);
+
+            const deckObj = {
+              slot: this.activeDeckSlot,
+              name: deckName,
+              rawText,
+              format: this.deckbuilderMode,
+              mainboard,
+              sideboard,
+              colorIdentity: report.colorIdentity || starter.colorIdentity || ['C'],
+              breakdown: report.breakdown || {
+                creatures: 0,
+                spells: 0,
+                otherPermanents: 0,
+                lands: 0,
+                sideboard: report.sideboardCount || 0
+              },
+              mainCount: report.mainCount || 60,
+              sideboardCount: report.sideboardCount || 0,
+              savedAt: Date.now()
+            };
+            this.activeDeckData = deckObj;
+
+            try {
+              const storage = (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null);
+              if (storage) {
+                storage.setItem('rpm_active_deck_slot', String(this.activeDeckSlot));
+                let slotMap = {};
+                const existing = storage.getItem('rpm_saved_decks_by_slot');
+                if (existing) {
+                  try { slotMap = JSON.parse(existing) || {}; } catch (_) {}
+                }
+                slotMap[this.activeDeckSlot] = deckObj;
+                storage.setItem('rpm_saved_decks_by_slot', JSON.stringify(slotMap));
+              }
+            } catch (_) {}
+
+            if (this.authManager) {
+              try {
+                if (typeof this.authManager.isAuthenticated === 'function' && this.authManager.isAuthenticated()) {
+                  await this.authManager.saveActiveDeck(starter.id, starter);
+                }
+              } catch (_) {}
+            }
+
+            const banner = view.querySelector('#deck-save-confirmation-banner');
+            if (banner) {
+              banner.style.display = 'flex';
+              const textEl = banner.querySelector('.banner-text');
+              if (textEl) textEl.textContent = `✅ Deck "${deckName}" saved to Slot ${this.activeDeckSlot}!`;
+              const btnLobby = banner.querySelector('#btn-deck-go-to-lobby');
+              if (btnLobby && !btnLobby._bound) {
+                btnLobby._bound = true;
+                btnLobby.addEventListener('click', () => {
+                  this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+                  this.reconcileDOM();
+                });
+              }
+            }
+
+            this._renderActiveDeckPreview(view, deckObj);
           }
         });
       });
@@ -5240,14 +6792,82 @@ export class RPMAppController {
       if (btnSaveActive) {
         btnSaveActive.addEventListener('click', async () => {
           const textarea = view.querySelector('#deckbuilder-text-input');
+          const nameInput = view.querySelector('#deckbuilder-name-input');
           const rawText = textarea ? textarea.value : '';
-          const report = DeckValidator.validateDeck(rawText, { format: this.deckbuilderMode });
+          const deckName = (nameInput?.value || '').trim() || `Slot ${this.activeDeckSlot} Deck`;
+          const badge = view.querySelector('#deck-validation-badge');
+          if (badge) {
+            badge.className = 'deck-validation-badge';
+            badge.textContent = '🔄 Consulting Scryfall Oracle API & running card smoke tests...';
+          }
+
+          const report = await DeckValidator.validateAndHydrateDeck(rawText, {
+            format: this.deckbuilderMode,
+            scryfallService: this.scryfallService
+          });
           this._renderDeckValidationReport(view, report);
-          if (report.isValid && this.authManager) {
-            const deckId = `custom_${Date.now()}`;
-            await this.authManager.saveActiveDeck(deckId, report);
-            this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
-            this.reconcileDOM();
+          if (report.isValid) {
+            const mainboard = (report.hydratedCards && report.hydratedCards.length > 0)
+              ? report.hydratedCards.filter(c => c.section !== 'sideboard' && !c.isSideboard)
+              : report.mainboard;
+            const sideboard = (report.hydratedCards && report.hydratedCards.length > 0)
+              ? report.hydratedCards.filter(c => c.section === 'sideboard' || Boolean(c.isSideboard))
+              : report.sideboard;
+
+            const deckObj = {
+              slot: this.activeDeckSlot,
+              name: deckName,
+              rawText,
+              format: this.deckbuilderMode,
+              mainboard,
+              sideboard,
+              colorIdentity: report.colorIdentity,
+              breakdown: report.breakdown,
+              mainCount: report.mainCount,
+              sideboardCount: report.sideboardCount,
+              savedAt: Date.now()
+            };
+            this.activeDeckData = deckObj;
+
+            try {
+              const storage = (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null);
+              if (storage) {
+                storage.setItem('rpm_active_deck_slot', String(this.activeDeckSlot));
+                let slotMap = {};
+                const existing = storage.getItem('rpm_saved_decks_by_slot');
+                if (existing) {
+                  try { slotMap = JSON.parse(existing) || {}; } catch (_) {}
+                }
+                slotMap[this.activeDeckSlot] = deckObj;
+                storage.setItem('rpm_saved_decks_by_slot', JSON.stringify(slotMap));
+              }
+            } catch (_) {}
+
+            if (this.authManager) {
+              try {
+                if (typeof this.authManager.isAuthenticated === 'function' && this.authManager.isAuthenticated()) {
+                  const deckId = `custom_${Date.now()}`;
+                  await this.authManager.saveActiveDeck(deckId, report);
+                }
+              } catch (_) {}
+            }
+
+            const banner = view.querySelector('#deck-save-confirmation-banner');
+            if (banner) {
+              banner.style.display = 'flex';
+              const textEl = banner.querySelector('.banner-text');
+              if (textEl) textEl.textContent = `✅ Deck "${deckName}" saved to Slot ${this.activeDeckSlot}!`;
+              const btnLobby = banner.querySelector('#btn-deck-go-to-lobby');
+              if (btnLobby && !btnLobby._bound) {
+                btnLobby._bound = true;
+                btnLobby.addEventListener('click', () => {
+                  this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+                  this.reconcileDOM();
+                });
+              }
+            }
+
+            this._renderActiveDeckPreview(view, deckObj);
           }
         });
       }
@@ -5271,11 +6891,62 @@ export class RPMAppController {
       // Bind validate button
       const btnValidate = view.querySelector('#btn-validate-deck');
       if (btnValidate) {
-        btnValidate.addEventListener('click', () => {
+        btnValidate.addEventListener('click', async () => {
           const textarea = view.querySelector('#deckbuilder-text-input');
           const rawText = textarea ? textarea.value : '';
-          const report = DeckValidator.validateDeck(rawText, { format: this.deckbuilderMode });
+          const badge = view.querySelector('#deck-validation-badge');
+          if (badge) {
+            badge.className = 'deck-validation-badge';
+            badge.textContent = '🔄 Consulting Scryfall Oracle API & running card smoke tests...';
+          }
+          const report = await DeckValidator.validateAndHydrateDeck(rawText, {
+            format: this.deckbuilderMode,
+            scryfallService: this.scryfallService
+          });
           this._renderDeckValidationReport(view, report);
+          if (report.isValid) {
+            const nameInput = view.querySelector('#deckbuilder-name-input');
+            const deckName = (nameInput?.value || '').trim() || `Slot ${this.activeDeckSlot} Deck`;
+            const mainboard = (report.hydratedCards && report.hydratedCards.length > 0)
+              ? report.hydratedCards.filter(c => c.section !== 'sideboard' && !c.isSideboard)
+              : report.mainboard;
+            const sideboard = (report.hydratedCards && report.hydratedCards.length > 0)
+              ? report.hydratedCards.filter(c => c.section === 'sideboard' || Boolean(c.isSideboard))
+              : report.sideboard;
+            const deckObj = {
+              slot: this.activeDeckSlot,
+              name: deckName,
+              rawText,
+              format: this.deckbuilderMode,
+              mainboard,
+              sideboard,
+              colorIdentity: report.colorIdentity,
+              breakdown: report.breakdown,
+              mainCount: report.mainCount,
+              sideboardCount: report.sideboardCount,
+              savedAt: Date.now()
+            };
+            this.activeDeckData = deckObj;
+            try {
+              const storage = (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null);
+              if (storage) {
+                storage.setItem('rpm_active_deck_slot', String(this.activeDeckSlot));
+                let slotMap = {};
+                const existing = storage.getItem('rpm_saved_decks_by_slot');
+                if (existing) {
+                  try { slotMap = JSON.parse(existing) || {}; } catch (_) {}
+                }
+                slotMap[this.activeDeckSlot] = deckObj;
+                storage.setItem('rpm_saved_decks_by_slot', JSON.stringify(slotMap));
+              }
+            } catch (_) {}
+            if (this.authManager && typeof this.authManager.isAuthenticated === 'function' && this.authManager.isAuthenticated()) {
+              try {
+                await this.authManager.saveActiveDeck(`custom_${Date.now()}`, report);
+              } catch (_) {}
+            }
+            this._renderActiveDeckPreview(view, deckObj);
+          }
         });
       }
     }
@@ -5307,12 +6978,50 @@ export class RPMAppController {
 
         btn.addEventListener('click', () => {
           if (isUnlocked) {
-            this.activeDeckSlot = s;
+            const loadedDeck = this._loadDeckSlot(s);
+            const textarea = view.querySelector('#deckbuilder-text-input');
+            const nameInput = view.querySelector('#deckbuilder-name-input');
+            if (loadedDeck) {
+              if (textarea) textarea.value = loadedDeck.rawText || '';
+              if (nameInput) nameInput.value = loadedDeck.name || `Slot ${s} Deck`;
+              const report = DeckValidator.validateDeck(loadedDeck.rawText || '', { format: this.deckbuilderMode });
+              this._renderDeckValidationReport(view, report);
+              this._renderActiveDeckPreview(view, loadedDeck);
+            } else {
+              if (textarea) textarea.value = '';
+              if (nameInput) nameInput.value = `Slot ${s} Deck`;
+              this._renderActiveDeckPreview(view, null);
+            }
             this.reconcileDOM();
           }
         });
 
         slotsBar.appendChild(btn);
+      }
+    }
+
+    const activeDeck = this.getActiveDeckForPlayer(this.myPlayerId);
+    const textarea = view.querySelector('#deckbuilder-text-input');
+    const nameInput = view.querySelector('#deckbuilder-name-input');
+    if (activeDeck) {
+      if (nameInput && !nameInput.value) {
+        nameInput.value = activeDeck.name || `Slot ${this.activeDeckSlot} Deck`;
+      }
+      if (textarea && !textarea.value) {
+        textarea.value = activeDeck.rawText || '';
+      }
+    }
+    this._renderActiveDeckPreview(view, activeDeck);
+
+    const banner = view.querySelector('#deck-save-confirmation-banner');
+    if (banner) {
+      const btnLobby = banner.querySelector('#btn-deck-go-to-lobby');
+      if (btnLobby && !btnLobby._bound) {
+        btnLobby._bound = true;
+        btnLobby.addEventListener('click', () => {
+          this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+          this.reconcileDOM();
+        });
       }
     }
   }
@@ -5330,6 +7039,32 @@ export class RPMAppController {
       badge.className = 'deck-validation-badge valid';
       badge.textContent = `✅ VALID (${report.mainCount} Main / ${report.sideboardCount} Sideboard)`;
       errorList.innerHTML = '';
+
+      const compatTier = report.compatibilityBadge || report.supportTier || 'FULL';
+      let btnReview = view.querySelector('#btn-submit-deck-review');
+      if (compatTier === 'ASSISTED' || compatTier === 'UNSUPPORTED' || (Array.isArray(report.unverifiedCards) && report.unverifiedCards.length > 0)) {
+        if (!btnReview) {
+          btnReview = document.createElement('button');
+          btnReview.id = 'btn-submit-deck-review';
+          btnReview.className = 'btn btn-submit-deck-review';
+          btnReview.textContent = '📩 Submit for Full Support Review';
+          badge.parentElement?.appendChild(btnReview);
+        }
+        btnReview.style.display = 'inline-flex';
+        btnReview.onclick = () => {
+          const nameInput = view.querySelector('#deckbuilder-name-input');
+          const textarea = view.querySelector('#deckbuilder-text-input');
+          this.submitDeckToReviewQueue({
+            deckName: nameInput?.value || 'Custom Deck',
+            format: this.deckbuilderMode,
+            rawDecklist: textarea?.value || '',
+            compatibilityBadge: compatTier,
+            unverifiedCards: report.unverifiedCards || []
+          });
+        };
+      } else if (btnReview) {
+        btnReview.style.display = 'none';
+      }
     } else {
       badge.className = 'deck-validation-badge invalid';
       badge.textContent = `❌ INVALID (${report.errors.length} Errors)`;
@@ -5339,6 +7074,113 @@ export class RPMAppController {
         </li>
       `).join('');
     }
+  }
+
+  /**
+   * Renders active deck preview panel in Deckbuilder View.
+   * @private
+   */
+  _renderActiveDeckPreview(view, deckData) {
+    const panel = view.querySelector('#active-deck-preview-panel');
+    if (!panel) return;
+
+    if (!deckData) {
+      panel.innerHTML = `
+        <div class="active-deck-empty-state">
+          <p>No active deck configured for Slot ${this.activeDeckSlot}. Paste a decklist above or select a Starter Archetype to equip.</p>
+        </div>
+      `;
+      return;
+    }
+
+    const mainboard = deckData.mainboard || [];
+    const sideboard = deckData.sideboard || [];
+    const colorIdentity = Array.isArray(deckData.colorIdentity) && deckData.colorIdentity.length > 0 ? deckData.colorIdentity : ['C'];
+    const breakdown = deckData.breakdown || {
+      creatures: 0,
+      spells: 0,
+      otherPermanents: 0,
+      lands: 0,
+      sideboard: sideboard.reduce((a, c) => a + (Number(c.count) || 1), 0)
+    };
+
+    const creatures = [];
+    const spells = [];
+    const otherPermanents = [];
+    const lands = [];
+
+    for (const card of mainboard) {
+      const norm = (card.name || '').trim().toLowerCase();
+      const meta = getHydratedCardMetadata(card.name);
+      let typeLine = (card.typeLine || card.type || meta?.typeLine || meta?.type || '').toLowerCase();
+      if (!typeLine && BASIC_LAND_COLORS[norm]) typeLine = 'land';
+      if (!typeLine && DUAL_LAND_METADATA[norm]) typeLine = 'land';
+
+      if (typeLine.includes('creature')) {
+        creatures.push(card);
+      } else if (typeLine.includes('land') || DeckValidator.isBasicLand(card.name) || DUAL_LAND_METADATA[norm]) {
+        lands.push(card);
+      } else if (typeLine.includes('instant') || typeLine.includes('sorcery')) {
+        spells.push(card);
+      } else if (typeLine.includes('artifact') || typeLine.includes('enchantment') || typeLine.includes('planeswalker') || typeLine.includes('battle')) {
+        otherPermanents.push(card);
+      } else {
+        spells.push(card);
+      }
+    }
+
+    const formatLabel = deckData.format === 'RANKED_CONSTRUCT' ? '🏆 Ranked Construct (Modern)' : '⚡ Free Construct';
+
+    const renderCardList = (cards) => {
+      if (!cards || cards.length === 0) return '<li class="empty-cat-item"><em>None</em></li>';
+      return cards.map(c => {
+        if (!c.smokeTest) {
+          try {
+            c.smokeTest = OracleEffectCompiler.smokeTestCard(c);
+          } catch (_) {}
+        }
+        const isVerified = Boolean(c.compiledMechanics || c.smokeTest?.passed || c.typeLine);
+        const verifiedBadge = isVerified
+          ? `<span class="card-verified-badge" title="Smoke Test Passed (${c.smokeTest?.supportTier || 'VERIFIED'})" style="margin-left: 6px; font-size: 0.75rem; color: #4ade80;">🟢 Verified</span>`
+          : '';
+        return `<li class="card-item">${c.count || 1}x ${c.name}${verifiedBadge}</li>`;
+      }).join('');
+    };
+
+    panel.innerHTML = `
+      <div class="active-deck-preview-card">
+        <div class="preview-header">
+          <h3 class="preview-title">🃏 ${deckData.name || 'Custom Deck'} <span class="slot-tag">(Slot ${deckData.slot || this.activeDeckSlot})</span></h3>
+          <div class="preview-badges">
+            <span class="badge badge-format">${formatLabel}</span>
+            <span class="badge badge-counts">${deckData.mainCount || mainboard.reduce((a, c) => a + (Number(c.count) || 1), 0)} Main / ${deckData.sideboardCount || sideboard.reduce((a, c) => a + (Number(c.count) || 1), 0)} Sideboard</span>
+            <span class="badge badge-colors">Colors: ${colorIdentity.join('/')}</span>
+          </div>
+        </div>
+        <div class="preview-categories-grid">
+          <div class="category-column">
+            <h4>Creatures (${breakdown.creatures})</h4>
+            <ul class="preview-card-list">${renderCardList(creatures)}</ul>
+          </div>
+          <div class="category-column">
+            <h4>Spells (${breakdown.spells})</h4>
+            <ul class="preview-card-list">${renderCardList(spells)}</ul>
+          </div>
+          <div class="category-column">
+            <h4>Other Permanents (${breakdown.otherPermanents})</h4>
+            <ul class="preview-card-list">${renderCardList(otherPermanents)}</ul>
+          </div>
+          <div class="category-column">
+            <h4>Lands (${breakdown.lands})</h4>
+            <ul class="preview-card-list">${renderCardList(lands)}</ul>
+          </div>
+          <div class="category-column">
+            <h4>Sideboard (${breakdown.sideboard})</h4>
+            <ul class="preview-card-list">${renderCardList(sideboard)}</ul>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   /**
@@ -5357,6 +7199,7 @@ export class RPMAppController {
           <!-- Hub Header (INV-HUB-1) -->
           <div class="lobby-hub-header">
             <h2>⚔️ BATTLE HUB: SELECT A GAME MODE</h2>
+            <div id="lobby-equipped-deck-badge" class="lobby-equipped-deck-badge"></div>
             <p>Jump into modern constructed matchmaking, custom multiplayer pods, or watch ongoing matches.</p>
           </div>
 
@@ -5534,6 +7377,42 @@ export class RPMAppController {
       });
     }
 
+    // Render equipped deck badge in lobby hub header
+    const equippedBadge = view.querySelector('#lobby-equipped-deck-badge');
+    if (equippedBadge) {
+      const equipped = this.getActiveDeckForPlayer(this.myPlayerId);
+      if (equipped) {
+        const cardCount = equipped.mainCount || (equipped.mainboard ? equipped.mainboard.reduce((a, c) => a + (Number(c.count) || 1), 0) : 60);
+        equippedBadge.innerHTML = `
+          <div class="equipped-badge-content">
+            <span class="equipped-icon">🃏</span>
+            <span class="equipped-label">Equipped Deck:</span>
+            <strong class="equipped-deck-name">${equipped.name || 'Custom Deck'}</strong>
+            <span class="equipped-details">(${cardCount} cards — Slot ${equipped.slot || this.activeDeckSlot})</span>
+            <button id="btn-lobby-change-deck" class="btn btn-change-deck">Change Deck</button>
+          </div>
+        `;
+      } else {
+        equippedBadge.innerHTML = `
+          <div class="equipped-badge-content">
+            <span class="equipped-icon">🃏</span>
+            <span class="equipped-label">Equipped Deck:</span>
+            <strong class="equipped-deck-name">Mono-Red Starter</strong>
+            <span class="equipped-details">(60 cards — Starter)</span>
+            <button id="btn-lobby-change-deck" class="btn btn-change-deck">Equip Custom Deck</button>
+          </div>
+        `;
+      }
+      const btnChange = equippedBadge.querySelector('#btn-lobby-change-deck');
+      if (btnChange && !btnChange._bound) {
+        btnChange._bound = true;
+        btnChange.addEventListener('click', () => {
+          this.tabRouter.navigate('DECKBUILDER', this.getMatchState(), this.isSpectator());
+          this.reconcileDOM();
+        });
+      }
+    }
+
     this._reconcileLobbySeating(view);
   }
 
@@ -5588,14 +7467,40 @@ export class RPMAppController {
       pod.className = `lobby-seat-pod ${slot ? 'occupied' : 'empty'} ${slot?.isReady ? 'ready' : ''} ${slot?.isBot ? 'bot-seat' : ''}`;
       if (slot) {
         if (slot.isBot) {
+          const currentBotDeck = this.botAssignedDecks?.[String(s)] || 'RANDOM';
+          const preconOptionsHtml = PRECONSTRUCTED_STARTER_DECKS.map(d =>
+            `<option value="${d.id}" ${currentBotDeck === d.id ? 'selected' : ''}>${d.badge ? `${d.badge} ` : ''}${d.name}</option>`
+          ).join('');
+          const allSlots = this.deckSlotManager ? this.deckSlotManager.getAllSlots() : [];
+          const customSlotOptionsHtml = allSlots
+            .filter(sl => sl.isUnlocked && sl.deck)
+            .map(sl => `<option value="${sl.slotId}" ${currentBotDeck === sl.slotId ? 'selected' : ''}>[${sl.label}] ${sl.deck.name || 'Saved Deck'}</option>`)
+            .join('');
+
           pod.innerHTML = `
             <div class="seat-num">Seat ${s}</div>
             <div class="seat-player">🤖 ${slot.playerName}</div>
             <div class="seat-status">✅ Ready (AI)</div>
+            <div class="bot-deck-selector-wrap">
+              <label class="bot-deck-label" for="bot-deck-select-${s}">Bot Deck:</label>
+              <select id="bot-deck-select-${s}" class="bot-deck-select" data-seat="${s}">
+                <option value="RANDOM" ${currentBotDeck === 'RANDOM' ? 'selected' : ''}>🎲 Aleatorio (Random Starter)</option>
+                <optgroup label="Starter &amp; Beta Decks">
+                  ${preconOptionsHtml}
+                </optgroup>
+                ${customSlotOptionsHtml ? `<optgroup label="Your Saved Slots">${customSlotOptionsHtml}</optgroup>` : ''}
+              </select>
+            </div>
             <div class="seat-actions">
               <button class="btn btn-remove-bot" data-seat="${s}">✖ Remove Bot</button>
             </div>
           `;
+          const selectDeck = pod.querySelector('.bot-deck-select');
+          if (selectDeck) {
+            selectDeck.addEventListener('change', (e) => {
+              this.assignDeckToBot(s, e.target.value);
+            });
+          }
           const btnRemove = pod.querySelector('.btn-remove-bot');
           if (btnRemove) {
             btnRemove.addEventListener('click', () => {
@@ -5831,10 +7736,12 @@ export class RPMAppController {
    * Strictly enforces INV-HARNESS-6.
    */
   closeModal() {
-    if (this.activeModalType === 'NONE') return;
     const prevType = this.activeModalType;
     this.activeModalType = 'NONE';
     this.activeModalData = null;
+    this._isVictoryModalOpen = false;
+    this._isDeckbuilderModalOpen = false;
+    this._isRecapModalOpen = false;
 
     if (this.cardModal && prevType === 'CARD_OVERLAY') {
       this.cardModal.close();
@@ -5842,11 +7749,22 @@ export class RPMAppController {
 
     const modalRoot = this.container?.querySelector('#modal-root');
     if (modalRoot) {
-      const temporaryModals = modalRoot.querySelectorAll('.modal-dialog-box, .game-over-modal-backdrop, #concede-modal, #contextual-auth-modal, #contextual-deck-modal');
+      const temporaryModals = modalRoot.querySelectorAll(
+        '.modal-backdrop-harness, .modal-dialog-box, .game-over-modal-backdrop, #victory-modal-wrapper, #deckbuilder-modal-wrapper, #recap-modal-wrapper, #game-over-modal, #concede-modal, #contextual-auth-modal, #contextual-deck-modal'
+      );
       for (const m of temporaryModals) {
-        try { m.remove(); } catch (_) {}
+        try {
+          if (typeof m.remove === 'function') {
+            m.remove();
+          } else if (m.parentNode && typeof m.parentNode.removeChild === 'function') {
+            m.parentNode.removeChild(m);
+          }
+        } catch (_) {}
       }
-      modalRoot.setAttribute('aria-hidden', 'true');
+      if (!this.diceRollOverlay?.isOpen && !this.targetModal?.isOpen) {
+        modalRoot.setAttribute('aria-hidden', 'true');
+        modalRoot.style.pointerEvents = 'none';
+      }
     }
   }
 
@@ -5854,8 +7772,8 @@ export class RPMAppController {
    * Starts the CR 103 pre-game sequence (roll -> play/draw -> London mulligan -> GAME_ACTIVE) for a 1v1 match.
    * Opt-in via `options.pregame === true` (enabled by index.html); headless harnesses keep the deterministic start.
    */
-  _beginPregame() {
-    if (!this.tabletopState || !this.priorityMachine || !Array.isArray(this.playerIds) || this.playerIds.length !== 2) return null;
+  _beginPregame(preRolled = null) {
+    if (!this.tabletopState || !this.priorityMachine || !Array.isArray(this.playerIds) || this.playerIds.length < 2) return null;
     const machine = new PregameStateMachine({
       players: [...this.playerIds],
       tabletopState: this.tabletopState,
@@ -5865,20 +7783,25 @@ export class RPMAppController {
     this.tabletopState.pregameMachine = machine;
     this.pregameActive = true;
 
-    const roll = machine.dispatch('EXECUTE_STARTING_ROLL');
+    const hasPreRolls = preRolled && preRolled.rolls && typeof preRolled.rolls === 'object' &&
+      this.playerIds.every(pid => typeof preRolled.rolls[pid] === 'number');
+    const roll = hasPreRolls
+      ? machine.dispatch('EXECUTE_STARTING_ROLL', { rolls: preRolled.rolls })
+      : machine.dispatch('EXECUTE_STARTING_ROLL');
     const nameOf = (pid) => this.getFriendlyPlayerName(pid);
-    const [a, b] = this.playerIds;
-    const rollMsg = `Starting roll (d20): ${nameOf(a)} rolled ${roll.rolls[a]} vs ${nameOf(b)} rolled ${roll.rolls[b]} — ${nameOf(roll.winnerId)} wins choice`;
+    const rollsDesc = this.playerIds.map(pid => `${nameOf(pid)} rolled ${roll.rolls[pid] || 0}`).join(' vs ');
+    const rollMsg = `Starting roll (d20): ${rollsDesc} — ${nameOf(roll.winnerId)} wins choice`;
     this.showToast?.(rollMsg);
     this.appendExecutionLog('Pre-Game', `🎲 ${rollMsg}`, { playerId: roll.winnerId });
 
     let choice = 'PLAY';
     if (roll.winnerId === this.myPlayerId && typeof window !== 'undefined' && typeof window.confirm === 'function') {
-      choice = window.confirm(`You won the roll (${roll.rolls[this.myPlayerId]} vs ${roll.rolls[roll.winnerId === a ? b : a]}).\nOK = PLAY first, Cancel = DRAW first`) ? 'PLAY' : 'DRAW';
+      choice = window.confirm(`You won the roll (${roll.rolls[this.myPlayerId]}).\nOK = PLAY first, Cancel = DRAW first`) ? 'PLAY' : 'DRAW';
     }
     machine.dispatch('SELECT_PLAY_OR_DRAW', { playerId: roll.winnerId, choice });
     this.appendExecutionLog('Pre-Game', `⚡ ${nameOf(roll.winnerId)} chose to ${choice} (${nameOf(machine.startingPlayerId)} goes first)`, { playerId: roll.winnerId });
     this._advanceMulligans();
+    this.reconcileDOM();
     return machine;
   }
 
@@ -5926,13 +7849,166 @@ export class RPMAppController {
     if (machine.state === PREGAME_STATES.GAME_ACTIVE) this._finishPregame();
   }
 
+  _resolveOpeningHandActions() {
+    if (this._openingHandActionsResolved) return false;
+
+    const myPlayer = this.tabletopState?.getPlayer?.(this.myPlayerId) || this.tabletopState?.players?.[this.myPlayerId];
+    const myHand = myPlayer?.hand || myPlayer?.zones?.hand || [];
+    const hasLeylineInHand = myHand.some(c =>
+      c && (
+        c.compiledMechanics?.openingHandAction === 'START_ON_BATTLEFIELD' ||
+        /^leyline\s+axe$/i.test((c.name || '').trim()) ||
+        /opening\s+hand,\s*you\s+may\s+begin\s+the\s+game\s+with\s+(?:it|this\s+card|[^\n,]+)\s+on\s+the\s+battlefield/i.test(c.oracleText || c.text || '')
+      )
+    );
+
+    const isInteractive = typeof this.isInteractiveBrowserMode === 'function' &&
+      this.isInteractiveBrowserMode() &&
+      typeof document !== 'undefined';
+
+    if (hasLeylineInHand && isInteractive) {
+      const modalRoot = (this.container?.querySelector && this.container.querySelector('#modal-root')) ||
+        (typeof document !== 'undefined' ? (document.getElementById('modal-root') || document.body) : null);
+      if (!modalRoot) return false;
+
+      const existing = modalRoot.querySelector('#leyline-opening-hand-modal');
+      if (existing) {
+        try { existing.remove(); } catch (_) {
+          if (existing.parentElement) existing.parentElement.removeChild(existing);
+        }
+      }
+
+      if (modalRoot.id === 'modal-root') {
+        modalRoot.setAttribute('aria-hidden', 'false');
+        modalRoot.style.pointerEvents = 'auto';
+      }
+
+      const modal = document.createElement('div');
+      modal.id = 'leyline-opening-hand-modal';
+      modal.className = 'modal-backdrop active';
+      modal.style.cssText = 'pointer-events: auto; display: flex; align-items: center; justify-content: center; z-index: 10000; position: fixed; inset: 0; background: rgba(0,0,0,0.8);';
+      modal.innerHTML = `
+        <div class="modal-dialog-box" style="background: #1e293b; border: 2px solid #3b82f6; border-radius: 8px; padding: 24px; max-width: 480px; text-align: center; color: #f8fafc;">
+          <h3 style="margin-top: 0; color: #60a5fa;">⚡ Opening Hand Action (CR 103.6)</h3>
+          <p>You have <strong>Leyline Axe</strong> in your opening hand. You may begin the game with it on the battlefield for free!</p>
+          <div style="display: flex; gap: 12px; justify-content: center; margin-top: 20px;">
+            <button id="btn-leyline-battlefield" class="btn btn-primary" style="padding: 10px 18px; font-weight: bold; background: #2563eb; color: #fff; border: none; border-radius: 6px; cursor: pointer;">⚡ Put on Battlefield (Free)</button>
+            <button id="btn-leyline-hand" class="btn btn-secondary" style="padding: 10px 18px; background: #475569; color: #fff; border: none; border-radius: 6px; cursor: pointer;">✋ Keep in Hand</button>
+          </div>
+        </div>
+      `;
+
+      const removeModal = () => {
+        try { modal.remove(); } catch (_) {
+          if (modal.parentElement) modal.parentElement.removeChild(modal);
+        }
+        if (modalRoot.id === 'modal-root') {
+          const remainingModals = modalRoot.querySelectorAll?.('.modal-backdrop:not(.hidden):not([style*="display: none"]), .target-modal-backdrop:not(.hidden):not([style*="display: none"])');
+          if (!remainingModals || remainingModals.length === 0) {
+            modalRoot.setAttribute('aria-hidden', 'true');
+            modalRoot.style.pointerEvents = '';
+          }
+        }
+      };
+
+      const resolveOtherPlayers = () => {
+        const otherPids = Object.keys(this.tabletopState?.players || {}).filter(id => id !== this.myPlayerId);
+        for (const oppId of otherPids) {
+          if (typeof this.tabletopState?.resolveOpeningHandActions === 'function') {
+            const opened = this.tabletopState.resolveOpeningHandActions(oppId);
+            if (Array.isArray(opened)) {
+              for (const item of opened) {
+                const name = item.name || item.card?.name || 'Leyline Axe';
+                const pid = item.playerId || item.controllerId || oppId;
+                this.addTurnCommandLog?.(`⚔️ Opening Hand Action: ${name} put onto battlefield!`, { playerId: pid });
+              }
+            }
+          }
+        }
+      };
+
+      modal.querySelector('#btn-leyline-battlefield')?.addEventListener('click', () => {
+        removeModal();
+        let placed = false;
+        if (typeof this.tabletopState?.resolveOpeningHandActions === 'function') {
+          const opened = this.tabletopState.resolveOpeningHandActions(this.myPlayerId);
+          if (Array.isArray(opened) && opened.length > 0) {
+            placed = true;
+            for (const item of opened) {
+              const name = item.name || item.card?.name || 'Leyline Axe';
+              const pid = item.playerId || item.controllerId || this.myPlayerId;
+              this.addTurnCommandLog?.(`⚔️ Opening Hand Action: ${name} put onto battlefield!`, { playerId: pid });
+            }
+          }
+        }
+        if (!placed && myPlayer) {
+          const hand = myPlayer.hand || myPlayer.zones?.hand || [];
+          const idx = hand.findIndex(c => c && (/^leyline\s+axe$/i.test((c.name || '').trim()) || c.compiledMechanics?.openingHandAction === 'START_ON_BATTLEFIELD'));
+          if (idx !== -1) {
+            const [c] = hand.splice(idx, 1);
+            c.zone = 'battlefield';
+            c.subzone = 'noncreatures';
+            myPlayer.battlefield = myPlayer.battlefield || {};
+            myPlayer.battlefield.noncreatures = myPlayer.battlefield.noncreatures || [];
+            myPlayer.battlefield.noncreatures.push(c);
+            this.addTurnCommandLog?.(`⚔️ Opening Hand Action: ${c.name || 'Leyline Axe'} put onto battlefield!`, { playerId: this.myPlayerId });
+          }
+        }
+        resolveOtherPlayers();
+        this._openingHandActionsResolved = true;
+        this._finishPregame();
+      });
+
+      modal.querySelector('#btn-leyline-hand')?.addEventListener('click', () => {
+        removeModal();
+        this.addTurnCommandLog?.(`🛡️ Leyline Axe kept in hand by player election (CR 103.6)`, { playerId: this.myPlayerId });
+        resolveOtherPlayers();
+        this._openingHandActionsResolved = true;
+        this._finishPregame();
+      });
+
+      modalRoot.appendChild(modal);
+      return true; // Pauses pregame activation!
+    }
+
+    this._openingHandActionsResolved = true;
+    if (typeof this.tabletopState?.resolveOpeningHandActions === 'function') {
+      try {
+        const opened = this.tabletopState.resolveOpeningHandActions();
+        if (Array.isArray(opened)) {
+          for (const item of opened) {
+            const name = item.name || item.card?.name || 'Leyline Axe';
+            const pid = item.playerId || item.controllerId || this.myPlayerId;
+            this.addTurnCommandLog?.(`⚔️ Opening Hand Action: ${name} put onto battlefield!`, { playerId: pid });
+          }
+        }
+      } catch (err) {
+        console.warn('[app] resolveOpeningHandActions error:', err);
+      }
+    }
+    return false;
+  }
+
   _finishPregame() {
+    const isPaused = this._resolveOpeningHandActions();
+    if (isPaused) {
+      this.pregameActive = true;
+      return;
+    }
     this.pregameActive = false;
     this.mulliganModal?.close?.();
     const starterName = this.getFriendlyPlayerName(this.pregameMachine?.startingPlayerId);
     this.showToast?.(`Game start: ${starterName} goes first`);
     this.appendExecutionLog('Turn 1', `🚀 Match active! ${starterName} begins Turn 1 (${this.priorityMachine?.currentPhaseStep || 'PRECOMBAT_MAIN'})`, { playerId: this.pregameMachine?.startingPlayerId });
     this.reconcileDOM();
+
+    const activePid = this.priorityMachine?.activePlayerId;
+    if (activePid && activePid !== this.myPlayerId) {
+      const bot = this.botAgents?.get(activePid) || (this.perkinsAgent?.slotId === activePid ? this.perkinsAgent : null);
+      if (bot && typeof bot.evaluateTurnPhase === 'function') {
+        Promise.resolve().then(() => bot.evaluateTurnPhase(this.priorityMachine.currentPhaseStep));
+      }
+    }
   }
 
   handleMulliganKeep(data) {
@@ -5943,6 +8019,7 @@ export class RPMAppController {
       this.render();
       return;
     }
+    this._resolveOpeningHandActions();
     if (this.priorityMachine && typeof this.priorityMachine.completeMulliganPhase === 'function') {
       this.priorityMachine.completeMulliganPhase();
     }
@@ -5989,6 +8066,7 @@ export class RPMAppController {
         player.library.push(removed);
       }
     }
+    this._resolveOpeningHandActions();
     if (this.priorityMachine && typeof this.priorityMachine.completeMulliganPhase === 'function') {
       this.priorityMachine.completeMulliganPhase();
     }
@@ -6019,21 +8097,61 @@ export class RPMAppController {
 
   handleAbilityActivated(data) {
     const { card, ability, playerId } = data;
-    this.tabletopState?.dispatch?.('ACTIVATE_ABILITY', {
-      playerId,
-      instanceId: card.instanceId,
-      ability
-    });
-    this.render();
+    const pid = playerId || this.myPlayerId;
+    const abilityId = typeof ability === 'string' ? ability : (ability?.id || ability?.action || 'ANIMATE_LAND');
+    if (this.tabletopState) {
+      if (typeof this.tabletopState.activatePermanentAbility === 'function') {
+        try {
+          this.tabletopState.activatePermanentAbility(pid, card.instanceId, abilityId, { ability });
+        } catch (err) {
+          this.showToast?.(err.message || 'Cannot activate ability');
+        }
+      } else if (typeof this.tabletopState.activateAbility === 'function') {
+        try {
+          this.tabletopState.activateAbility(pid, card.instanceId, abilityId, { ability });
+        } catch (err) {
+          this.showToast?.(err.message || 'Cannot activate ability');
+        }
+      } else {
+        this.tabletopState?.dispatch?.('ACTIVATE_ABILITY', {
+          playerId: pid,
+          instanceId: card.instanceId,
+          ability
+        });
+      }
+    }
+    this.render?.();
+    this.reconcileDOM?.();
   }
 
   handleDrawerTapMana(data) {
-    const { card, playerId } = data;
-    this.tabletopState?.dispatch?.('TAP_PERMANENT', {
-      playerId,
-      instanceId: card.instanceId
-    });
-    this.render();
+    const { card, playerId, chosenColor, lifeCost } = data;
+    const pid = playerId || this.myPlayerId;
+    if (this.tabletopState && typeof this.tabletopState.tapLandForMana === 'function') {
+      try {
+        const p = this.tabletopState.getPlayer?.(pid);
+        const tapsBefore = (p?._undoableManaTaps || []).length;
+        const tapResult = this.tabletopState.tapLandForMana(pid, card.instanceId, chosenColor);
+        if (p && (p._undoableManaTaps || []).length === tapsBefore) {
+          p._undoableManaTaps = p._undoableManaTaps || [];
+          p._undoableManaTaps.push({
+            instanceId: card.instanceId,
+            color: chosenColor || tapResult?.color || 'C',
+            lifePaid: lifeCost ?? tapResult?.lifePaid ?? 0,
+            timestamp: Date.now()
+          });
+        }
+      } catch (err) {
+        this.showToast?.(err.message || 'Cannot tap land for mana');
+      }
+    } else {
+      this.tabletopState?.dispatch?.('TAP_PERMANENT', {
+        playerId: pid,
+        instanceId: card.instanceId
+      });
+    }
+    this.render?.();
+    this.reconcileDOM?.();
   }
 
   handleDamageConfirmed(data) {
@@ -6069,7 +8187,18 @@ export class RPMAppController {
    * @private
    */
   _renderDeckbuilderModal(modalRoot, activeTab = 'guidelines') {
-    modalRoot.innerHTML = `
+    this._isDeckbuilderModalOpen = true;
+    modalRoot.setAttribute('aria-hidden', 'false');
+    modalRoot.style.pointerEvents = 'auto';
+
+    let wrapper = modalRoot.querySelector('#deckbuilder-modal-wrapper');
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.id = 'deckbuilder-modal-wrapper';
+      modalRoot.appendChild(wrapper);
+    }
+
+    wrapper.innerHTML = `
       <div class="modal-backdrop-harness"></div>
       <div class="modal-dialog-box deckbuilder-modal-dialog" role="dialog" aria-modal="true" aria-label="Deckbuilder AI">
         <div class="modal-header-row" style="padding: 12px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--rpm-border);">
@@ -6086,13 +8215,13 @@ export class RPMAppController {
     `;
 
     // Close button & backdrop click
-    const closeBtn = modalRoot.querySelector('.modal-close-btn');
+    const closeBtn = wrapper.querySelector('.modal-close-btn');
     if (closeBtn) closeBtn.addEventListener('click', () => this.closeModal());
-    const backdrop = modalRoot.querySelector('.modal-backdrop-harness');
+    const backdrop = wrapper.querySelector('.modal-backdrop-harness');
     if (backdrop) backdrop.addEventListener('click', () => this.closeModal());
 
     // Tab switcher
-    const tabBtns = modalRoot.querySelectorAll('.btn-modal-tab');
+    const tabBtns = wrapper.querySelectorAll('.btn-modal-tab');
     tabBtns.forEach(btn => {
       btn.addEventListener('click', () => {
         const tab = btn.getAttribute('data-tab');
@@ -6100,7 +8229,7 @@ export class RPMAppController {
       });
     });
 
-    const contentDiv = modalRoot.querySelector('#deckbuilder-tab-content');
+    const contentDiv = wrapper.querySelector('#deckbuilder-tab-content');
     if (!contentDiv) return;
 
     if (activeTab === 'guidelines') {
@@ -6306,22 +8435,399 @@ export class RPMAppController {
    * @private
    */
   _renderVictoryModal(modalRoot, data = {}) {
-    modalRoot.innerHTML = `
+    this._isVictoryModalOpen = true;
+    modalRoot.setAttribute('aria-hidden', 'false');
+    modalRoot.style.pointerEvents = 'auto';
+
+    let wrapper = modalRoot.querySelector('#victory-modal-wrapper');
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.id = 'victory-modal-wrapper';
+      modalRoot.appendChild(wrapper);
+    }
+
+    const winnerId = data.winnerId || data.winner;
+    const isWinner = Boolean(winnerId && winnerId === this.myPlayerId);
+    let winnerName = data.winnerName;
+    if (!winnerName) {
+      if (isWinner) {
+        winnerName = this.username || 'You';
+      } else {
+        const p = this.tabletopState?.players?.[winnerId];
+        winnerName = p?.name || this.getFriendlyPlayerName(winnerId);
+      }
+    }
+
+    wrapper.innerHTML = `
       <div class="modal-backdrop-harness"></div>
       <div class="modal-dialog-box victory-modal-dialog" role="dialog" aria-modal="true" aria-label="Victory Announcement">
-        <h2 class="victory-title">🏆 VICTORY!</h2>
-        <p style="font-size: 1.1rem; color: #ffffff; margin: 0 0 16px 0;">Planeswalker <strong>${data.winnerName || 'Planeswalker'}</strong> Reigns Supreme!</p>
+        <h2 class="victory-title" style="color: ${isWinner ? 'var(--rpm-gold, #eab308)' : '#ef4444'}; margin-top: 0;">
+          ${isWinner ? '🏆 VICTORY!' : '💀 DEFEAT'}
+        </h2>
+        <p style="font-size: 1.1rem; color: #ffffff; margin: 0 0 16px 0;">
+          ${isWinner ? `Planeswalker <strong>${winnerName}</strong> Reigns Supreme!` : `${winnerName} has won the match.`}
+        </p>
         <div id="victory-fallback-container"></div>
-        <div style="margin-top: 20px;">
-          <button class="btn btn-secondary modal-close-btn">Return to Arena</button>
+        <div class="modal-actions victory-modal-actions" style="display: flex; flex-direction: column; gap: 10px; margin-top: 20px;">
+          <button id="btn-victory-inspect-arena" class="btn btn-secondary" type="button">
+            🔍 Return to Arena (Inspect Board & Logs)
+          </button>
+          <button id="btn-victory-view-recap" class="btn btn-secondary" type="button">
+            📜 View / Save Match Recap
+          </button>
+          <button id="btn-victory-return-lobby" class="btn btn-primary" type="button">
+            🏠 Back to Menu (Lobby)
+          </button>
         </div>
       </div>
     `;
 
-    const closeBtn = modalRoot.querySelector('.modal-close-btn');
-    if (closeBtn) closeBtn.addEventListener('click', () => this.closeModal());
-    const backdrop = modalRoot.querySelector('.modal-backdrop-harness');
-    if (backdrop) backdrop.addEventListener('click', () => this.closeModal());
+    // 1. Return to Arena (Inspect Board & Logs)
+    const btnInspect = wrapper.querySelector('#btn-victory-inspect-arena');
+    if (btnInspect) {
+      btnInspect.addEventListener('click', () => {
+        this.closeModal();
+        this._renderPostGameArenaBanner(winnerName);
+      });
+    }
+
+    // 2. View / Save Match Recap
+    const btnRecap = wrapper.querySelector('#btn-victory-view-recap');
+    if (btnRecap) {
+      btnRecap.addEventListener('click', () => {
+        this._renderMatchRecapModal(modalRoot);
+      });
+    }
+
+    // 3. Back to Menu (Lobby)
+    const btnLobby = wrapper.querySelector('#btn-victory-return-lobby');
+    if (btnLobby) {
+      btnLobby.addEventListener('click', () => {
+        this._removePostGameArenaBanner();
+        this.closeModal();
+        this.isMatchActiveFlag = false;
+        this._hasMatchStarted = false;
+        this.switchView('LOBBY');
+      });
+    }
+
+    // Backdrop click: closes modal and reveals arena banner
+    const backdrop = wrapper.querySelector('.modal-backdrop-harness');
+    if (backdrop) {
+      backdrop.addEventListener('click', () => {
+        this.closeModal();
+        this._renderPostGameArenaBanner(winnerName);
+      });
+    }
+  }
+
+  /**
+   * Renders a non-intrusive banner atop the arena allowing post-game inspection.
+   * @private
+   */
+  _renderPostGameArenaBanner(winnerName = '') {
+    this._removePostGameArenaBanner();
+    const arenaView = this.container?.querySelector('#view-arena');
+    if (!arenaView) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'post-game-arena-banner';
+    banner.className = 'post-game-arena-banner';
+    banner.style.cssText = 'background: rgba(15, 23, 42, 0.95); border: 1px solid var(--rpm-gold, #eab308); border-radius: 8px; padding: 10px 16px; margin: 8px 12px; display: flex; justify-content: space-between; align-items: center; z-index: 100; box-shadow: 0 4px 12px rgba(0,0,0,0.5);';
+
+    banner.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 1.2rem;">🏁</span>
+        <span style="color: #ffffff; font-weight: 600;">Match Ended${winnerName ? ` — Winner: ${winnerName}` : ''}</span>
+        <span style="color: #94a3b8; font-size: 0.85rem;">(Board & logs are frozen for inspection)</span>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <button id="btn-postgame-view-recap" class="btn btn-secondary" style="padding: 6px 12px; font-size: 0.85rem;">📜 View Match Recap</button>
+        <button id="btn-postgame-return-lobby" class="btn btn-primary" style="padding: 6px 12px; font-size: 0.85rem;">🏠 Back to Menu (Lobby)</button>
+      </div>
+    `;
+
+    const btnRecap = banner.querySelector('#btn-postgame-view-recap');
+    if (btnRecap) {
+      btnRecap.addEventListener('click', () => {
+        const modalRoot = this.container?.querySelector('#modal-root');
+        if (modalRoot) {
+          this._renderMatchRecapModal(modalRoot);
+        }
+      });
+    }
+
+    const btnLobby = banner.querySelector('#btn-postgame-return-lobby');
+    if (btnLobby) {
+      btnLobby.addEventListener('click', () => {
+        this._removePostGameArenaBanner();
+        this.closeModal();
+        this.isMatchActiveFlag = false;
+        this._hasMatchStarted = false;
+        this.switchView('LOBBY');
+      });
+    }
+
+    if (arenaView.firstChild) {
+      arenaView.insertBefore(banner, arenaView.firstChild);
+    } else {
+      arenaView.appendChild(banner);
+    }
+  }
+
+  _removePostGameArenaBanner() {
+    const existing = this.container?.querySelector('#post-game-arena-banner');
+    if (existing) {
+      try { existing.remove(); } catch (_) {}
+    }
+  }
+
+  /**
+   * Renders the Match Recap view/modal.
+   * @private
+   */
+  _renderMatchRecapModal(modalRoot) {
+    if (!modalRoot) modalRoot = this.container?.querySelector('#modal-root');
+    if (!modalRoot) return;
+
+    this._isRecapModalOpen = true;
+    modalRoot.setAttribute('aria-hidden', 'false');
+    modalRoot.style.pointerEvents = 'auto';
+
+    // Remove any existing recap or victory wrapper
+    const existing = modalRoot.querySelectorAll('#recap-modal-wrapper, #victory-modal-wrapper');
+    for (const el of existing) {
+      try { el.remove(); } catch (_) {}
+    }
+
+    let wrapper = modalRoot.querySelector('#recap-modal-wrapper');
+    if (!wrapper) {
+      wrapper = document.createElement('div');
+      wrapper.id = 'recap-modal-wrapper';
+      modalRoot.appendChild(wrapper);
+    }
+
+    // Get latest match record from matchHistory or archive
+    const latestRecord = (this.matchHistory && this.matchHistory.length > 0)
+      ? this.matchHistory[this.matchHistory.length - 1]
+      : this.archiveMatchRecord();
+
+    const winnerName = latestRecord?.winnerName || 'Winner';
+    const turnCount = latestRecord?.turnCount || this.priorityMachine?.turnNumber || 1;
+    const roundCount = latestRecord?.roundCount || this.priorityMachine?.roundNumber || 1;
+    const traceCount = latestRecord?.traceEntriesCount || this.traceLogger?.entries?.length || 0;
+    const execCount = latestRecord?.executionLog?.length || this.executionLog?.length || 0;
+
+    // Render life totals
+    let lifeTotalsHTML = '';
+    const playersObj = latestRecord?.players || this.tabletopState?.players || {};
+    for (const [pid, p] of Object.entries(playersObj)) {
+      const pName = p.name || this.getFriendlyPlayerName(pid);
+      const life = p.life !== undefined ? p.life : (p.resources?.life ?? 20);
+      const isElim = p.isEliminated || life <= 0;
+      lifeTotalsHTML += `
+        <div style="background: rgba(30, 41, 59, 0.7); padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-weight: 600; color: #f8fafc;">${pName}</span>
+          <span style="color: ${isElim ? '#ef4444' : '#22c55e'}; font-weight: bold;">
+            ${life} HP ${isElim ? '💀 (Eliminated)' : '✨'}
+          </span>
+        </div>
+      `;
+    }
+
+    // Recent logs preview (last 5 entries)
+    const logs = latestRecord?.executionLog || this.executionLog || [];
+    const recentLogs = logs.slice(-5).reverse();
+    let logsPreviewHTML = recentLogs.map(l => `
+      <div style="font-size: 0.8rem; color: #cbd5e1; padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.06); font-family: monospace;">
+        ${l.text || l.summary || JSON.stringify(l)}
+      </div>
+    `).join('') || '<div style="color: #64748b; font-size: 0.85rem;">No log entries recorded.</div>';
+
+    wrapper.innerHTML = `
+      <div class="modal-backdrop-harness"></div>
+      <div class="modal-dialog-box recap-modal-dialog" role="dialog" aria-modal="true" aria-label="Match Recap" style="max-width: 640px;">
+        <div class="modal-header-row" style="padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--rpm-border);">
+          <h2 style="margin: 0; font-size: 1.2rem; color: var(--rpm-aqua, #38bdf8);">📜 Match Recap & Replay</h2>
+          <button class="modal-close-btn btn-icon" style="color: #ffffff; font-size: 1.2rem; cursor: pointer;">&times;</button>
+        </div>
+        <div style="padding: 20px; overflow-y: auto; max-height: 65vh;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px;">
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+              <span style="color: #94a3b8; font-size: 0.75rem; text-transform: uppercase;">Winner</span>
+              <div style="font-size: 1.1rem; font-weight: bold; color: var(--rpm-gold, #eab308);">${winnerName}</div>
+            </div>
+            <div style="background: rgba(15, 23, 42, 0.6); padding: 10px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.08);">
+              <span style="color: #94a3b8; font-size: 0.75rem; text-transform: uppercase;">Duration</span>
+              <div style="font-size: 1.1rem; font-weight: bold; color: #f8fafc;">${roundCount} Rounds / Turn ${turnCount}</div>
+            </div>
+          </div>
+
+          <h3 style="font-size: 0.9rem; color: #94a3b8; text-transform: uppercase; margin: 12px 0 6px 0;">Final Life Totals</h3>
+          ${lifeTotalsHTML}
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin: 14px 0 6px 0;">
+            <h3 style="font-size: 0.9rem; color: #94a3b8; text-transform: uppercase; margin: 0;">Logs Summary</h3>
+            <span style="font-size: 0.8rem; color: #64748b;">${execCount} Action Logs • ${traceCount} Trace Events</span>
+          </div>
+          <div style="background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255,255,255,0.08); border-radius: 6px; padding: 10px; max-height: 120px; overflow-y: auto;">
+            ${logsPreviewHTML}
+          </div>
+
+          <div style="margin-top: 16px; text-align: center;">
+            <button id="btn-download-match-replay" class="btn btn-secondary" style="width: 100%; padding: 10px; font-weight: 600;">
+              💾 Download Replay (.json)
+            </button>
+          </div>
+        </div>
+
+        <div class="modal-actions" style="padding: 12px 20px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--rpm-border);">
+          <button id="btn-recap-return-arena" class="btn btn-secondary">🔍 Return to Arena</button>
+          <button id="btn-recap-return-lobby" class="btn btn-primary">🏠 Back to Menu (Lobby)</button>
+        </div>
+      </div>
+    `;
+
+    // Close button & backdrop
+    const closeBtn = wrapper.querySelector('.modal-close-btn');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+      this.closeModal();
+      this._renderPostGameArenaBanner(winnerName);
+    });
+    const backdrop = wrapper.querySelector('.modal-backdrop-harness');
+    if (backdrop) backdrop.addEventListener('click', () => {
+      this.closeModal();
+      this._renderPostGameArenaBanner(winnerName);
+    });
+
+    // Download Replay
+    const btnDownload = wrapper.querySelector('#btn-download-match-replay');
+    if (btnDownload) {
+      btnDownload.addEventListener('click', () => {
+        try {
+          const replayData = {
+            ...latestRecord,
+            traceJSON: typeof this.traceLogger?.exportAsJSON === 'function' ? this.traceLogger.exportAsJSON() : null,
+            exportedAt: new Date().toISOString()
+          };
+          const jsonStr = JSON.stringify(replayData, null, 2);
+          if (typeof document !== 'undefined' && typeof Blob !== 'undefined' && typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+            const blob = new Blob([jsonStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `rpm-replay-${latestRecord.matchId || Date.now()}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }
+        } catch (err) {
+          console.warn('[app] Could not download match replay:', err);
+        }
+      });
+    }
+
+    // Return to Arena
+    const btnReturnArena = wrapper.querySelector('#btn-recap-return-arena');
+    if (btnReturnArena) {
+      btnReturnArena.addEventListener('click', () => {
+        this.closeModal();
+        this._renderPostGameArenaBanner(winnerName);
+      });
+    }
+
+    // Return to Lobby
+    const btnReturnLobby = wrapper.querySelector('#btn-recap-return-lobby');
+    if (btnReturnLobby) {
+      btnReturnLobby.addEventListener('click', () => {
+        this._removePostGameArenaBanner();
+        this.closeModal();
+        this.isMatchActiveFlag = false;
+        this._hasMatchStarted = false;
+        this.switchView('LOBBY');
+      });
+    }
+  }
+
+  /**
+   * Archives a completed match record into this.matchHistory and localStorage (bounded to 10 records).
+   * @param {Object} [victoryData={}]
+   * @returns {Object}
+   */
+  archiveMatchRecord(victoryData = {}) {
+    const winnerId = victoryData.winner || victoryData.winnerId || null;
+    let winnerName = victoryData.winnerName || null;
+    if (!winnerName && winnerId) {
+      winnerName = this.getFriendlyPlayerName(winnerId);
+    }
+
+    const playersSummary = {};
+    if (this.tabletopState?.players) {
+      for (const [pid, p] of Object.entries(this.tabletopState.players)) {
+        playersSummary[pid] = {
+          name: p.name || this.getFriendlyPlayerName(pid),
+          life: p.resources?.life ?? 20,
+          isEliminated: Boolean(p.isEliminated),
+          creaturesCount: p.battlefield?.creatures?.length || 0,
+          graveyardCount: p.graveyard?.length || 0
+        };
+      }
+    }
+
+    const record = {
+      matchId: this.relayClient?.roomCode || `match_${Date.now()}`,
+      timestamp: Date.now(),
+      isoDate: new Date().toISOString(),
+      winnerId,
+      winnerName,
+      turnCount: this.priorityMachine?.turnNumber || 1,
+      roundCount: this.priorityMachine?.roundNumber || this.tabletopState?.roundNumber || 1,
+      players: playersSummary,
+      executionLog: Array.isArray(this.executionLog) ? [...this.executionLog] : [],
+      actionLog: Array.isArray(this.executionLog) ? [...this.executionLog] : [],
+      traceEntriesCount: this.traceLogger?.entries?.length || 0,
+      traceEntries: this.traceLogger?.entries ? [...this.traceLogger.entries] : []
+    };
+
+    if (!Array.isArray(this.matchHistory)) {
+      this.matchHistory = [];
+    }
+    this.matchHistory.push(record);
+
+    if (typeof localStorage !== 'undefined') {
+      try {
+        let saved = [];
+        const raw = localStorage.getItem('rpm_match_history_records');
+        if (raw) {
+          try {
+            saved = JSON.parse(raw);
+            if (!Array.isArray(saved)) saved = [];
+          } catch (_) { saved = []; }
+        }
+        saved.push(record);
+        saved = saved.slice(-10);
+        localStorage.setItem('rpm_match_history_records', JSON.stringify(saved));
+      } catch (err) {
+        console.warn('[app] Could not archive match to localStorage:', err);
+      }
+    }
+
+    return record;
+  }
+
+  /**
+   * Switches the active application tab view cleanly.
+   * @param {string} viewName
+   */
+  switchView(viewName) {
+    if (this.tabRouter) {
+      if (viewName === 'LOBBY') {
+        this.tabRouter.unlockAll?.();
+      }
+      this.tabRouter.navigate(viewName, this.getMatchState(), this.isSpectator());
+    }
+    this.reconcileDOM();
   }
 
   /**
@@ -6357,6 +8863,508 @@ export class RPMAppController {
   // ==========================================================================
 
   /**
+   * Computes available full action combinations for spells with multi-object requirements
+   * (e.g. Burn Together fling creature + damage recipient, or Stolen Uniform equipment + creature).
+   * 
+   * @param {string} playerId
+   * @param {Object} card
+   * @param {string} [castMode]
+   * @returns {Array<Object>}
+   */
+  _getActionCombinationsForSpell(playerId, card, castMode = null) {
+    if (!this.tabletopState || !card) return [];
+    if (castMode === 'MAIN') return [];
+    const p = this.tabletopState.players?.[playerId];
+    if (!p) return [];
+
+    const nameLower = (card.name || '').toLowerCase();
+    const isBurnTogether = (castMode === 'ADVENTURE') ||
+      (nameLower === 'burn together') ||
+      (nameLower.includes('burn together') && castMode !== 'MAIN' && !nameLower.includes('callous sell-sword'));
+    const isStolenUniform = nameLower.includes('stolen uniform') || /gain control of target equipment.*attach.*creature/i.test(card.oracleText || '');
+
+    // 1. Burn Together (Fling damage + sacrifice)
+    if (isBurnTogether) {
+      const creatures = [
+        ...(p.battlefield?.creatures || []),
+        ...(p.zones?.battlefield?.filter(c => /creature/i.test(c.typeLine || c.type || '')) || [])
+      ];
+      const uniqueCreatures = [];
+      const seenCr = new Set();
+      for (const cr of creatures) {
+        const id = cr.instanceId || cr.id;
+        if (id && !seenCr.has(id)) {
+          seenCr.add(id);
+          uniqueCreatures.push(cr);
+        }
+      }
+
+      const targets = [];
+      for (const [oppPid, opp] of Object.entries(this.tabletopState.players || {})) {
+        if (opp.isEliminated) continue;
+        if (oppPid !== playerId) {
+          targets.push({
+            id: oppPid,
+            type: 'PLAYER',
+            name: this.getFriendlyPlayerName(oppPid),
+            subtitle: `Life: ${opp.resources?.life ?? 20}`
+          });
+        }
+        const oppCreatures = [
+          ...(opp.battlefield?.creatures || []),
+          ...(opp.zones?.battlefield?.filter(c => /creature/i.test(c.typeLine || c.type || '')) || [])
+        ];
+        for (const cr of oppCreatures) {
+          const cid = cr.instanceId || cr.id;
+          if (cid) {
+            const stats = this.tabletopState.abilityEngine?.evaluateCreatureStats
+              ? this.tabletopState.abilityEngine.evaluateCreatureStats(cr, this.tabletopState)
+              : { power: cr.power ?? 0, toughness: cr.toughness ?? 0 };
+            targets.push({
+              id: cid,
+              type: 'CREATURE',
+              name: cr.name,
+              subtitle: `${stats.power}/${stats.toughness} (${this.getFriendlyPlayerName(oppPid)})`
+            });
+          }
+        }
+      }
+
+      const combos = [];
+      for (const cr of uniqueCreatures) {
+        const stats = this.tabletopState.abilityEngine?.evaluateCreatureStats
+          ? this.tabletopState.abilityEngine.evaluateCreatureStats(cr, this.tabletopState)
+          : { power: cr.power ?? 0, toughness: cr.toughness ?? 0 };
+        const pwr = stats.power;
+
+        for (const tg of targets) {
+          combos.push({
+            type: 'BURN_TOGETHER',
+            creatureId: cr.instanceId || cr.id,
+            creature: cr,
+            creatureName: cr.name,
+            power: pwr,
+            damage: pwr,
+            targetId: tg.id,
+            target: tg,
+            targetName: tg.name,
+            targetType: tg.type,
+            targetSubtitle: tg.subtitle,
+            label: `🔥 Sacrificar ${cr.name} (${pwr} DMG) ➔ Dañar a ${tg.name}${tg.subtitle ? ` (${tg.subtitle})` : ''}`,
+            targets: [cr.instanceId || cr.id, tg.id]
+          });
+        }
+      }
+      return combos;
+    }
+
+    // 2. Stolen Uniform (Target Equipment + Target Creature you control)
+    if (isStolenUniform) {
+      const myCreatures = [
+        ...(p.battlefield?.creatures || []),
+        ...(p.zones?.battlefield?.filter(c => /creature/i.test(c.typeLine || c.type || '')) || [])
+      ];
+      const allEquipments = [];
+      for (const [pid, pl] of Object.entries(this.tabletopState.players || {})) {
+        const noncreatures = [
+          ...(pl.battlefield?.noncreatures || []),
+          ...(pl.zones?.battlefield?.filter(c => !/creature/i.test(c.typeLine || c.type || '')) || [])
+        ];
+        for (const nc of noncreatures) {
+          if (nc && (nc.compiledMechanics?.isEquipment || /equipment/i.test(nc.typeLine || nc.type || ''))) {
+            allEquipments.push({ card: nc, ownerId: pid });
+          }
+        }
+      }
+
+      const combos = [];
+      for (const eqEntry of allEquipments) {
+        const eq = eqEntry.card;
+        for (const cr of myCreatures) {
+          combos.push({
+            type: 'STOLEN_UNIFORM',
+            equipmentId: eq.instanceId || eq.id,
+            equipment: eq,
+            equipmentName: eq.name,
+            creatureId: cr.instanceId || cr.id,
+            creature: cr,
+            creatureName: cr.name,
+            targetId: cr.instanceId || cr.id,
+            targetName: cr.name,
+            label: `🛡️ Anexar ${eq.name} ➔ a ${cr.name}`,
+            targets: [cr.instanceId || cr.id, eq.instanceId || eq.id]
+          });
+        }
+      }
+      return combos;
+    }
+
+    return [];
+  }
+
+  /**
+   * Initializes the singleton floating card preview tooltip element (#card-hover-preview-tooltip).
+   * @private
+   */
+  _initCardHoverPreviewTooltip() {
+    if (typeof document === 'undefined') return;
+    let tooltip = document.getElementById('card-hover-preview-tooltip');
+    if (!tooltip) {
+      tooltip = document.createElement('div');
+      tooltip.id = 'card-hover-preview-tooltip';
+      tooltip.className = 'card-hover-preview-tooltip hidden';
+      tooltip.style.display = 'none';
+      const host = this.container || document.body;
+      host.appendChild(tooltip);
+    }
+
+    if (!this._hasBoundGlobalTooltipDismiss) {
+      this._hasBoundGlobalTooltipDismiss = true;
+      const dismiss = () => this._hideCardPreviewTooltip();
+      document.addEventListener('scroll', dismiss, true);
+      document.addEventListener('pointerdown', (e) => {
+        if (!e.target?.closest?.('.hand-card-chip, .battlefield-card-chip, .opponent-land-card, .opponent-creature-card, .opponent-noncreature-card, .stack-item')) {
+          dismiss();
+        }
+      }, true);
+    }
+  }
+
+  /**
+   * Displays the floating card preview tooltip positioned intelligently near coordinates.
+   * @private
+   */
+  _showCardPreviewTooltip(card, clientX, clientY, sourceEl = null) {
+    if (!card || typeof document === 'undefined') return;
+    this._initCardHoverPreviewTooltip();
+    const tooltip = document.getElementById('card-hover-preview-tooltip');
+    if (!tooltip) return;
+
+    this._activePreviewCard = card;
+
+    const imgUrl = card.image_uris?.normal || card.image_uris?.small || card.imageUrl || card.image_uri || null;
+    const name = card.name || 'Card';
+    const manaCost = card.manaCost || '';
+    const typeLine = card.typeLine || card.type || '';
+    const oracleText = card.oracleText || card.text || card.oracle_text || '';
+
+    const isCreature = /creature/i.test(typeLine) || card.power !== undefined || card.effectivePower !== undefined;
+    let creatureDetailsHtml = '';
+    if (isCreature) {
+      const stats = this.tabletopState?.abilityEngine?.evaluateCreatureStats
+        ? this.tabletopState.abilityEngine.evaluateCreatureStats(card, this.tabletopState)
+        : { power: card.effectivePower ?? card.power ?? 0, toughness: card.effectiveToughness ?? card.toughness ?? 0 };
+      const power = stats.power ?? card.power ?? 0;
+      const toughness = stats.toughness ?? card.toughness ?? 0;
+
+      let countersLabel = '';
+      if (card.counters) {
+        if (card.counters['+1/+1']) {
+          countersLabel += `<span class="tooltip-counters-badge">+1/+1 ×${card.counters['+1/+1']}</span>`;
+        }
+        if (card.counters['-1/-1']) {
+          countersLabel += `<span class="tooltip-counters-badge" style="background:rgba(239,68,68,0.2); border-color:#ef4444; color:#fca5a5;">-1/-1 ×${card.counters['-1/-1']}</span>`;
+        }
+      }
+
+      let attachedLabel = '';
+      if (Array.isArray(card.attachedCards) && card.attachedCards.length > 0) {
+        const names = card.attachedCards.map(a => a.name || a).filter(Boolean).join(', ');
+        attachedLabel = `<div style="font-size: 0.72rem; color: #c4b5fd; margin-top: 4px;">🔗 Equip: ${this._escapeHtml(names)}</div>`;
+      } else if (card.attachedTo) {
+        attachedLabel = `<div style="font-size: 0.72rem; color: #c4b5fd; margin-top: 4px;">🔗 Equipped to target</div>`;
+      }
+
+      creatureDetailsHtml = `
+        <div class="tooltip-creature-stats">
+          <span>Stats: ${power}/${toughness}</span>
+          ${countersLabel ? `<div>${countersLabel}</div>` : ''}
+        </div>
+        ${attachedLabel}
+      `;
+    }
+
+    tooltip.innerHTML = `
+      ${imgUrl ? `<img src="${this._escapeHtml(imgUrl)}" alt="${this._escapeHtml(name)}" class="tooltip-card-img" />` : ''}
+      <div class="tooltip-header">
+        <span>${this._escapeHtml(name)}</span>
+        ${manaCost ? `<span class="tooltip-mana">${this._escapeHtml(manaCost)}</span>` : ''}
+      </div>
+      ${typeLine ? `<div class="tooltip-type">${this._escapeHtml(typeLine)}</div>` : ''}
+      ${oracleText ? `<div class="tooltip-oracle">${this._escapeHtml(oracleText)}</div>` : ''}
+      ${creatureDetailsHtml}
+    `;
+
+    tooltip.style.display = 'block';
+    tooltip.classList.remove('hidden');
+
+    const viewportWidth = (typeof window !== 'undefined' ? window.innerWidth : 1024) || 1024;
+    const viewportHeight = (typeof window !== 'undefined' ? window.innerHeight : 768) || 768;
+    const tooltipWidth = 280;
+    const tooltipHeight = 260;
+
+    let posX = (clientX !== undefined ? clientX : 0) + 16;
+    let posY = (clientY !== undefined ? clientY : 0) + 16;
+
+    if (clientX === undefined || clientY === undefined) {
+      if (sourceEl && typeof sourceEl.getBoundingClientRect === 'function') {
+        const rect = sourceEl.getBoundingClientRect();
+        posX = rect.left + (rect.width / 2) - (tooltipWidth / 2);
+        posY = rect.top - tooltipHeight - 12;
+        if (posY < 10) posY = rect.bottom + 12;
+      } else {
+        posX = (viewportWidth - tooltipWidth) / 2;
+        posY = (viewportHeight - tooltipHeight) / 2;
+      }
+    }
+
+    if (posX + tooltipWidth > viewportWidth - 12) {
+      posX = Math.max(12, (clientX !== undefined ? clientX : posX) - tooltipWidth - 16);
+    }
+    if (posY + tooltipHeight > viewportHeight - 12) {
+      posY = Math.max(12, (clientY !== undefined ? clientY : posY) - tooltipHeight - 16);
+    }
+    posX = Math.max(8, posX);
+    posY = Math.max(8, posY);
+
+    tooltip.style.left = `${posX}px`;
+    tooltip.style.top = `${posY}px`;
+  }
+
+  /**
+   * Hides the floating card preview tooltip.
+   * @private
+   */
+  _hideCardPreviewTooltip() {
+    clearTimeout(this._hoverPreviewTimer);
+    clearTimeout(this._longPressTimer);
+    this._hoverPreviewTimer = null;
+    this._longPressTimer = null;
+    this._activePreviewCard = null;
+
+    if (typeof document === 'undefined') return;
+    const tooltip = document.getElementById('card-hover-preview-tooltip');
+    if (tooltip) {
+      tooltip.style.display = 'none';
+      tooltip.classList.add('hidden');
+    }
+  }
+
+  /**
+   * Attaches unified Hover (150ms delay) and Long-Press (350ms) preview handlers to an element.
+   * @private
+   */
+  _attachCardHoverPreview(element, card) {
+    if (!element || !card) return;
+
+    let pointerType = 'mouse';
+
+    element.addEventListener('pointerenter', (e) => {
+      if (e.pointerType === 'touch') return;
+      clearTimeout(this._hoverPreviewTimer);
+      const x = e.clientX;
+      const y = e.clientY;
+      this._hoverPreviewTimer = setTimeout(() => {
+        this._showCardPreviewTooltip(card, x, y, element);
+      }, 150);
+    });
+
+    element.addEventListener('mousemove', (e) => {
+      if (e.pointerType === 'touch') return;
+      if (this._activePreviewCard === card) {
+        this._showCardPreviewTooltip(card, e.clientX, e.clientY, element);
+      }
+    });
+
+    element.addEventListener('pointerleave', () => {
+      this._hideCardPreviewTooltip();
+    });
+
+    element.addEventListener('pointerdown', (e) => {
+      pointerType = e.pointerType || 'mouse';
+      if (pointerType === 'touch') {
+        clearTimeout(this._longPressTimer);
+        const x = e.clientX;
+        const y = e.clientY;
+        this._longPressTimer = setTimeout(() => {
+          this._showCardPreviewTooltip(card, x, y, element);
+        }, 350);
+      }
+    });
+
+    element.addEventListener('pointerup', () => {
+      clearTimeout(this._longPressTimer);
+    });
+
+    element.addEventListener('pointercancel', () => {
+      clearTimeout(this._longPressTimer);
+      this._hideCardPreviewTooltip();
+    });
+  }
+
+  /**
+   * [P3] Activates direct board targeting mode with top guide banner (#board-targeting-banner)
+   * and pulsing .board-target-candidate highlights on valid permanents/players.
+   */
+  startBoardTargeting(config = {}) {
+    if (typeof document === 'undefined') return;
+    this.pendingBoardTargeting = {
+      step: 1,
+      totalSteps: config.totalSteps || 2,
+      prompt: config.prompt || '🎯 Paso 1/2: Haz clic en un objetivo válido en la mesa',
+      candidateIds: new Set(config.candidateIds || []),
+      onSelect: config.onSelect || null,
+      onCancel: config.onCancel || null
+    };
+
+    let banner = document.getElementById('board-targeting-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'board-targeting-banner';
+      banner.className = 'board-targeting-banner';
+      (this.container || document.body).appendChild(banner);
+    }
+    banner.innerHTML = `
+      <span class="targeting-banner-text">${this._escapeHtml(this.pendingBoardTargeting.prompt)}</span>
+      <button id="btn-cancel-board-targeting" class="btn btn-xs btn-secondary">Cancelar</button>
+    `;
+    banner.style.display = 'flex';
+
+    const cancelBtn = banner.querySelector('#btn-cancel-board-targeting');
+    if (cancelBtn) {
+      cancelBtn.addEventListener('click', () => {
+        const cb = this.pendingBoardTargeting?.onCancel;
+        this.pendingBoardTargeting = null;
+        banner.style.display = 'none';
+        document.querySelectorAll('.board-target-candidate').forEach(el => el.classList.remove('board-target-candidate'));
+        if (typeof cb === 'function') cb();
+      });
+    }
+
+    document.querySelectorAll('[data-instance-id]').forEach(el => {
+      const instId = el.getAttribute('data-instance-id');
+      if (instId && this.pendingBoardTargeting.candidateIds.has(instId)) {
+        el.classList.add('board-target-candidate');
+      }
+    });
+  }
+
+  /**
+   * [P8] Opens the Graveyard / Exile zone browser drawer (#zone-browser-drawer)
+   * allowing inspection and casting of exiled Adventure cards.
+   */
+  openZoneBrowser(playerId, zoneName = 'graveyard') {
+    if (typeof document === 'undefined') return;
+    const pData = this.tabletopState?.players?.[playerId];
+    const cards = Array.isArray(pData?.[zoneName])
+      ? pData[zoneName]
+      : (Array.isArray(pData?.zones?.[zoneName]) ? pData.zones[zoneName] : []);
+
+    let drawer = document.getElementById('zone-browser-drawer');
+    if (!drawer) {
+      drawer = document.createElement('div');
+      drawer.id = 'zone-browser-drawer';
+      drawer.className = 'zone-browser-drawer';
+      (this.container || document.body).appendChild(drawer);
+    }
+
+    const title = zoneName === 'exile' ? 'Exile Zone' : 'Graveyard';
+    drawer.innerHTML = `
+      <div class="zone-browser-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <strong>${this._escapeHtml(this.getFriendlyPlayerName(playerId))} — ${title} (${cards.length})</strong>
+        <button id="btn-close-zone-browser" class="btn btn-xs btn-secondary">✕ Close</button>
+      </div>
+      <div class="zone-browser-cards" style="display:flex; gap:8px; flex-wrap:wrap;">
+        ${cards.length === 0 ? '<span style="opacity:0.7;">Empty</span>' : cards.map((c, idx) => `
+          <div class="zone-browser-card-item" data-card-idx="${idx}" style="padding:6px 10px; border:1px solid #475569; border-radius:6px; background:#1e293b; cursor:pointer;">
+            <div>${this._escapeHtml(c.name || 'Card')}</div>
+            ${zoneName === 'exile' && c.onAdventure && playerId === this.myPlayerId ? `<button class="btn btn-xs btn-primary btn-cast-exiled-adventure" data-card-idx="${idx}" style="margin-top:4px;">⚔️ Cast ${this._escapeHtml(c.name)}</button>` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+    drawer.style.display = 'block';
+
+    const closeBtn = drawer.querySelector('#btn-close-zone-browser');
+    if (closeBtn) {
+      closeBtn.addEventListener('click', () => {
+        drawer.style.display = 'none';
+      });
+    }
+
+    drawer.querySelectorAll('.btn-cast-exiled-adventure').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const idx = Number(btn.getAttribute('data-card-idx'));
+        const card = cards[idx];
+        if (card) {
+          drawer.style.display = 'none';
+          this.castSpellToStack(card, null, 'MAIN');
+        }
+      });
+    });
+  }
+
+  /**
+   * [P12] / [P31] Opens optional trigger modal for Sigarda's Aid (OPTIONAL_ETB_AUTO_ATTACH)
+   * and Leyline Axe (PREGAME_LEYLINE_PROMPT).
+   */
+  openOptionalTriggerModal(config = {}) {
+    if (typeof document === 'undefined') {
+      if (typeof config.onConfirm === 'function') config.onConfirm(config.candidates?.[0]?.instanceId || true);
+      return;
+    }
+    let modal = document.getElementById('optional-trigger-modal');
+    if (!modal) {
+      modal = document.createElement('div');
+      modal.id = 'optional-trigger-modal';
+      modal.className = 'modal-overlay';
+      (this.container || document.body).appendChild(modal);
+    }
+
+    const candidates = Array.isArray(config.candidates) ? config.candidates : [];
+    modal.innerHTML = `
+      <div class="modal-card" style="max-width:420px; padding:16px; background:#0f172a; border:1px solid #38bdf8; border-radius:8px;">
+        <h3 style="margin-top:0;">${this._escapeHtml(config.title || 'Optional Trigger')}</h3>
+        <p>${this._escapeHtml(config.description || '')}</p>
+        ${candidates.length > 0 ? `
+          <div style="display:flex; flex-direction:column; gap:6px; margin:10px 0;">
+            ${candidates.map(c => `<button class="btn btn-primary btn-opt-candidate" data-id="${this._escapeHtml(c.instanceId || c.id)}">🛡️ ${this._escapeHtml(c.name || 'Creature')}</button>`).join('')}
+          </div>
+        ` : `
+          <button id="btn-opt-confirm" class="btn btn-primary" style="margin-right:8px;">${this._escapeHtml(config.confirmLabel || 'Confirm')}</button>
+        `}
+        <button id="btn-opt-decline" class="btn btn-secondary">${this._escapeHtml(config.declineLabel || 'Decline')}</button>
+      </div>
+    `;
+    modal.style.display = 'flex';
+
+    modal.querySelectorAll('.btn-opt-candidate').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        modal.style.display = 'none';
+        if (typeof config.onConfirm === 'function') config.onConfirm(id);
+      });
+    });
+
+    const btnConfirm = modal.querySelector('#btn-opt-confirm');
+    if (btnConfirm) {
+      btnConfirm.addEventListener('click', () => {
+        modal.style.display = 'none';
+        if (typeof config.onConfirm === 'function') config.onConfirm(true);
+      });
+    }
+
+    const btnDecline = modal.querySelector('#btn-opt-decline');
+    if (btnDecline) {
+      btnDecline.addEventListener('click', () => {
+        modal.style.display = 'none';
+        if (typeof config.onDecline === 'function') config.onDecline();
+      });
+    }
+  }
+
+  /**
    * Global keydown handler.
    * @private
    * @param {KeyboardEvent} e
@@ -6382,6 +9390,37 @@ export class RPMAppController {
       return;
     }
 
+    // Space, P, H isolation when overlay or target modal is open, or match is over / not active
+    if (this.diceRollOverlay?.isOpen || this.targetModal?.isOpen || this.tabletopState?.isGameOver || (!this.isMatchActive() && this.isInteractiveBrowserMode())) {
+      return;
+    }
+
+    // [P6] Z undoes last mana tap
+    if (code === 'KeyZ' || key.toLowerCase() === 'z') {
+      if (this.tabletopState && typeof this.tabletopState.undoLastManaTap === 'function') {
+        try {
+          if (this.tabletopState.undoLastManaTap(this.myPlayerId)) {
+            if (typeof e.preventDefault === 'function') e.preventDefault();
+            this.reconcileDOM();
+          }
+        } catch (_err) {
+          // Ignore if no mana tap to undo
+        }
+      }
+      return;
+    }
+
+    // Enter passes priority if holding, or toggles auto-pass
+    if (code === 'Enter' || key === 'Enter') {
+      if (typeof e.preventDefault === 'function') e.preventDefault();
+      if (this.priorityMachine && this.priorityMachine.priorityPlayerId === this.myPlayerId) {
+        this.dispatchAction({ type: 'PASS_PRIORITY' }, { origin: 'LOCAL' });
+      } else {
+        this.toggleAutoPass?.();
+      }
+      return;
+    }
+
     // Space or P passes priority
     if (code === 'Space' || key === ' ' || code === 'KeyP' || key.toLowerCase() === 'p') {
       if (typeof e.preventDefault === 'function') e.preventDefault();
@@ -6394,6 +9433,63 @@ export class RPMAppController {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       this.dispatchAction({ type: 'HOLD_RESPOND' }, { origin: 'LOCAL' });
       return;
+    }
+  }
+
+  toggleAutoPass() {
+    this.autoPassEnabled = !this.autoPassEnabled;
+    if (this.priorityMachine && typeof this.priorityMachine.setAutoPass === 'function') {
+      this.priorityMachine.setAutoPass(this.myPlayerId, this.autoPassEnabled);
+    }
+    const btn = this.container?.querySelector('#btn-toggle-autopass');
+    if (btn) {
+      btn.textContent = this.autoPassEnabled ? '⚡ Auto-Pass: ON' : '⚡ Auto-Pass: OFF';
+      btn.classList.toggle('active', this.autoPassEnabled);
+    }
+    if (this.autoPassEnabled && this.priorityMachine?.priorityPlayerId === this.myPlayerId && !this.isSpectator() && !this.tabletopState?.isGameOver) {
+      const curStep = this.priorityMachine.currentPhaseStep;
+      if (!this.hasPhaseStop(curStep)) {
+        this.dispatchAction({ type: 'PASS_PRIORITY' }, { origin: 'LOCAL' });
+      }
+    }
+  }
+
+  hasPhaseStop(stepOrPhase) {
+    if (!stepOrPhase) return false;
+    const upper = String(stepOrPhase).toUpperCase();
+    if (this.phaseStops.has(upper)) return true;
+    for (const stop of this.phaseStops) {
+      if (upper.includes(stop) || stop.includes(upper)) return true;
+    }
+    return false;
+  }
+
+  togglePhaseStop(phaseKey) {
+    const upper = String(phaseKey).toUpperCase();
+    if (this.phaseStops.has(upper)) {
+      this.phaseStops.delete(upper);
+    } else {
+      this.phaseStops.add(upper);
+    }
+    if (this.priorityMachine && typeof this.priorityMachine.togglePhaseStop === 'function') {
+      this.priorityMachine.togglePhaseStop(upper, this.myPlayerId);
+    }
+    this.reconcileDOM();
+  }
+
+  openDamageAllocationModal(attacker, blockers, onConfirm) {
+    if (this.damageModal) {
+      const stats = this.tabletopState?.abilityEngine?.evaluateCreatureStats
+        ? this.tabletopState.abilityEngine.evaluateCreatureStats(attacker, this.tabletopState)
+        : { power: attacker?.power ?? 0 };
+      this.damageModal.onConfirmAssignment = (assignmentData) => {
+        if (typeof onConfirm === 'function') onConfirm(assignmentData);
+      };
+      this.damageModal.open({
+        attacker,
+        blockers,
+        attackerPower: stats.power
+      });
     }
   }
 }

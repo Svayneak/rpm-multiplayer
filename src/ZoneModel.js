@@ -481,6 +481,11 @@ export class ZoneModel {
         playerState.battlefield[sub] = [];
       }
       playerState.battlefield[sub].push(card);
+      if (playerState.zones && Array.isArray(playerState.zones.battlefield)) {
+        if (!playerState.zones.battlefield.includes(card) && !playerState.zones.battlefield.some(c => c && c.instanceId === card.instanceId)) {
+          playerState.zones.battlefield.push(card);
+        }
+      }
       return card;
     }
 
@@ -496,6 +501,13 @@ export class ZoneModel {
         // default: 'top'
         playerState.library.unshift(card);
       }
+      if (playerState.zones && Array.isArray(playerState.zones.library)) {
+        if (!playerState.zones.library.includes(card) && !playerState.zones.library.some(c => c && c.instanceId === card.instanceId)) {
+          if (position === 'bottom') playerState.zones.library.push(card);
+          else if (typeof position === 'number') playerState.zones.library.splice(position, 0, card);
+          else playerState.zones.library.unshift(card);
+        }
+      }
       return card;
     }
 
@@ -508,18 +520,33 @@ export class ZoneModel {
     if (targetZone === 'hand') {
       if (!playerState.hand) playerState.hand = [];
       playerState.hand.push(card);
+      if (playerState.zones && Array.isArray(playerState.zones.hand)) {
+        if (!playerState.zones.hand.includes(card) && !playerState.zones.hand.some(c => c && c.instanceId === card.instanceId)) {
+          playerState.zones.hand.push(card);
+        }
+      }
       return card;
     }
 
     if (targetZone === 'graveyard') {
       if (!playerState.graveyard) playerState.graveyard = [];
       playerState.graveyard.push(card);
+      if (playerState.zones && Array.isArray(playerState.zones.graveyard)) {
+        if (!playerState.zones.graveyard.includes(card) && !playerState.zones.graveyard.some(c => c && c.instanceId === card.instanceId)) {
+          playerState.zones.graveyard.push(card);
+        }
+      }
       return card;
     }
 
     if (targetZone === 'exile') {
       if (!playerState.exile) playerState.exile = [];
       playerState.exile.push(card);
+      if (playerState.zones && Array.isArray(playerState.zones.exile)) {
+        if (!playerState.zones.exile.includes(card) && !playerState.zones.exile.some(c => c && c.instanceId === card.instanceId)) {
+          playerState.zones.exile.push(card);
+        }
+      }
       return card;
     }
 

@@ -41,13 +41,15 @@ export const INTEGRATION_SUITES = Object.freeze([
   'test_perkins_ai.js',
   'test_unified_platform.js',
   'test_onboarding_lobby.js',
+  'test_oracle_compiler_and_equipment.js',
   'test_battle_spectator.js',
   'test_battle_stability.js',
   'test_3d_dice_and_integrity.js',
   'test_battle_ux_hardening.js',
   'test_combat_damage_engine.js',
   'test_mtg_rule_engine.js',
-  'test_lifecycle_and_concede.js'
+  'test_lifecycle_and_concede.js',
+  'test_active_deck_certification.js'
 ]);
 
 /** Module unit suites (former `npm run test:modules`). */
