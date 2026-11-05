@@ -346,6 +346,27 @@ async function runTestSuite() {
     assert.strictEqual(cMana.manaProfile.producesAnyColor, true);
     assert.strictEqual(cMana.producesAnyColor, true);
 
+    // 5b. Caretaker's Talent Class Level Up compilation
+    const caretakersTalent = {
+      name: "Caretaker's Talent",
+      type_line: 'Enchantment — Class',
+      oracle_text: '(Gain the next level as a sorcery to add its ability.)\nWhenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{1}{W}: Level 2\nWhen this Class becomes level 2, create a token that\'s a copy of target token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.'
+    };
+    const cCaretaker = compileCardMechanics(caretakersTalent);
+    assert.strictEqual(cCaretaker.isPermanent, true);
+    assert.ok(Array.isArray(cCaretaker.activatedAbilities), 'Must compile activated abilities');
+    assert.ok(cCaretaker.activatedAbilities.some(a => a.action === 'LEVEL_UP_CLASS' && a.targetLevel === 2 && a.cost.mana === '{1}{W}'));
+    assert.ok(cCaretaker.activatedAbilities.some(a => a.action === 'LEVEL_UP_CLASS' && a.targetLevel === 3 && a.cost.mana === '{3}{W}'));
+
+    // 5c. Castle Ardenvale Activated Token ability compilation
+    const castleArdenvale = {
+      name: 'Castle Ardenvale',
+      type_line: 'Land',
+      oracle_text: 'Castle Ardenvale enters the battlefield tapped unless you control a Plains.\n{T}: Add {W}.\n{2}{W}{W}, {T}: Create a 1/1 white Human creature token.'
+    };
+    const cCastle = compileCardMechanics(castleArdenvale);
+    assert.ok(cCastle.activatedAbilities.some(a => a.action === 'CASTLE_ARDENVALE_TOKEN' && a.cost.mana === '{2}{W}{W}'));
+
     // 6. Non-equipment card with equipment in oracle text must not match generic ON_ETB
     const fakeCard = {
       name: 'Equipment Watcher',

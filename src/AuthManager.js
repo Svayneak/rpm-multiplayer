@@ -262,6 +262,7 @@ export class AuthManager extends EventEmitter {
     this.fetchImpl = options.fetchImpl || options.fetch || (typeof globalThis !== 'undefined' && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null);
     this.fetch = this.fetchImpl;
     this.authTokenKey = options.authTokenKey || AUTH_TOKEN_STORAGE_KEY;
+    this.syncSupabaseAuth = Boolean(options.syncSupabaseAuth);
 
     this.session = null;
     this.user = null;
@@ -657,18 +658,20 @@ export class AuthManager extends EventEmitter {
     const token = resData.token;
     const user = resData.user;
 
-    // Secondary Supabase signup attempt (never fatal)
-    try {
-      this.fetchImpl(`${this.supabaseUrl}/auth/v1/signup`, {
-        method: 'POST',
-        headers: {
-          'apikey': this.supabaseAnonKey,
-          'Authorization': `Bearer ${this.supabaseAnonKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email: cleanEmail, password: String(password) })
-      }).catch(() => {});
-    } catch (_) {}
+    // Secondary Supabase signup attempt (only if enabled to prevent 429 OTP rate limits)
+    if (this.syncSupabaseAuth) {
+      try {
+        this.fetchImpl(`${this.supabaseUrl}/auth/v1/signup`, {
+          method: 'POST',
+          headers: {
+            'apikey': this.supabaseAnonKey,
+            'Authorization': `Bearer ${this.supabaseAnonKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email: cleanEmail, password: String(password) })
+        }).catch(() => {});
+      } catch (_) {}
+    }
 
     const profile = {
       id: user.id,
@@ -741,18 +744,20 @@ export class AuthManager extends EventEmitter {
     const token = resData.token;
     const user = resData.user;
 
-    // Secondary Supabase token attempt (never fatal)
-    try {
-      this.fetchImpl(`${this.supabaseUrl}/auth/v1/token?grant_type=password`, {
-        method: 'POST',
-        headers: {
-          'apikey': this.supabaseAnonKey,
-          'Authorization': `Bearer ${this.supabaseAnonKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ email: cleanEmail, password: String(password) })
-      }).catch(() => {});
-    } catch (_) {}
+    // Secondary Supabase token attempt (only if enabled to prevent 429 OTP rate limits)
+    if (this.syncSupabaseAuth) {
+      try {
+        this.fetchImpl(`${this.supabaseUrl}/auth/v1/token?grant_type=password`, {
+          method: 'POST',
+          headers: {
+            'apikey': this.supabaseAnonKey,
+            'Authorization': `Bearer ${this.supabaseAnonKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ email: cleanEmail, password: String(password) })
+        }).catch(() => {});
+      } catch (_) {}
+    }
 
     const profile = {
       id: user.id,

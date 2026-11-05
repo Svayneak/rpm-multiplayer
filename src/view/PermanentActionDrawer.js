@@ -206,7 +206,7 @@ export class PermanentActionDrawer {
       pid = playerId;
       this.anchorEl = anchorEl || null;
       ctx = context || {};
-      abilities = ctx.abilities || card?.abilities || [];
+      abilities = ctx.abilities || card?.compiledMechanics?.activatedAbilities || card?.activatedAbilities || card?.abilities || [];
     }
 
     this.card = card;
@@ -362,13 +362,58 @@ export class PermanentActionDrawer {
     if (abilitiesListEl) {
       abilitiesListEl.innerHTML = '';
       const isForgeAnew = /forge anew/i.test(card?.name || '');
-      let list = Array.isArray(abilities) && abilities.length > 0 ? abilities : (card?.abilities || []);
+      let list = Array.isArray(abilities) && abilities.length > 0
+        ? [...abilities]
+        : [...(card?.compiledMechanics?.activatedAbilities || card?.activatedAbilities || card?.abilities || [])];
       if (isInkmoth) {
         list = list.filter(a => a && a.id !== 'ANIMATE_LAND' && a.action !== 'ANIMATE_LAND');
       }
       if (isStartingTown || isSpireOfIndustry) {
         list = list.filter(a => a && !a.isManaAbility && a.action !== 'TAP_MANA');
       }
+      const isClass = /class/i.test(card?.typeLine || card?.type || '') || Boolean(card?.classLevel || card?.level);
+      if (isClass) {
+        const currentLevel = Number(card?.classLevel ?? card?.level ?? 1);
+        if (currentLevel >= 3) {
+          abilitiesListEl.innerHTML = `
+            <div class="drawer-static-badge" style="padding: 10px 14px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 6px; font-size: 0.85rem; color: #6ee7b7; line-height: 1.4;">
+              🏆 <strong>Class Level 3 (Max Level) Active:</strong> Creature tokens you control get +2/+2.
+            </div>
+          `;
+          return;
+        }
+
+        const nextLevel = currentLevel + 1;
+        // Keep non-class abilities or class abilities matching nextLevel
+        list = list.filter(a => (!a.isClassLevelUp && a.action !== 'LEVEL_UP_CLASS') || a.targetLevel === nextLevel);
+
+        if (list.length === 0) {
+          if (nextLevel === 2) {
+            list.push({
+              id: 'LEVEL_UP_2',
+              action: 'LEVEL_UP_CLASS',
+              targetLevel: 2,
+              cost: { mana: '{1}{W}' },
+              timing: 'SORCERY',
+              requiresTap: false,
+              isClassLevelUp: true,
+              text: '{1}{W}: Level 2 — When this Class becomes level 2, create a token that\'s a copy of target token you control.'
+            });
+          } else if (nextLevel === 3) {
+            list.push({
+              id: 'LEVEL_UP_3',
+              action: 'LEVEL_UP_CLASS',
+              targetLevel: 3,
+              cost: { mana: '{3}{W}' },
+              timing: 'SORCERY',
+              requiresTap: false,
+              isClassLevelUp: true,
+              text: '{3}{W}: Level 3 — Creature tokens you control get +2/+2.'
+            });
+          }
+        }
+      }
+
       if (isForgeAnew) {
         const pState = ctx?.tabletopState?.players?.[pid];
         const usedCount = pState?.equipsActivatedThisTurn || 0;
@@ -383,9 +428,17 @@ export class PermanentActionDrawer {
         for (const ability of list) {
           const abItem = document.createElement('div');
           abItem.className = 'drawer-ability-item';
+          const isLevelUp = ability.isClassLevelUp || ability.action === 'LEVEL_UP_CLASS';
+          const costStr = typeof ability.cost === 'string' ? ability.cost : (ability.cost?.mana || '');
+          const btnLabel = isLevelUp ? `⭐ Level Up to Level ${ability.targetLevel || 2}` : 'Activate';
           abItem.innerHTML = `
-            <div class="ability-text">${ability.text || ability.description || 'Ability'}</div>
-            <button class="btn btn-primary btn-sm drawer-btn-activate">Activate</button>
+            <div class="ability-text" style="font-size: 0.85rem; line-height: 1.4; margin-bottom: 6px;">
+              ${ability.text || ability.description || 'Ability'}
+            </div>
+            <button class="btn btn-primary btn-sm drawer-btn-activate" style="width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600;">
+              <span>${btnLabel}</span>
+              ${costStr ? `<span class="ability-cost-badge" style="background: rgba(0,0,0,0.25); padding: 2px 6px; border-radius: 4px; font-family: monospace;">${costStr}</span>` : ''}
+            </button>
           `;
           abItem.querySelector('.drawer-btn-activate')?.addEventListener('click', () => {
             this.close();

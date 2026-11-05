@@ -5968,13 +5968,24 @@ export class TabletopStateManager extends EventEmitter {
     }
 
     const currentLevel = Number(card.classLevel ?? card.level ?? 1);
+    if (currentLevel >= 3) {
+      throw new ValidationError(`${card.name} is already at maximum Level 3.`);
+    }
+
     if (currentLevel === 1) {
-      // Pay {W}
+      const cost = options.cost || options.ability?.cost?.mana || '{1}{W}';
       const pool = player.resources?.manaPool;
-      if (pool && pool.W > 0) {
+      if (pool && pool.W > 0 && (pool.C > 0 || (pool.W + pool.U + pool.B + pool.R + pool.G + pool.C >= 2))) {
         pool.W -= 1;
+        let generic = 1;
+        for (const col of ['C', 'W', 'U', 'B', 'R', 'G']) {
+          const take = Math.min(generic, pool[col] || 0);
+          pool[col] -= take;
+          generic -= take;
+          if (generic <= 0) break;
+        }
       } else {
-        try { this.autoTapForMana(playerId, '{W}'); } catch (e) {}
+        try { this.autoTapForMana(playerId, cost); } catch (e) {}
       }
       card.classLevel = 2;
       card.level = 2;
@@ -5991,7 +6002,7 @@ export class TabletopStateManager extends EventEmitter {
         colors: chosenToken.colors ? [...chosenToken.colors] : ['W'],
         isWhite: chosenToken.isWhite ?? true,
         isToken: true,
-        subtypes: chosenToken.subtypes ? [...chosenToken.subtypes] : []
+        subtypes: chosenToken.subtypes ? [...chosenToken.subtypes] : ['Soldier']
       } : {
         name: 'Creature Token',
         power: 1,
@@ -6006,10 +6017,10 @@ export class TabletopStateManager extends EventEmitter {
       this.emit('CLASS_LEVEL_UP', { card, newLevel: 2, playerId });
       return { card, newLevel: 2 };
     } else if (currentLevel === 2) {
-      // Pay {3}{W}
+      const cost = options.cost || options.ability?.cost?.mana || '{3}{W}';
       const pool = player.resources?.manaPool;
-      if (pool && (pool.W > 0 || pool.C >= 3)) {
-        if (pool.W > 0) pool.W -= 1;
+      if (pool && pool.W > 0 && (pool.W + pool.U + pool.B + pool.R + pool.G + pool.C >= 4)) {
+        pool.W -= 1;
         let generic = 3;
         for (const col of ['C', 'W', 'U', 'B', 'R', 'G']) {
           const take = Math.min(generic, pool[col] || 0);
@@ -6018,7 +6029,7 @@ export class TabletopStateManager extends EventEmitter {
           if (generic <= 0) break;
         }
       } else {
-        try { this.autoTapForMana(playerId, '{3}{W}'); } catch (e) {}
+        try { this.autoTapForMana(playerId, cost); } catch (e) {}
       }
       card.classLevel = 3;
       card.level = 3;
@@ -7786,6 +7797,10 @@ export class TabletopStateManager extends EventEmitter {
       }
     }
 
+    if (abilityId === 'LEVEL_UP_CLASS' || String(abilityId).startsWith('LEVEL_UP_') || (/class/i.test(perm.typeLine || '') && String(abilityId).startsWith('LEVEL_UP'))) {
+      return this.levelUpClass(playerId, instanceId, options);
+    }
+
     if (!ability) {
       throw new ValidationError(`Activated ability '${abilityId}' not found on ${perm.name}`);
     }
@@ -7797,6 +7812,10 @@ export class TabletopStateManager extends EventEmitter {
       : (ability.cost?.mana || '{0}');
 
     const actionType = ability.effect?.action || ability.action;
+
+    if (actionType === 'LEVEL_UP_CLASS') {
+      return this.levelUpClass(playerId, instanceId, options);
+    }
     const isLandAnimation = actionType === 'ANIMATE_LAND' || abilityId === 'ANIMATE_LAND' || /inkmoth nexus/i.test(perm.name || '') || /land/i.test(perm.typeLine || perm.type || '');
 
     // Inkmoth Nexus Self-Tap Exclusion: pass excludeLandIds so the animating land is never tapped to pay for its own animation {1}

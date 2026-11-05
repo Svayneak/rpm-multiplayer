@@ -7371,12 +7371,17 @@ export class RPMAppController {
           <div class="auth-card">
             <div class="auth-header">
               <span class="auth-shield">🔐</span>
-              <h2>Planeswalker Registration Gate</h2>
-              <p class="auth-subtitle">Supabase Magic Link OTP & Profile Setup (INV-AUTH-1)</p>
+              <h2>Planeswalker Authentication Gate</h2>
+              <p class="auth-subtitle">Email & Password Persistent Account or Instant Dev Bypass</p>
             </div>
 
             <div id="auth-error-message" class="auth-error-banner" style="display: none;"></div>
             <div id="auth-success-message" class="auth-success-banner" style="display: none;"></div>
+
+            <div class="auth-tabs" style="display: flex; gap: 8px; margin-bottom: 16px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 8px;">
+              <button id="auth-tab-signin" class="btn btn-secondary btn-sm active" style="flex: 1; font-weight: bold;">Sign In</button>
+              <button id="auth-tab-register" class="btn btn-secondary btn-sm" style="flex: 1; font-weight: bold;">Create Account</button>
+            </div>
 
             <div class="auth-form">
               <div class="form-group">
@@ -7385,39 +7390,74 @@ export class RPMAppController {
               </div>
 
               <div class="form-group">
-                <label for="auth-username-input">Player Display Name <span class="required">*</span></label>
-                <input type="text" id="auth-username-input" class="auth-input" placeholder="e.g. Alice" value="${this.username || ''}" maxlength="32" />
+                <label for="auth-password-input">Password <span class="required">*</span></label>
+                <input type="password" id="auth-password-input" class="auth-input" placeholder="••••••••" required autocomplete="current-password" />
               </div>
 
-              <div class="form-group">
-                <label for="auth-dob-input">Date of Birth (Age &ge; 13) <span class="required">*</span></label>
-                <input type="date" id="auth-dob-input" class="auth-input" value="1998-05-14" required />
-              </div>
+              <div id="auth-register-extra-fields" style="display: none;">
+                <div class="form-group">
+                  <label for="auth-username-input">Player Display Name <span class="required">*</span></label>
+                  <input type="text" id="auth-username-input" class="auth-input" placeholder="e.g. Alice" value="${this.username || ''}" maxlength="32" />
+                </div>
 
-              <div class="auth-actions">
-                <button id="btn-send-magic-link" class="btn btn-primary btn-magic-link">✉️ Send Magic Link OTP</button>
-                <button id="btn-instant-dev-login" class="btn btn-secondary btn-dev-bypass">⚡ Instant Dev Login</button>
-              </div>
-
-              <div id="auth-otp-section" class="otp-section" style="display: none;">
-                <hr class="auth-divider" />
-                <label for="auth-otp-input">Enter 6-Digit OTP Code</label>
-                <div class="otp-input-group">
-                  <input type="text" id="auth-otp-input" class="auth-input otp-code-input" placeholder="123456" maxlength="8" />
-                  <button id="btn-verify-otp" class="btn btn-primary">Verify OTP & Login</button>
+                <div class="form-group">
+                  <label for="auth-dob-input">Date of Birth (Age &ge; 13) <span class="required">*</span></label>
+                  <input type="date" id="auth-dob-input" class="auth-input" value="1998-05-14" required />
                 </div>
               </div>
+
+              <div class="auth-actions" style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
+                <button id="btn-auth-submit" class="btn btn-primary" style="width: 100%; font-weight: bold; padding: 10px;">Sign In</button>
+                <button id="btn-instant-dev-login" class="btn btn-secondary btn-dev-bypass" style="width: 100%;">⚡ Instant Dev Login</button>
+              </div>
+
+              <details style="margin-top: 16px; font-size: 0.8rem; color: #94a3b8; cursor: pointer;">
+                <summary>Legacy Magic Link OTP fallback</summary>
+                <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+                  <button id="btn-send-magic-link" class="btn btn-outline btn-sm">✉️ Send Magic Link OTP</button>
+                  <div id="auth-otp-section" class="otp-section" style="display: none;">
+                    <div class="otp-input-group" style="display: flex; gap: 6px; margin-top: 6px;">
+                      <input type="text" id="auth-otp-input" class="auth-input otp-code-input" placeholder="123456" maxlength="8" />
+                      <button id="btn-verify-otp" class="btn btn-primary btn-sm">Verify OTP</button>
+                    </div>
+                  </div>
+                </div>
+              </details>
             </div>
           </div>
         </div>
       `;
 
+      const tabSignIn = view.querySelector('#auth-tab-signin');
+      const tabRegister = view.querySelector('#auth-tab-register');
+      const registerFields = view.querySelector('#auth-register-extra-fields');
+      const btnSubmit = view.querySelector('#btn-auth-submit');
       const btnSendOtp = view.querySelector('#btn-send-magic-link');
       const btnDevLogin = view.querySelector('#btn-instant-dev-login');
       const btnVerifyOtp = view.querySelector('#btn-verify-otp');
       const errBanner = view.querySelector('#auth-error-message');
       const succBanner = view.querySelector('#auth-success-message');
       const otpSection = view.querySelector('#auth-otp-section');
+
+      let currentMode = 'signin';
+
+      const setMode = (mode) => {
+        currentMode = mode;
+        if (mode === 'signin') {
+          tabSignIn?.classList.add('active');
+          tabRegister?.classList.remove('active');
+          if (registerFields) registerFields.style.display = 'none';
+          if (btnSubmit) btnSubmit.textContent = 'Sign In';
+        } else {
+          tabRegister?.classList.add('active');
+          tabSignIn?.classList.remove('active');
+          if (registerFields) registerFields.style.display = 'block';
+          if (btnSubmit) btnSubmit.textContent = 'Create Account';
+        }
+      };
+
+      tabSignIn?.addEventListener('click', () => setMode('signin'));
+      tabRegister?.addEventListener('click', () => setMode('register'));
 
       const showError = (msg) => {
         if (errBanner) {
@@ -7434,6 +7474,47 @@ export class RPMAppController {
         }
         if (errBanner) errBanner.style.display = 'none';
       };
+
+      if (btnSubmit) {
+        btnSubmit.addEventListener('click', async () => {
+          const email = view.querySelector('#auth-email-input')?.value?.trim();
+          const password = view.querySelector('#auth-password-input')?.value?.trim();
+          const username = view.querySelector('#auth-username-input')?.value?.trim() || email?.split('@')[0] || 'Planeswalker';
+
+          if (!email || !password) {
+            showError('Please provide both email and password.');
+            return;
+          }
+
+          try {
+            if (currentMode === 'register') {
+              if (this.authManager && typeof this.authManager.signUpWithPassword === 'function') {
+                await this.authManager.signUpWithPassword(email, password, username);
+              } else if (this.authManager && typeof this.authManager.instantDevLogin === 'function') {
+                await this.authManager.instantDevLogin(email, username, '1998-05-14');
+              }
+              showSuccess('Account registered and logged in successfully!');
+            } else {
+              if (this.authManager && typeof this.authManager.signInWithPassword === 'function') {
+                await this.authManager.signInWithPassword(email, password);
+              } else if (this.authManager && typeof this.authManager.instantDevLogin === 'function') {
+                await this.authManager.instantDevLogin(email, username, '1998-05-14');
+              }
+              showSuccess('Signed in successfully!');
+            }
+            this._syncAuthUser();
+
+            if (!this.authManager.isOnboarded()) {
+              this.tabRouter.navigate('DECKBUILDER', this.getMatchState(), this.isSpectator());
+            } else {
+              this.tabRouter.navigate('LOBBY', this.getMatchState(), this.isSpectator());
+            }
+            this.reconcileDOM();
+          } catch (err) {
+            showError(err.message || 'Authentication failed');
+          }
+        });
+      }
 
       if (btnDevLogin) {
         btnDevLogin.addEventListener('click', async () => {
@@ -8992,8 +9073,16 @@ export class RPMAppController {
     const { card, ability, playerId } = data;
     const pid = playerId || this.myPlayerId;
     const abilityId = typeof ability === 'string' ? ability : (ability?.id || ability?.action || 'ANIMATE_LAND');
+    const isLevelUp = ability?.action === 'LEVEL_UP_CLASS' || abilityId === 'LEVEL_UP_CLASS' || String(abilityId).startsWith('LEVEL_UP_');
     if (this.tabletopState) {
-      if (typeof this.tabletopState.activatePermanentAbility === 'function') {
+      if (isLevelUp && typeof this.tabletopState.levelUpClass === 'function') {
+        try {
+          const res = this.tabletopState.levelUpClass(pid, card.instanceId || card.id, { ability, cost: ability?.cost?.mana });
+          this.showToast?.(`🌟 [Class Level Up]: ${card.name} is now Level ${res?.newLevel || 2}!`);
+        } catch (err) {
+          this.showToast?.(`⚠️ ${err.message || 'Cannot level up Class'}`);
+        }
+      } else if (typeof this.tabletopState.activatePermanentAbility === 'function') {
         try {
           this.tabletopState.activatePermanentAbility(pid, card.instanceId, abilityId, { ability });
         } catch (err) {

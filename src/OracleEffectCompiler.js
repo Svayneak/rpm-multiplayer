@@ -1257,6 +1257,36 @@ export function compileActivatedAbilities(typeLine = '', oracleText = '') {
     });
   }
 
+  // 6. Class Level Up abilities: {mana}: Level X
+  const classLevelRegex = /((?:\{[^{}]+\})+):\s*Level\s*(\d+)(?:[^\n]*\n([^\n]+))?/gi;
+  let clMatch;
+  while ((clMatch = classLevelRegex.exec(ot)) !== null) {
+    const cost = clMatch[1].trim();
+    const level = parseInt(clMatch[2], 10);
+    const abilityText = clMatch[3] ? clMatch[3].trim() : '';
+    abilities.push({
+      id: `LEVEL_UP_${level}`,
+      action: 'LEVEL_UP_CLASS',
+      targetLevel: level,
+      cost: { mana: cost },
+      timing: 'SORCERY',
+      requiresTap: false,
+      isClassLevelUp: true,
+      text: `${cost}: Level ${level}${abilityText ? ` — ${abilityText}` : ''}`
+    });
+  }
+
+  // 7. Castle Ardenvale: {2}{W}{W}, {T}: Create a 1/1 white Human creature token
+  if (/castle ardenvale/i.test(ot) || (/create a 1\/1 white human/i.test(ot) && /\{2\}\{w\}\{w\}/i.test(ot))) {
+    abilities.push({
+      id: 'CASTLE_ARDENVALE_TOKEN',
+      action: 'CASTLE_ARDENVALE_TOKEN',
+      cost: { mana: '{2}{W}{W}', tap: true },
+      requiresTap: true,
+      text: '{2}{W}{W}, {T}: Create a 1/1 white Human creature token.'
+    });
+  }
+
   return abilities;
 }
 
@@ -1481,7 +1511,7 @@ export function compileGroundedEffects(card, oracleText = '', typeLine = '') {
   }
 
   // CLASS_LEVEL_UP
-  const classLevelRegex = /(\{[^{}]+\}):\s*Level\s*(\d+)/gi;
+  const classLevelRegex = /((?:\{[^{}]+\})+):\s*Level\s*(\d+)/gi;
   let clMatch;
   while ((clMatch = classLevelRegex.exec(ot)) !== null) {
     effects.push({
