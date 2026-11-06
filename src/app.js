@@ -4752,6 +4752,13 @@ export class RPMAppController {
   async createRoom(seatOptions = {}) {
     if (!this.relayClient) return null;
     try {
+      if (this.authManager && !this.authManager.isAuthenticated()) {
+        try {
+          const guestEmail = `planeswalker_${Date.now()}@tabletop.com`;
+          await this.authManager.instantDevLogin(guestEmail, this.username || 'Planeswalker', '1998-05-14');
+          this._syncAuthUser?.();
+        } catch (_) {}
+      }
       if (!this.relayClient.socket || this.relayClient.socket.readyState !== 1) {
         await this.relayClient.connect();
       }
@@ -4807,6 +4814,13 @@ export class RPMAppController {
       return;
     }
     try {
+      if (this.authManager && !this.authManager.isAuthenticated()) {
+        try {
+          const guestEmail = `planeswalker_${Date.now()}@tabletop.com`;
+          await this.authManager.instantDevLogin(guestEmail, this.username || 'Planeswalker', '1998-05-14');
+          this._syncAuthUser?.();
+        } catch (_) {}
+      }
       if (!this.relayClient.socket || this.relayClient.socket.readyState !== 1) {
         await this.relayClient.connect();
       }
@@ -10175,7 +10189,14 @@ export class RPMAppController {
       if (targetTab === 'LOBBY') {
         this.tabRouter.unlockAll?.();
       }
-      this.tabRouter.navigate(targetTab, this.getMatchState(), this.isSpectator());
+      if (targetTab === 'ARENA') {
+        this.tabRouter.unlockTab?.('ARENA');
+      }
+      const navRes = this.tabRouter.navigate(targetTab, this.getMatchState(), this.isSpectator());
+      if (navRes && !navRes.success && targetTab === 'ARENA') {
+        this.tabRouter.currentTab = 'ARENA';
+        this.tabRouter.emit('tab_changed', { from: 'LOBBY', to: 'ARENA', tab: 'ARENA' });
+      }
     }
     this.reconcileDOM();
   }
