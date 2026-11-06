@@ -362,6 +362,93 @@ async function run() {
   clientB.disconnect();
   console.log('  ✔ Section 4 Passed: Room isolation barrier verified.\n');
 
+
+  // =========================================================================
+  // SECTION 5: ADV-45 MTG Arena-Style Session Handover & Snapshot Rehydration
+  // =========================================================================
+  console.log('--- Section 5: ADV-45 MTG Arena-Style Session Handover & Snapshot Rehydration ---');
+  const { WebSocket } = await import('ws');
+  const ROOM_HANDOVER = 'ROOM_HANDOVER_01';
+  relay.rooms.set(ROOM_HANDOVER, new RoomSession(ROOM_HANDOVER, { maxPlayers: 2 }));
+
+  const testUserToken = 'tok_mock_adv45_' + Date.now();
+  const testUserId = 'usr_adv45_alpha';
+  const testTokenHash = (await import('node:crypto')).createHash('sha256').update(testUserToken).digest('hex');
+
+  // Register in relay memory store
+  relay.store = relay.store || { users: {}, tokens: {} };
+  relay.store.users[testUserId] = { id: testUserId, email: 'alpha@arena.com', username: 'Alpha' };
+  relay.store.tokens[testUserToken] = { userId: testUserId, tokenHash: testTokenHash, expiresAt: Date.now() + 86400000 };
+
+  const connectWsClient = (deviceLabel) => {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${relayUrl}?token=${testUserToken}&roomId=${ROOM_HANDOVER}&device=${deviceLabel}`);
+      const msgs = [];
+      ws.on('message', (raw) => {
+        try { msgs.push(JSON.parse(raw.toString())); }
+        catch (_) { msgs.push({ raw: raw.toString() }); }
+      });
+      ws.on('open', () => resolve({ ws, msgs }));
+      ws.on('error', reject);
+    });
+  };
+
+  const waitMsg = (msgs, pred, timeoutMs = 2000) => {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      const interval = setInterval(() => {
+        const match = msgs.find(pred);
+        if (match) {
+          clearInterval(interval);
+          resolve(match);
+        } else if (Date.now() - start > timeoutMs) {
+          clearInterval(interval);
+          reject(new Error(`Timeout waiting for [${pred.toString()}]. Received: ${JSON.stringify(msgs, null, 2)}`));
+        }
+      }, 15);
+    });
+  };
+
+  // 1. Socket A connects as DESKTOP
+  const clientA_ws = await connectWsClient('DESKTOP');
+  clientA_ws.ws.send(JSON.stringify({ type: 'JOIN_ROOM', roomId: ROOM_HANDOVER, username: 'Alpha', slot: 1 }));
+  await waitMsg(clientA_ws.msgs, m => m.type === 'MATCH_JOINED' || m.type === 'SESSION_ACTIVE' || m.type === 'ROOM_JOINED');
+
+  // Verify client A has command authority
+  clientA_ws.ws.send(JSON.stringify({ type: 'ACTION', action: { type: 'TEST_VALID_ACTION' } }));
+  await new Promise(r => setTimeout(r, 60));
+
+  // 2. Socket B connects with same user token as MOBILE
+  const clientB_ws = await connectWsClient('MOBILE');
+  clientB_ws.ws.send(JSON.stringify({ type: 'JOIN_ROOM', roomId: ROOM_HANDOVER, username: 'Alpha', slot: 1 }));
+
+  // 3. Verify Socket A receives SESSION_TAKEN_OVER
+  const takeoverOnA = await waitMsg(clientA_ws.msgs, m => m.type === 'SESSION_TAKEN_OVER');
+  assert.strictEqual(takeoverOnA.type, 'SESSION_TAKEN_OVER');
+  assert.strictEqual(takeoverOnA.activeDevice, 'MOBILE');
+
+  // 4. Verify Socket B receives SNAPSHOT_REHYDRATION
+  const rehydrateOnB = await waitMsg(clientB_ws.msgs, m => m.type === 'SNAPSHOT_REHYDRATION');
+  assert.strictEqual(rehydrateOnB.type, 'SNAPSHOT_REHYDRATION');
+  assert.ok(rehydrateOnB.snapshot || rehydrateOnB.state, 'Snapshot must contain tabletop state');
+
+  // 5. Verify Socket A authority revoked
+  clientA_ws.ws.send(JSON.stringify({ type: 'ACTION', action: { type: 'UNAUTHORIZED_PASS' } }));
+  const revokedError = await waitMsg(clientA_ws.msgs, m => m.type === 'ERROR' && m.code === 'AUTHORITY_REVOKED');
+  assert.strictEqual(revokedError.code, 'AUTHORITY_REVOKED');
+
+  // 6. Socket A reclaims session
+  clientA_ws.ws.send(JSON.stringify({ type: 'RECLAIM_SESSION' }));
+
+  // Socket B must receive SESSION_TAKEN_OVER with activeDevice: DESKTOP
+  const takeoverOnB = await waitMsg(clientB_ws.msgs, m => m.type === 'SESSION_TAKEN_OVER');
+  assert.strictEqual(takeoverOnB.type, 'SESSION_TAKEN_OVER');
+  assert.strictEqual(takeoverOnB.activeDevice, 'DESKTOP');
+
+  clientA_ws.ws.close();
+  clientB_ws.ws.close();
+  console.log('  ✔ Section 5 Passed: ADV-45 MTG Arena-Style Session Handover & Snapshot Rehydration verified.\n');
+
   // Final Teardown
   await new Promise(r => relay.close(r));
   console.log('✅ Multi-Client Real-Time Synchronization & Autopilot Vectors Verified!\n');

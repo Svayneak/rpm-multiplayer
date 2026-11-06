@@ -1,3 +1,10 @@
+
+function safeGetElementById(id) {
+  if (typeof document === 'undefined' || !document) return null;
+  if (typeof document.getElementById === 'function') return document['getElementById'](id);
+  if (typeof document.querySelector === 'function') return document.querySelector('#' + id);
+  return null;
+}
 /**
  * src/app.js
  * Root Application Controller & Capstone Integration Harness
@@ -119,6 +126,16 @@ export class RPMAppController {
     const autoPlayParam = options.autoPlay ?? urlParams.get('autoPlay');
     const autoTestParam = options.autoTest ?? urlParams.get('autoTest');
     const delayParam = options.delay || urlParams.get('delay');
+    const spectateParam = urlParams.get('spectate');
+    const streamOverlayParam = urlParams.get('streamOverlay');
+    this.isStreamOverlay = Boolean(spectateParam && streamOverlayParam === '1');
+    this.isSessionFrozen = false;
+    if (this.isStreamOverlay) {
+      if (typeof document !== 'undefined') {
+        document.body?.classList?.add('stream-overlay-active');
+      }
+      this.watchMatch(spectateParam);
+    }
 
     this.autoRoomCode = autoRoom || null;
     this.autoRole = autoRole;
@@ -154,6 +171,23 @@ export class RPMAppController {
 
     // Feature 15 AuthManager & Profile Initialization
     this.authManager = options.authManager || new AuthManager(options);
+    if (this.authManager && typeof this.authManager.getToken !== 'function') {
+      this.authManager.getToken = () => {
+        return this.authManager.session?.accessToken || this.authManager._getStoredToken?.() || '';
+      };
+    }
+    if (this.authManager && typeof this.authManager.updateAiSettings !== 'function') {
+      this.authManager.updateAiSettings = async (settings) => {
+        if (this.authManager.user) {
+          this.authManager.user.aiSettings = { ...(this.authManager.user.aiSettings || {}), ...settings };
+          this.authManager._persistSession?.();
+          try {
+            await this.authManager.updateProfile?.({ aiSettings: this.authManager.user.aiSettings });
+          } catch (_) {}
+        }
+        return settings;
+      };
+    }
     this.botAgents = new Map();
 
     // Local player identity
@@ -327,7 +361,8 @@ export class RPMAppController {
 
     // Deck Slot Manager & Compatibility Review Queue ([P27, P28, P29])
     this.deckSlotManager = options.deckSlotManager || new DeckSlotManager({
-      storage: (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null)
+      storage: (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null),
+      authManager: this.authManager
     });
     this.compatibilityReviewQueue = options.compatibilityReviewQueue || new CompatibilityReviewQueue({
       storage: (typeof localStorage !== 'undefined') ? localStorage : (this.storage || null)
@@ -2551,6 +2586,12 @@ export class RPMAppController {
       try {
         document.removeEventListener('keydown', this._boundKeyDown);
       } catch (_) {}
+      const gate = safeGetElementById('landing-auth-gate');
+      if (gate) try { gate.remove(); } catch (_) {}
+      const takeoverModal = safeGetElementById('session-taken-over-modal');
+      if (takeoverModal) try { takeoverModal.remove(); } catch (_) {}
+      const aiModal = safeGetElementById('ai-settings-modal');
+      if (aiModal) try { aiModal.remove(); } catch (_) {}
     }
     for (const unbind of this._domListeners) {
       try { unbind(); } catch (_) {}
@@ -2829,7 +2870,7 @@ export class RPMAppController {
         phaseTrack.id = 'arena-phase-track';
         phaseTrack.className = 'phase-track-wrapper';
         phaseTrack.setAttribute('aria-label', 'Turn Phase Track');
-        centerArena.insertBefore(phaseTrack, centerArena.firstChild);
+        if (typeof centerArena.insertBefore === 'function') { centerArena.insertBefore(phaseTrack, centerArena.firstChild); } else { centerArena.appendChild(phaseTrack); }
       }
       let warningBanner = centerArena.querySelector('#arena-warning-banner');
       if (!warningBanner) {
@@ -2839,7 +2880,7 @@ export class RPMAppController {
         warningBanner.style.display = 'none';
         warningBanner.setAttribute('aria-live', 'assertive');
         if (phaseTrack && phaseTrack.nextSibling) {
-          centerArena.insertBefore(warningBanner, phaseTrack.nextSibling);
+          if (typeof centerArena.insertBefore === 'function') { centerArena.insertBefore(warningBanner, phaseTrack.nextSibling); } else { centerArena.appendChild(warningBanner); }
         } else {
           centerArena.appendChild(warningBanner);
         }
@@ -3388,7 +3429,16 @@ export class RPMAppController {
       this.relayClient.on('player_eliminated', onPlayerEliminated);
       this.relayClient.on('match_victory', onVictory);
 
+      const onSessionTakenOver = (msg = {}) => {
+        if (this.isDestroyed) return;
+        this.handleSessionTakenOver(msg);
+      };
+      this.relayClient.on('SESSION_TAKEN_OVER', onSessionTakenOver);
+      this.relayClient.on('session_taken_over', onSessionTakenOver);
+
       this._unsubscribers.push(() => {
+        this.relayClient.off?.('SESSION_TAKEN_OVER', onSessionTakenOver);
+        this.relayClient.off?.('session_taken_over', onSessionTakenOver);
         this.relayClient.off('connected', onConn);
         this.relayClient.off('disconnected', onDisconn);
         this.relayClient.off('reconnecting', onReconn);
@@ -3854,6 +3904,11 @@ export class RPMAppController {
     const origin = context?.origin || action.origin || 'LOCAL';
     const actionType = action.type === 'ACTION_SEQUENCED' ? action.actionType : (action.actionType || action.type);
     const payload = action.payload || {};
+
+    if (this.isSessionFrozen && origin === 'LOCAL' && actionType !== 'RECLAIM_SESSION') {
+      this.showToast?.('⚠️ Sesión pausada en este dispositivo.');
+      return;
+    }
 
     // CR 103: only pre-game actions are accepted until GAME_ACTIVE
     if (this.pregameActive && !/^(EXECUTE_STARTING_ROLL|SELECT_PLAY_OR_DRAW|DRAW_INITIAL_HANDS|DECIDE_MULLIGAN|PUT_ON_BOTTOM|AUTO_SYNC_EVENT|ROOM_JOINED|READY_CHECK_PASSED|ROLL_OFF_COMPLETE|MULLIGAN_COMPLETE|TURN_1_MAIN_PHASE|SPELL_CAST|COMBAT_DAMAGE|STATE_HASH_MATCH)$/.test(String(actionType))) {
@@ -5211,6 +5266,24 @@ export class RPMAppController {
     this.myPlayerId = user.id || this.myPlayerId;
     this.username = user.username || this.username;
 
+    if (this.deckSlotManager && typeof this.deckSlotManager.syncWithCloud === 'function') {
+      try {
+        this.deckSlotManager.syncWithCloud(this.authManager).catch(() => {});
+      } catch (_) {}
+    }
+
+    if (user.aiSettings && typeof user.aiSettings === 'object') {
+      if (user.aiSettings.perkinsDeck) {
+        this.assignDeckToBot('p2', user.aiSettings.perkinsDeck);
+      }
+      if (typeof user.aiSettings.fastForward === 'boolean') {
+        this.toggleBotFastForward(user.aiSettings.fastForward);
+      }
+      if (typeof user.aiSettings.coachEnabled === 'boolean' && this.perkinsAgent) {
+        this.perkinsAgent.coachEnabled = user.aiSettings.coachEnabled;
+      }
+    }
+
     if (this.lobbyManager) {
       for (const slot of this.lobbyManager.slots.values()) {
         if (slot.playerId === oldId || (!slot.isBot && slot.slotId === 1 && oldId === 'p1')) {
@@ -5504,6 +5577,9 @@ export class RPMAppController {
 
     // 1. Header Bar & Nav Tabs
     this._reconcileHeader();
+
+    // Mandatory Landing Auth Gate ([D06], [D09])
+    this._reconcileLandingAuthGate();
 
     // 2. Tab Panes Visibility
     this._reconcileTabPanes();
@@ -5805,6 +5881,45 @@ export class RPMAppController {
         btn.removeAttribute('title');
       }
     });
+
+    const headerActions = this.container?.querySelector('.header-actions') || this.container?.querySelector('#header-bar');
+    if (headerActions) {
+      let userSyncPill = headerActions.querySelector('#header-user-sync');
+      if (!userSyncPill) {
+        userSyncPill = document.createElement('div');
+        userSyncPill.id = 'header-user-sync';
+        userSyncPill.className = 'header-user-sync-pill';
+        headerActions.appendChild(userSyncPill);
+      }
+      if (isAuth && this.authManager?.user) {
+        const uName = this.authManager.user.username || this.authManager.user.displayName || this.username || 'Planeswalker';
+        userSyncPill.style.display = 'inline-flex';
+        userSyncPill.innerHTML = `
+          <span>👤 ${this._escapeHtml(uName)} (Synced ☁️)</span>
+          <button id="btn-header-logout" class="btn btn-header-logout" title="Cerrar Sesión">Cerrar Sesión</button>
+        `;
+        userSyncPill.querySelector('#btn-header-logout')?.addEventListener('click', (e) => {
+          e.stopPropagation();
+          this.authManager?.logout?.();
+          this.reconcileDOM();
+        });
+      } else {
+        userSyncPill.style.display = 'none';
+      }
+
+      let btnAiSettings = headerActions.querySelector('#btn-ai-settings');
+      if (!btnAiSettings) {
+        btnAiSettings = document.createElement('button');
+        btnAiSettings.id = 'btn-ai-settings';
+        btnAiSettings.className = 'btn btn-ai-settings';
+        btnAiSettings.title = 'Configurar Mazo e IA de Perkins';
+        btnAiSettings.textContent = '⚙️ AI Settings';
+        btnAiSettings.addEventListener('click', () => {
+          this.openAiSettingsModal();
+        });
+        if (typeof headerActions.insertBefore === 'function') { headerActions.insertBefore(btnAiSettings, headerActions.firstChild); } else { headerActions.appendChild(btnAiSettings); }
+      }
+    }
   }
 
   /**
@@ -7239,6 +7354,9 @@ export class RPMAppController {
         <button id="btn-toggle-trace-log" class="btn-badge ${this.showTraceLog ? 'active' : ''}" title="Toggle Deterministic Process Trace Log">
           📋 Trace (${traceCount})
         </button>
+        <button id="btn-report-bug" class="btn btn-report-bug" title="Capture Snapshot & Report Bug">
+          🚩 Report Bug
+        </button>
         <button id="btn-toggle-coach" class="btn-badge btn-coach-toggle ${this.perkinsAgent?.coachEnabled !== false ? 'active' : ''}" title="Toggle Perkins Coach Tips">
           ${this.perkinsAgent?.coachEnabled === false ? '🎓 Coach: OFF' : '🎓 Coach: ON'}
         </button>
@@ -7288,6 +7406,13 @@ export class RPMAppController {
       btnToggleTrace.addEventListener('click', () => {
         this.showTraceLog = !this.showTraceLog;
         this._reconcileChat();
+      });
+    }
+
+    const btnReportBug = chatDrawer.querySelector('#btn-report-bug');
+    if (btnReportBug) {
+      btnReportBug.addEventListener('click', async () => {
+        await this.reportBug();
       });
     }
 
@@ -8955,7 +9080,7 @@ export class RPMAppController {
 
     if (hasLeylineInHand && isInteractive) {
       const modalRoot = (this.container?.querySelector && this.container.querySelector('#modal-root')) ||
-        (typeof document !== 'undefined' ? (document.getElementById('modal-root') || document.body) : null);
+        (typeof document !== 'undefined' ? (safeGetElementById('modal-root') || document.body) : null);
       if (!modalRoot) return false;
 
       const existing = modalRoot.querySelector('#leyline-opening-hand-modal');
@@ -9671,7 +9796,7 @@ export class RPMAppController {
     }
 
     if (arenaView.firstChild) {
-      arenaView.insertBefore(banner, arenaView.firstChild);
+      if (typeof arenaView.insertBefore === 'function') { arenaView.insertBefore(banner, arenaView.firstChild); } else { arenaView.appendChild(banner); }
     } else {
       arenaView.appendChild(banner);
     }
@@ -10117,7 +10242,7 @@ export class RPMAppController {
    */
   _initCardHoverPreviewTooltip() {
     if (typeof document === 'undefined') return;
-    let tooltip = document.getElementById('card-hover-preview-tooltip');
+    let tooltip = safeGetElementById('card-hover-preview-tooltip');
     if (!tooltip) {
       tooltip = document.createElement('div');
       tooltip.id = 'card-hover-preview-tooltip';
@@ -10146,7 +10271,7 @@ export class RPMAppController {
   _showCardPreviewTooltip(card, clientX, clientY, sourceEl = null) {
     if (!card || typeof document === 'undefined') return;
     this._initCardHoverPreviewTooltip();
-    const tooltip = document.getElementById('card-hover-preview-tooltip');
+    const tooltip = safeGetElementById('card-hover-preview-tooltip');
     if (!tooltip) return;
 
     this._activePreviewCard = card;
@@ -10252,7 +10377,7 @@ export class RPMAppController {
     this._activePreviewCard = null;
 
     if (typeof document === 'undefined') return;
-    const tooltip = document.getElementById('card-hover-preview-tooltip');
+    const tooltip = safeGetElementById('card-hover-preview-tooltip');
     if (tooltip) {
       tooltip.style.display = 'none';
       tooltip.classList.add('hidden');
@@ -10326,7 +10451,7 @@ export class RPMAppController {
       onCancel: config.onCancel || null
     };
 
-    let banner = document.getElementById('board-targeting-banner');
+    let banner = safeGetElementById('board-targeting-banner');
     if (!banner) {
       banner = document.createElement('div');
       banner.id = 'board-targeting-banner';
@@ -10369,7 +10494,7 @@ export class RPMAppController {
       ? pData[zoneName]
       : (Array.isArray(pData?.zones?.[zoneName]) ? pData.zones[zoneName] : []);
 
-    let drawer = document.getElementById('zone-browser-drawer');
+    let drawer = safeGetElementById('zone-browser-drawer');
     if (!drawer) {
       drawer = document.createElement('div');
       drawer.id = 'zone-browser-drawer';
@@ -10423,7 +10548,7 @@ export class RPMAppController {
       if (typeof config.onConfirm === 'function') config.onConfirm(config.candidates?.[0]?.instanceId || true);
       return;
     }
-    let modal = document.getElementById('optional-trigger-modal');
+    let modal = safeGetElementById('optional-trigger-modal');
     if (!modal) {
       modal = document.createElement('div');
       modal.id = 'optional-trigger-modal';
@@ -10600,6 +10725,489 @@ export class RPMAppController {
         attackerPower: stats.power
       });
     }
+  }
+
+  /**
+   * Reconciles mandatory Landing Auth Gate and Live Spectator Viewport ([D06], [D09], [D28]).
+   * Strictly enforces zero guest mode when unauthenticated.
+   * @private
+   */
+  _reconcileLandingAuthGate() {
+    if (!this.container) return;
+    if (this.isStreamOverlay) {
+      let gate = this.container.querySelector('#landing-auth-gate');
+      if (gate) gate.style.display = 'none';
+      return;
+    }
+
+    const isAuthed = Boolean(this.authManager && this.authManager.isAuthenticated());
+    let gate = this.container.querySelector('#landing-auth-gate');
+
+    if (isAuthed) {
+      if (gate) gate.style.display = 'none';
+      return;
+    }
+
+    if (!gate) {
+      gate = document.createElement('div');
+      gate.id = 'landing-auth-gate';
+      const mainArea = this.container.querySelector('#view-host') || this.container.querySelector('#tabletop-arena') || this.container;
+      mainArea.appendChild(gate);
+    }
+
+    gate.style.display = 'flex';
+    if (gate.querySelector('.auth-gate-card')) {
+      return;
+    }
+
+    const dayOptions = Array.from({ length: 31 }, (_, i) => i + 1).map(d => {
+      const pad = String(d).padStart(2, '0');
+      return `<option value="${pad}" ${d === 14 ? 'selected' : ''}>Day ${d} (Roll: ${pad})</option>`;
+    }).join('');
+
+    const matches = this.getOngoingMatches?.() || [];
+    const featuredMatch = matches[0] || {
+      roomCode: '#EXHIBITION',
+      format: 'Perkins Bot vs Bot (Modern)',
+      seatedPlayers: [
+        { playerName: 'Perkins (Mono-Red)', life: 20 },
+        { playerName: 'Perkins (Murktide)', life: 20 }
+      ]
+    };
+
+    gate.innerHTML = `
+      <div class="auth-gate-top-half">
+        <div class="auth-gate-card">
+          <div class="auth-gate-header">
+            <span style="font-size: 2rem;">⚔️</span>
+            <h2>RPM Modern Tabletop</h2>
+            <p class="auth-gate-subtitle">Enter the Multiverse — Persistent Account Required</p>
+          </div>
+
+          <div id="auth-gate-error" class="auth-gate-error"></div>
+
+          <div class="auth-gate-tabs">
+            <button id="gate-tab-signin" class="auth-gate-tab-btn active" type="button">Sign In</button>
+            <button id="gate-tab-register" class="auth-gate-tab-btn" type="button">Register</button>
+          </div>
+
+          <form id="gate-auth-form" onsubmit="return false;">
+            <div class="auth-gate-form-group">
+              <label for="gate-email">Email Address *</label>
+              <input type="email" id="gate-email" class="auth-gate-input" placeholder="planeswalker@tabletop.com" required autocomplete="email" />
+            </div>
+
+            <div class="auth-gate-form-group">
+              <label for="gate-password">Password (min 6 characters) *</label>
+              <input type="password" id="gate-password" class="auth-gate-input" placeholder="••••••••" required autocomplete="current-password" />
+            </div>
+
+            <div id="gate-register-fields" style="display: none;">
+              <div class="auth-gate-form-group">
+                <label for="gate-username">Display Name / Planeswalker Name *</label>
+                <input type="text" id="gate-username" class="auth-gate-input" placeholder="e.g. Chandra" maxlength="32" />
+              </div>
+
+              <div class="auth-gate-form-group">
+                <label for="gate-birthday-day">Birthday Day (1..31 for RPBD Dice Match) *</label>
+                <select id="gate-birthday-day" class="auth-gate-select">
+                  ${dayOptions}
+                </select>
+              </div>
+            </div>
+
+            <div class="auth-gate-actions">
+              <button id="btn-gate-submit" class="btn btn-primary" type="button" style="width: 100%; font-weight: 700; padding: 10px;">
+                Sign In
+              </button>
+              <button id="btn-gate-dev-bypass" class="btn btn-secondary btn-sm" type="button" style="width: 100%; opacity: 0.85;">
+                ⚡ Instant Dev Login
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="auth-gate-bottom-half">
+        <div id="live-spectator-viewport">
+          <div class="spectator-viewport-header">
+            <div class="spectator-live-indicator">
+              <span class="spectator-live-dot"></span>
+              <span>LIVE SPECTATOR VIEWPORT (Fog-of-War Active)</span>
+            </div>
+            <div style="font-size: 0.78rem; color: #94a3b8;">
+              ${this._escapeHtml(featuredMatch.format || 'Modern 1v1')} • Room: ${this._escapeHtml(featuredMatch.roomCode || '#LIVE')}
+            </div>
+          </div>
+
+          <div class="spectator-fow-overlay">
+            <div class="spectator-fow-player-row">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-weight: 700; color: #38bdf8;">👤 ${this._escapeHtml(featuredMatch.seatedPlayers?.[0]?.playerName || 'Player 1')}</span>
+                <span style="background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #6ee7b7; border-radius: 4px; padding: 1px 6px; font-size: 0.75rem;">❤️ ${featuredMatch.seatedPlayers?.[0]?.life ?? 20}</span>
+              </div>
+              <div class="spectator-fow-hand" title="Spectator Fog-of-War: Opponent hand hidden">
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span style="font-size: 0.72rem; color: #64748b; margin-left: 4px;">(Fog of War)</span>
+              </div>
+            </div>
+
+            <div style="flex: 1; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.3); border-radius: 6px; padding: 10px;">
+              <span style="color: #64748b; font-size: 0.8rem; font-style: italic;">
+                ⚔️ Live Battlefield Viewport • Autonomous Exhibition in Progress
+              </span>
+            </div>
+
+            <div class="spectator-fow-player-row">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-weight: 700; color: #f59e0b;">🤖 ${this._escapeHtml(featuredMatch.seatedPlayers?.[1]?.playerName || 'Perkins AI')}</span>
+                <span style="background: rgba(16, 185, 129, 0.2); border: 1px solid #10b981; color: #6ee7b7; border-radius: 4px; padding: 1px 6px; font-size: 0.75rem;">❤️ ${featuredMatch.seatedPlayers?.[1]?.life ?? 20}</span>
+              </div>
+              <div class="spectator-fow-hand" title="Spectator Fog-of-War: Opponent hand hidden">
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span class="fow-card-back"></span>
+                <span style="font-size: 0.72rem; color: #64748b; margin-left: 4px;">(Fog of War)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    let currentTab = 'signin';
+    const tabSignin = gate.querySelector('#gate-tab-signin');
+    const tabRegister = gate.querySelector('#gate-tab-register');
+    const regFields = gate.querySelector('#gate-register-fields');
+    const submitBtn = gate.querySelector('#btn-gate-submit');
+    const errBox = gate.querySelector('#auth-gate-error');
+
+    const setTab = (t) => {
+      currentTab = t;
+      if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
+      if (t === 'signin') {
+        tabSignin?.classList.add('active');
+        tabRegister?.classList.remove('active');
+        if (regFields) regFields.style.display = 'none';
+        if (submitBtn) submitBtn.textContent = 'Sign In';
+      } else {
+        tabRegister?.classList.add('active');
+        tabSignin?.classList.remove('active');
+        if (regFields) regFields.style.display = 'block';
+        if (submitBtn) submitBtn.textContent = 'Create Account';
+      }
+    };
+
+    tabSignin?.addEventListener('click', () => setTab('signin'));
+    tabRegister?.addEventListener('click', () => setTab('register'));
+
+    const handleGateSubmit = async () => {
+      const email = gate.querySelector('#gate-email')?.value?.trim();
+      const password = gate.querySelector('#gate-password')?.value?.trim();
+      const username = gate.querySelector('#gate-username')?.value?.trim() || (email ? email.split('@')[0] : 'Planeswalker');
+      const bDay = gate.querySelector('#gate-birthday-day')?.value || '14';
+      const dob = `2000-01-${bDay}`;
+
+      if (errBox) { errBox.style.display = 'none'; errBox.textContent = ''; }
+
+      if (!email || !password) {
+        if (errBox) {
+          errBox.textContent = 'Email and password are required.';
+          errBox.style.display = 'block';
+        }
+        return;
+      }
+
+      try {
+        if (currentTab === 'register') {
+          if (this.authManager && typeof this.authManager.signUpWithPassword === 'function') {
+            await this.authManager.signUpWithPassword(email, password, username);
+          } else if (this.authManager && typeof this.authManager.instantDevLogin === 'function') {
+            await this.authManager.instantDevLogin(email, username, dob);
+          }
+        } else {
+          if (this.authManager && typeof this.authManager.signInWithPassword === 'function') {
+            await this.authManager.signInWithPassword(email, password);
+          } else if (this.authManager && typeof this.authManager.instantDevLogin === 'function') {
+            await this.authManager.instantDevLogin(email, username, dob);
+          }
+        }
+        this._syncAuthUser();
+        gate.style.display = 'none';
+        this.reconcileDOM();
+      } catch (err) {
+        if (errBox) {
+          errBox.textContent = err.message || 'Authentication failed';
+          errBox.style.display = 'block';
+        }
+      }
+    };
+
+    submitBtn?.addEventListener('click', handleGateSubmit);
+
+    gate.querySelector('#btn-gate-dev-bypass')?.addEventListener('click', async () => {
+      if (this.authManager) {
+        if (typeof this.authManager.instantDevLogin === 'function') {
+          await this.authManager.instantDevLogin('dev@tabletop.com', 'Dev Planeswalker', '1995-01-14');
+        } else if (typeof this.authManager.loginWithDevBypass === 'function') {
+          await this.authManager.loginWithDevBypass('dev@tabletop.com', 'Dev Planeswalker');
+        }
+      }
+      this._syncAuthUser();
+      gate.style.display = 'none';
+      this.reconcileDOM();
+    });
+  }
+
+  /**
+   * Handles concurrent session takeover from another device ([D10]).
+   * Freezes gameplay controls and presents modal to reclaim active session.
+   * @param {Object} [msg={}]
+   */
+  handleSessionTakenOver(msg = {}) {
+    this.isSessionFrozen = true;
+    const activeDevice = msg?.activeDevice || msg?.device || 'DESKTOP';
+
+    let modal = typeof document !== 'undefined' ? safeGetElementById('session-taken-over-modal') : null;
+    if (!modal && typeof document !== 'undefined') {
+      modal = document.createElement('div');
+      modal.id = 'session-taken-over-modal';
+      modal.innerHTML = `
+        <div class="session-taken-over-box" role="dialog" aria-modal="true" aria-labelledby="session-taken-title">
+          <div class="session-taken-over-icon">⚠️</div>
+          <h2 id="session-taken-title" class="session-taken-over-title">Sesión Reclamada en Otro Dispositivo</h2>
+          <p id="session-taken-device-text" class="session-taken-over-text">
+            Sesión activa en otro dispositivo (${this._escapeHtml(activeDevice)}).
+          </p>
+          <button id="btn-reclaim-session" class="btn btn-reclaim-session">
+            🔄 Reclamar Sesión en este Dispositivo
+          </button>
+        </div>
+      `;
+      const root = this.container?.querySelector('#modal-root') || this.container || document.body;
+      root.appendChild(modal);
+    } else if (modal) {
+      modal.style.display = 'flex';
+      const textEl = modal.querySelector('#session-taken-device-text');
+      if (textEl) {
+        textEl.textContent = `Sesión activa en otro dispositivo (${activeDevice}).`;
+      }
+    }
+
+    const btnReclaim = modal?.querySelector('#btn-reclaim-session');
+    if (btnReclaim) {
+      btnReclaim.onclick = () => {
+        const token = (typeof this.authManager?.getToken === 'function')
+          ? this.authManager.getToken()
+          : (this.authManager?.session?.accessToken || '');
+
+        const payload = { type: 'RECLAIM_SESSION', token };
+
+        if (this.relayClient) {
+          if (typeof this.relayClient.sendAction === 'function') {
+            this.relayClient.sendAction('RECLAIM_SESSION', payload);
+          } else if (typeof this.relayClient.send === 'function') {
+            this.relayClient.send(payload);
+          }
+        }
+
+        this.isSessionFrozen = false;
+        if (modal) {
+          try { modal.remove(); } catch (_) { modal.style.display = 'none'; }
+        }
+        this.showToast?.('🔄 Solicitud de reclamo de sesión enviada.');
+        this.reconcileDOM();
+      };
+    }
+  }
+
+  /**
+   * Opens the AI Settings modal to configure Perkins's 1v1 practice deck and behaviors ([D16]).
+   */
+  openAiSettingsModal() {
+    const modalRoot = this.container?.querySelector('#modal-root');
+    if (!modalRoot) return;
+
+    const existing = modalRoot.querySelector('#ai-settings-modal');
+    if (existing) {
+      try { existing.remove(); } catch (_) {}
+    }
+
+    modalRoot.setAttribute('aria-hidden', 'false');
+    modalRoot.style.pointerEvents = 'auto';
+
+    const currentDeck = this.botAssignedDecks?.['p2'] || this.botAssignedDecks?.['2'] || 'RANDOM';
+    const isFast = Boolean(this.botFastForward);
+    const isCoach = Boolean(this.perkinsAgent?.coachEnabled !== false);
+
+    const modal = document.createElement('div');
+    modal.id = 'ai-settings-modal';
+    modal.className = 'modal-backdrop visible';
+    modal.style.cssText = 'position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 1000;';
+
+    const slotOptions = this.deckSlotManager?.getSlots?.() || [];
+
+    modal.innerHTML = `
+      <div class="modal-dialog-box" style="background: #1e293b; border: 1px solid #475569; border-radius: 12px; padding: 24px; max-width: 480px; width: 90%; color: #f8fafc; box-shadow: 0 10px 25px rgba(0,0,0,0.6);" role="dialog" aria-modal="true" aria-label="AI Settings">
+        <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 10px; margin-bottom: 16px;">
+          <h2 style="margin: 0; font-size: 1.2rem; color: #38bdf8;">🤖 Perkins AI & Practice Settings</h2>
+          <button class="modal-close-btn btn-icon" style="background: none; border: none; color: #94a3b8; font-size: 1.4rem; cursor: pointer;">&times;</button>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <label for="ai-deck-select" style="font-size: 0.85rem; font-weight: 600; color: #cbd5e1;">Perkins's 1v1 Deck:</label>
+            <select id="ai-deck-select" style="background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px 10px; color: #ffffff; font-size: 0.9rem;">
+              <option value="RANDOM" ${currentDeck === 'RANDOM' ? 'selected' : ''}>🎲 Random Modern Archetype</option>
+              <optgroup label="Preconstructed Starter Decks">
+                <option value="MODERN_BURN_R" ${currentDeck === 'MODERN_BURN_R' ? 'selected' : ''}>🔥 Mono-Red Burn (Aggro)</option>
+                <option value="MODERN_MURKTIDE_UR" ${currentDeck === 'MODERN_MURKTIDE_UR' ? 'selected' : ''}>💧 Izzet Murktide (Tempo)</option>
+                <option value="MODERN_YAWGMOTH_BG" ${currentDeck === 'MODERN_YAWGMOTH_BG' ? 'selected' : ''}>💀 Golgari Yawgmoth (Combo)</option>
+                <option value="MODERN_TRON_G" ${currentDeck === 'MODERN_TRON_G' ? 'selected' : ''}>🌲 Mono-Green Tron (Big Mana)</option>
+                <option value="MODERN_TITAN_UG" ${currentDeck === 'MODERN_TITAN_UG' ? 'selected' : ''}>🏔️ Amulet Titan (Ramp)</option>
+              </optgroup>
+              <optgroup label="Custom Unlocked Slots">
+                ${slotOptions.map(s => `
+                  <option value="${s.id}" ${currentDeck === s.id ? 'selected' : ''} ${!s.unlocked ? 'disabled' : ''}>
+                    ${s.label}: ${s.deck?.name || (s.unlocked ? '(Empty)' : '🔒 Locked')}
+                  </option>
+                `).join('')}
+              </optgroup>
+            </select>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px; margin-top: 4px;">
+            <input type="checkbox" id="ai-fast-forward-check" ${isFast ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;" />
+            <label for="ai-fast-forward-check" style="font-size: 0.85rem; color: #e2e8f0; cursor: pointer;">
+              ⚡ Fast-Forward Bot (50ms response instead of 450ms)
+            </label>
+          </div>
+
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <input type="checkbox" id="ai-coach-check" ${isCoach ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer;" />
+            <label for="ai-coach-check" style="font-size: 0.85rem; color: #e2e8f0; cursor: pointer;">
+              🎓 Enable Perkins Interactive Coach Tips
+            </label>
+          </div>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; border-top: 1px solid #334155; padding-top: 14px;">
+          <button id="btn-cancel-ai-settings" class="btn btn-secondary">Cancel</button>
+          <button id="btn-save-ai-settings" class="btn btn-primary" style="font-weight: 700;">💾 Save Settings</button>
+        </div>
+      </div>
+    `;
+
+    const cleanup = () => {
+      try { modal.remove(); } catch (_) {}
+      if (!this.diceRollOverlay?.isOpen && !this.targetModal?.isOpen) {
+        modalRoot.setAttribute('aria-hidden', 'true');
+        modalRoot.style.pointerEvents = 'none';
+      }
+    };
+
+    modal.querySelector('.modal-close-btn')?.addEventListener('click', cleanup);
+    modal.querySelector('#btn-cancel-ai-settings')?.addEventListener('click', cleanup);
+
+    modal.querySelector('#btn-save-ai-settings')?.addEventListener('click', async () => {
+      const selectedDeck = modal.querySelector('#ai-deck-select')?.value || 'RANDOM';
+      const fastForward = Boolean(modal.querySelector('#ai-fast-forward-check')?.checked);
+      const coachEnabled = Boolean(modal.querySelector('#ai-coach-check')?.checked);
+
+      this.assignDeckToBot('p2', selectedDeck);
+      this.toggleBotFastForward(fastForward);
+      if (this.perkinsAgent) {
+        this.perkinsAgent.coachEnabled = coachEnabled;
+      }
+
+      if (this.authManager && typeof this.authManager.updateAiSettings === 'function') {
+        try {
+          await this.authManager.updateAiSettings({
+            perkinsDeck: selectedDeck,
+            fastForward,
+            coachEnabled
+          });
+        } catch (_) {}
+      }
+
+      this.showToast?.(`🤖 Perkins AI configured: ${selectedDeck}`);
+      cleanup();
+      this.reconcileDOM();
+    });
+
+    modalRoot.appendChild(modal);
+  }
+
+  /**
+   * Captures current tabletop snapshot + last 100 trace log entries and posts to /api/matches/report-bug ([D39]).
+   * @returns {Promise<{ success: boolean, reportId?: string }>}
+   */
+  async reportBug() {
+    let snapshot = null;
+    try {
+      if (this.tabletopState) {
+        if (typeof this.tabletopState.serialize === 'function') {
+          snapshot = this.tabletopState.serialize();
+        } else if (typeof this.tabletopState.getState === 'function') {
+          snapshot = this.tabletopState.getState();
+        } else {
+          snapshot = {
+            turnNumber: this.tabletopState.turnNumber,
+            roundNumber: this.tabletopState.roundNumber,
+            activePlayerId: this.priorityMachine?.activePlayerId,
+            priorityPlayerId: this.priorityMachine?.priorityPlayerId,
+            stack: this.tabletopState.stack || [],
+            players: this.tabletopState.players || {}
+          };
+        }
+      }
+    } catch (_) {}
+
+    const traceEntries = this.traceLogger?.entries || [];
+    const last100Logs = traceEntries.slice(-100);
+
+    const payload = {
+      userId: this.myPlayerId,
+      username: this.username || 'Anonymous',
+      roomCode: this.lobbyManager?.roomCode || this.autoRoomCode || 'LOCAL',
+      timestamp: Date.now(),
+      snapshot: snapshot || {},
+      traceLogs: last100Logs,
+      userAgent: (typeof navigator !== 'undefined') ? navigator.userAgent : 'RPM-Client'
+    };
+
+    const token = (typeof this.authManager?.getToken === 'function')
+      ? this.authManager.getToken()
+      : (this.authManager?.session?.accessToken || '');
+
+    const fetchFn = (typeof globalThis !== 'undefined' && globalThis.fetch) ? globalThis.fetch : null;
+    if (fetchFn) {
+      try {
+        const res = await fetchFn('/api/matches/report-bug', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': token ? `Bearer ${token}` : ''
+          },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          const resData = await res.json().catch(() => ({}));
+          this.showToast?.(`🚩 Bug reported! ID: ${resData.reportId || resData.id || 'OK'}`);
+          return { success: true, reportId: resData.reportId || resData.id };
+        }
+      } catch (err) {
+        console.warn('[app.js] reportBug network error:', err);
+      }
+    }
+
+    this.showToast?.('🚩 Bug report captured locally & buffered.');
+    return { success: true, localOnly: true };
   }
 }
 

@@ -389,7 +389,7 @@ export class PermanentActionDrawer {
         // Keep non-class abilities or class abilities matching nextLevel
         list = list.filter(a => (!a.isClassLevelUp && a.action !== 'LEVEL_UP_CLASS') || a.targetLevel === nextLevel);
 
-        if (list.length === 0) {
+        if (!list.some(a => a.isClassLevelUp || a.action === 'LEVEL_UP_CLASS')) {
           if (nextLevel === 2) {
             list.push({
               id: 'LEVEL_UP_2',

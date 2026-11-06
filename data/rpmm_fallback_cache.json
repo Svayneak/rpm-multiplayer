@@ -1,0 +1,4826 @@
+{
+  "RPMM_profiles": {
+    "usr_e363d28776a9cdb1fe647ef81d00aa19": {
+      "id": "usr_e363d28776a9cdb1fe647ef81d00aa19",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "d23cd0b88e02ac05aab64cdd9c35b2e6400f0c713fb5e2669618ce84f66a11afa8f47b9c5151b158626ccc585c821f90867757ac4e12ccea60a003d34102c24e",
+      "password_salt": "11c7bb65d6abb46f0e94771cb7249f49",
+      "salt": "11c7bb65d6abb46f0e94771cb7249f49",
+      "hash": "d23cd0b88e02ac05aab64cdd9c35b2e6400f0c713fb5e2669618ce84f66a11afa8f47b9c5151b158626ccc585c821f90867757ac4e12ccea60a003d34102c24e",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "decks": {}
+    },
+    "usr_6c3bf4efe7b94bd7365a82a8ed113b1d": {
+      "id": "usr_6c3bf4efe7b94bd7365a82a8ed113b1d",
+      "email": "planeswalker@test.com",
+      "username": "planeswalker",
+      "password_hash": "5ba69c71b1fe6636cf4ba1793f31834ab978aa5f9a90068a8043e49bb50b7bfb9573d55f71aad811ebc84d78191bd9834194521f9de43032f8d1987d59d8bbbb",
+      "password_salt": "a72ada836b07ebf280686a2210c38596",
+      "salt": "a72ada836b07ebf280686a2210c38596",
+      "hash": "5ba69c71b1fe6636cf4ba1793f31834ab978aa5f9a90068a8043e49bb50b7bfb9573d55f71aad811ebc84d78191bd9834194521f9de43032f8d1987d59d8bbbb",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "decks": {}
+    },
+    "usr_c1eebeda967abecf655944b0486accbd": {
+      "id": "usr_c1eebeda967abecf655944b0486accbd",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "c800321454cdc57d4be7fe015c99270be0331f3542d9ee9935f6b2a6ef02fadcbf3b54c373cb2bb700663d8578e84ea72fa3ab3ca2a196f266193aac32772e3d",
+      "password_salt": "dd98e7890dd2a012f53e9c3fa867dfd6",
+      "salt": "dd98e7890dd2a012f53e9c3fa867dfd6",
+      "hash": "c800321454cdc57d4be7fe015c99270be0331f3542d9ee9935f6b2a6ef02fadcbf3b54c373cb2bb700663d8578e84ea72fa3ab3ca2a196f266193aac32772e3d",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "decks": {}
+    },
+    "usr_609200b451228a301f59972e7e34f4ce": {
+      "id": "usr_609200b451228a301f59972e7e34f4ce",
+      "email": "planeswalker@test.com",
+      "username": "planeswalker",
+      "password_hash": "495fea6b2f6c670cc5af4547b0676340f66f9806816a5fa5f7579cdcdf29c505c88c57ae89e818754f7c4df97bcee7243d443719b1b3709d1494c6856f5bab28",
+      "password_salt": "2ef504097d874a5a0d06ed9303919912",
+      "salt": "2ef504097d874a5a0d06ed9303919912",
+      "hash": "495fea6b2f6c670cc5af4547b0676340f66f9806816a5fa5f7579cdcdf29c505c88c57ae89e818754f7c4df97bcee7243d443719b1b3709d1494c6856f5bab28",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "decks": {}
+    },
+    "52ec6de8-e159-44bb-a751-af5cc65343c2": {
+      "id": "52ec6de8-e159-44bb-a751-af5cc65343c2",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "63250ac1b988d52f93b366fda69b3ac3:31ac53ef295ccf35cde12726eeded2b1c22039067789fddd4aa14e3ec7f56e8450c96281ab714ff3e472e194097923e7b50e75f840252f0c5479ba09b3dd6a2e",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "63250ac1b988d52f93b366fda69b3ac3"
+      },
+      "password_salt": "63250ac1b988d52f93b366fda69b3ac3",
+      "salt": "63250ac1b988d52f93b366fda69b3ac3",
+      "hash": "31ac53ef295ccf35cde12726eeded2b1c22039067789fddd4aa14e3ec7f56e8450c96281ab714ff3e472e194097923e7b50e75f840252f0c5479ba09b3dd6a2e",
+      "decks": {}
+    },
+    "669f71ac-9ade-440e-a6a0-0e03ddf38f5a": {
+      "id": "669f71ac-9ade-440e-a6a0-0e03ddf38f5a",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "af1486c0992efbb196561b2fdb5d9f80:216ac95513a25c9c2ee1e18cc13124ba6ee7e818416333afa5f2efc9bf7998cfa9e58bf21366017f92d981e442d34dacb3690d60b3c4cb6ebb122887823a49d3",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "af1486c0992efbb196561b2fdb5d9f80"
+      },
+      "password_salt": "af1486c0992efbb196561b2fdb5d9f80",
+      "salt": "af1486c0992efbb196561b2fdb5d9f80",
+      "hash": "216ac95513a25c9c2ee1e18cc13124ba6ee7e818416333afa5f2efc9bf7998cfa9e58bf21366017f92d981e442d34dacb3690d60b3c4cb6ebb122887823a49d3",
+      "decks": {}
+    },
+    "2b879065-0ac2-4ab6-83db-ec7a1a98f3ff": {
+      "id": "2b879065-0ac2-4ab6-83db-ec7a1a98f3ff",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "54cfc33d0e7bfdfbac489c843e8b0d1e:ce8b8a6af1ff27b86ee2ebd21a40dc597ac2f691e864c9636242475d9c7b4e8d1a5c789754497ba3bd143c488d3342cf12de2fbdc3c2a0c182f95ad6a71a33e3",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "54cfc33d0e7bfdfbac489c843e8b0d1e"
+      },
+      "password_salt": "54cfc33d0e7bfdfbac489c843e8b0d1e",
+      "salt": "54cfc33d0e7bfdfbac489c843e8b0d1e",
+      "hash": "ce8b8a6af1ff27b86ee2ebd21a40dc597ac2f691e864c9636242475d9c7b4e8d1a5c789754497ba3bd143c488d3342cf12de2fbdc3c2a0c182f95ad6a71a33e3",
+      "decks": {}
+    },
+    "c39b2cfc-c78c-4362-8c8d-b57d4f3cd97b": {
+      "id": "c39b2cfc-c78c-4362-8c8d-b57d4f3cd97b",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "a7b3aecc4b58e9fa0a2105ec0f296c2b:f7e98d04308b07c004bdf705608ed460f7eef3e95c37f47827bccd861879aa93c283b581b6fad72a921af83b1f4239a4cf07c001b57618b83f7e1c4749363c4e",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "a7b3aecc4b58e9fa0a2105ec0f296c2b"
+      },
+      "password_salt": "a7b3aecc4b58e9fa0a2105ec0f296c2b",
+      "salt": "a7b3aecc4b58e9fa0a2105ec0f296c2b",
+      "hash": "f7e98d04308b07c004bdf705608ed460f7eef3e95c37f47827bccd861879aa93c283b581b6fad72a921af83b1f4239a4cf07c001b57618b83f7e1c4749363c4e",
+      "decks": {}
+    },
+    "763b542a-2755-426f-b0da-b6022bdc6dbf": {
+      "id": "763b542a-2755-426f-b0da-b6022bdc6dbf",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "a185c9a6b1298f0d3bbca3df7909a4e4:9e387b624a096c736413f314b93ae6c93125a6600ee37095f41ece871500170a3c4a049a73d1d100e2455dc9520dc680b3ac6bd18f45546a182e1b22a494d0aa",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "a185c9a6b1298f0d3bbca3df7909a4e4"
+      },
+      "password_salt": "a185c9a6b1298f0d3bbca3df7909a4e4",
+      "salt": "a185c9a6b1298f0d3bbca3df7909a4e4",
+      "hash": "9e387b624a096c736413f314b93ae6c93125a6600ee37095f41ece871500170a3c4a049a73d1d100e2455dc9520dc680b3ac6bd18f45546a182e1b22a494d0aa",
+      "decks": {}
+    },
+    "d830f159-79a0-4eab-9c75-47d87675d1ca": {
+      "id": "d830f159-79a0-4eab-9c75-47d87675d1ca",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "b453474940a58d458ce81510e8ab8055:1b706a70b2976f68a1d6dd50012343223d0be46fe7737f872005019657946537c382841c89f0d3e5af0af0e237fe830e83abc0671a229c23491825a026566fdb",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "b453474940a58d458ce81510e8ab8055"
+      },
+      "password_salt": "b453474940a58d458ce81510e8ab8055",
+      "salt": "b453474940a58d458ce81510e8ab8055",
+      "hash": "1b706a70b2976f68a1d6dd50012343223d0be46fe7737f872005019657946537c382841c89f0d3e5af0af0e237fe830e83abc0671a229c23491825a026566fdb",
+      "decks": {}
+    },
+    "93d24888-c66b-4ac5-92fd-e3dab2c4acfa": {
+      "id": "93d24888-c66b-4ac5-92fd-e3dab2c4acfa",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "ef110617e0cb40f8818e513c8a5d9b8b:fd0586089d2840f98b2ece401eb7e117cd5d1c7f61fd9f41a918d0f1b9467dbf9a28737f6274440866b4f804cbba4371c327a09454f00ff69405d53d31574f47",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "ef110617e0cb40f8818e513c8a5d9b8b"
+      },
+      "password_salt": "ef110617e0cb40f8818e513c8a5d9b8b",
+      "salt": "ef110617e0cb40f8818e513c8a5d9b8b",
+      "hash": "fd0586089d2840f98b2ece401eb7e117cd5d1c7f61fd9f41a918d0f1b9467dbf9a28737f6274440866b4f804cbba4371c327a09454f00ff69405d53d31574f47",
+      "decks": {}
+    },
+    "af812c18-b20e-4d83-9d1a-69490f070b6a": {
+      "id": "af812c18-b20e-4d83-9d1a-69490f070b6a",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "16a419d9d12ac7820bdf012399b225df:3676b289329d96caa80ba28c02d6a87d7ab6b480ffb970c7d0c2c1fe30bfb75383cec89aceb03ee98554ea8ff0639f74b9cedf6b7349fba6fedb631637d109ba",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "16a419d9d12ac7820bdf012399b225df"
+      },
+      "password_salt": "16a419d9d12ac7820bdf012399b225df",
+      "salt": "16a419d9d12ac7820bdf012399b225df",
+      "hash": "3676b289329d96caa80ba28c02d6a87d7ab6b480ffb970c7d0c2c1fe30bfb75383cec89aceb03ee98554ea8ff0639f74b9cedf6b7349fba6fedb631637d109ba",
+      "decks": {}
+    },
+    "790c6cef-4075-4330-aee2-c4a0ec48506a": {
+      "id": "790c6cef-4075-4330-aee2-c4a0ec48506a",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "fe59b0d0b523e1a8e4592d31024de021:ba553c72ab5eaf824d504b4352a57c5dfa2e9af7b4c3716237fec5b88872584bb8cf975a29d1d49090316abc864973cb4cc873e3c6486df3b3b8e8d418cf849a",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "fe59b0d0b523e1a8e4592d31024de021"
+      },
+      "password_salt": "fe59b0d0b523e1a8e4592d31024de021",
+      "salt": "fe59b0d0b523e1a8e4592d31024de021",
+      "hash": "ba553c72ab5eaf824d504b4352a57c5dfa2e9af7b4c3716237fec5b88872584bb8cf975a29d1d49090316abc864973cb4cc873e3c6486df3b3b8e8d418cf849a",
+      "decks": {}
+    },
+    "9c24c570-7594-4274-9a67-276f39b70d93": {
+      "id": "9c24c570-7594-4274-9a67-276f39b70d93",
+      "email": "test_duelist_1793980335912@svayneaksoft.com",
+      "username": "test_duelist_1793980335912",
+      "password_hash": "8b6ee19b4b8ffb590c08f10961c81a89:febb6c32c323f6729b7ec3dec348726aa67f414a455af8ba7363c8fb1951917b519cc52b4246d47ad419137a44b0009fc5c8006eccae3dcce12e415afc40d155",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "8b6ee19b4b8ffb590c08f10961c81a89"
+      },
+      "password_salt": "8b6ee19b4b8ffb590c08f10961c81a89",
+      "salt": "8b6ee19b4b8ffb590c08f10961c81a89",
+      "hash": "febb6c32c323f6729b7ec3dec348726aa67f414a455af8ba7363c8fb1951917b519cc52b4246d47ad419137a44b0009fc5c8006eccae3dcce12e415afc40d155",
+      "decks": {}
+    },
+    "39a424a8-b461-4509-9207-4a0b92676cec": {
+      "id": "39a424a8-b461-4509-9207-4a0b92676cec",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "c91ea9e244bc4e64cc566589bcc0127f:cb00fe80e7c3b71f05c42253d3fe908cce9edfe7a0238c131d36398a606993a832fb490e3822a9d30233465e066161546300e4214d253c322468d6a177f59d91",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "c91ea9e244bc4e64cc566589bcc0127f"
+      },
+      "password_salt": "c91ea9e244bc4e64cc566589bcc0127f",
+      "salt": "c91ea9e244bc4e64cc566589bcc0127f",
+      "hash": "cb00fe80e7c3b71f05c42253d3fe908cce9edfe7a0238c131d36398a606993a832fb490e3822a9d30233465e066161546300e4214d253c322468d6a177f59d91",
+      "decks": {}
+    },
+    "4242342a-2348-4140-933e-af8a7744209b": {
+      "id": "4242342a-2348-4140-933e-af8a7744209b",
+      "email": "test_duelist_1793980384870@svayneaksoft.com",
+      "username": "test_duelist_1793980384870",
+      "password_hash": "68ebc0df95bcdef3118287937c8020e9:644e8324cf54937be8cf39ad01e5ae0fe8d84fdbd865a1cf4e709dd8c6908c5c19b2f0f59d9c3e94b97831d075cab66cea5e703f52a6d96999218640c2196114",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "68ebc0df95bcdef3118287937c8020e9"
+      },
+      "password_salt": "68ebc0df95bcdef3118287937c8020e9",
+      "salt": "68ebc0df95bcdef3118287937c8020e9",
+      "hash": "644e8324cf54937be8cf39ad01e5ae0fe8d84fdbd865a1cf4e709dd8c6908c5c19b2f0f59d9c3e94b97831d075cab66cea5e703f52a6d96999218640c2196114",
+      "decks": {}
+    },
+    "e64c4e71-f0fa-4995-a1ca-f33437b078b7": {
+      "id": "e64c4e71-f0fa-4995-a1ca-f33437b078b7",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "70a6beaf4a4da162b48bb75f88131bd9:60cf403abd92bd56d60d2c12269bd97b0d0c3bdcd8ed035dc2a6dc2101ca7a5040500c92c3e1acf37fad36d403b3cce4180e3ede920e07263514e03c6039135f",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "70a6beaf4a4da162b48bb75f88131bd9"
+      },
+      "password_salt": "70a6beaf4a4da162b48bb75f88131bd9",
+      "salt": "70a6beaf4a4da162b48bb75f88131bd9",
+      "hash": "60cf403abd92bd56d60d2c12269bd97b0d0c3bdcd8ed035dc2a6dc2101ca7a5040500c92c3e1acf37fad36d403b3cce4180e3ede920e07263514e03c6039135f",
+      "decks": {}
+    },
+    "ecafa346-39b8-4698-bb7b-7e5c5aa5ad83": {
+      "id": "ecafa346-39b8-4698-bb7b-7e5c5aa5ad83",
+      "email": "test_duelist_1793980926583@svayneaksoft.com",
+      "username": "test_duelist_1793980926583",
+      "password_hash": "348c3e914a614dd5e09bb146e95f8f3b:8edc5c6bdbb901cdb55fcbb8ddc69eb75794fb7d07efd46804bfe870d1af343d58b46a5c3f63ab6154a97aeeff4e3cd79129f3a9746b6e4b0cf722b62d9a4e87",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "348c3e914a614dd5e09bb146e95f8f3b"
+      },
+      "password_salt": "348c3e914a614dd5e09bb146e95f8f3b",
+      "salt": "348c3e914a614dd5e09bb146e95f8f3b",
+      "hash": "8edc5c6bdbb901cdb55fcbb8ddc69eb75794fb7d07efd46804bfe870d1af343d58b46a5c3f63ab6154a97aeeff4e3cd79129f3a9746b6e4b0cf722b62d9a4e87",
+      "decks": {}
+    },
+    "77e231f4-face-44a1-bcca-9f7f039ed6fe": {
+      "id": "77e231f4-face-44a1-bcca-9f7f039ed6fe",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "28486b59c6664770ddd7b557cef40cc6:41f33743e970bbf29090c14584dedd5a631d024f644fa502e763e30bf588e949a2bd348552fa1ebb9568bda35e9ba015a5c88a07fc47260f1a4a9e8a9f68bacc",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "28486b59c6664770ddd7b557cef40cc6"
+      },
+      "password_salt": "28486b59c6664770ddd7b557cef40cc6",
+      "salt": "28486b59c6664770ddd7b557cef40cc6",
+      "hash": "41f33743e970bbf29090c14584dedd5a631d024f644fa502e763e30bf588e949a2bd348552fa1ebb9568bda35e9ba015a5c88a07fc47260f1a4a9e8a9f68bacc",
+      "decks": {}
+    },
+    "7f12cf03-2ce8-4e74-9ffd-9311aaee7422": {
+      "id": "7f12cf03-2ce8-4e74-9ffd-9311aaee7422",
+      "email": "test_duelist_1793981296735@svayneaksoft.com",
+      "username": "test_duelist_1793981296735",
+      "password_hash": "0fbeaea247fb3859b0597f1fc917b8ba:f7c8aacdc1b7ca151afd1a935bd72c8f9dd4929eade0b6b44940347105b50aa3688101bc007b537881c2818f8e8237771f39ebedbe56a909db5df9acc15d34fb",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "0fbeaea247fb3859b0597f1fc917b8ba"
+      },
+      "password_salt": "0fbeaea247fb3859b0597f1fc917b8ba",
+      "salt": "0fbeaea247fb3859b0597f1fc917b8ba",
+      "hash": "f7c8aacdc1b7ca151afd1a935bd72c8f9dd4929eade0b6b44940347105b50aa3688101bc007b537881c2818f8e8237771f39ebedbe56a909db5df9acc15d34fb",
+      "decks": {}
+    },
+    "e0fd7037-a3f5-4e13-b58f-84e46ab9bac6": {
+      "id": "e0fd7037-a3f5-4e13-b58f-84e46ab9bac6",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "70f57ca2b7bea838c3d38efc3331a3fa:0ea24e728e24dbf2a5e4eb6ed505983d34cb6d8f71ea82b7ab106fa0365b1065b01cd0c735b1001e6adddddb0362cf8bc741c3380afc63b5db1759beac82fd36",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "70f57ca2b7bea838c3d38efc3331a3fa"
+      },
+      "password_salt": "70f57ca2b7bea838c3d38efc3331a3fa",
+      "salt": "70f57ca2b7bea838c3d38efc3331a3fa",
+      "hash": "0ea24e728e24dbf2a5e4eb6ed505983d34cb6d8f71ea82b7ab106fa0365b1065b01cd0c735b1001e6adddddb0362cf8bc741c3380afc63b5db1759beac82fd36",
+      "decks": {}
+    },
+    "62dbe871-c789-4e57-82e6-071673afaae2": {
+      "id": "62dbe871-c789-4e57-82e6-071673afaae2",
+      "email": "test_duelist_1793981348106@svayneaksoft.com",
+      "username": "test_duelist_1793981348106",
+      "password_hash": "50d9bf6d098a0ad986b0c6d24118c598:3c211ae0ffc25ae3a84f8ddf510e611b9b671190748e14a25e38a896dfffef7b2dc998fd15a7e11a16d185346fc5d40d40f3c88662661d7c05049e03562bca74",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "50d9bf6d098a0ad986b0c6d24118c598"
+      },
+      "password_salt": "50d9bf6d098a0ad986b0c6d24118c598",
+      "salt": "50d9bf6d098a0ad986b0c6d24118c598",
+      "hash": "3c211ae0ffc25ae3a84f8ddf510e611b9b671190748e14a25e38a896dfffef7b2dc998fd15a7e11a16d185346fc5d40d40f3c88662661d7c05049e03562bca74",
+      "decks": {}
+    }
+  },
+  "RPMM_auth_tokens": {
+    "f4a2475fea921d576df34775ac7dbca79dd1a26f0b02867bb1e5a4e5a1950a6b": {
+      "id": "tok_48c147e048d9bbdf88c99b1115b31dd3",
+      "user_id": "usr_e363d28776a9cdb1fe647ef81d00aa19",
+      "token_hash": "f4a2475fea921d576df34775ac7dbca79dd1a26f0b02867bb1e5a4e5a1950a6b",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:34:53.313Z"
+    },
+    "7c7e40b8899f16fc49f9ea2c1fe2ea39df9e60d06837e80bb72c1f0bec2d88a8": {
+      "id": "tok_1a9ea93c6b8e3395f57d7612f756a878",
+      "user_id": "usr_6c3bf4efe7b94bd7365a82a8ed113b1d",
+      "token_hash": "7c7e40b8899f16fc49f9ea2c1fe2ea39df9e60d06837e80bb72c1f0bec2d88a8",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:34:53.863Z"
+    },
+    "7fe893af46639e9ba1ac5c4a3296848441212810439dbc67b68b5d8d5511c8fa": {
+      "id": "tok_b5ee423075547b91329a89be5bc165ae",
+      "user_id": "usr_c1eebeda967abecf655944b0486accbd",
+      "token_hash": "7fe893af46639e9ba1ac5c4a3296848441212810439dbc67b68b5d8d5511c8fa",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:36:09.082Z"
+    },
+    "9195b928d940698d9a8ae5749e0ca7007a9d6e36d73641a75f776cf7f845c240": {
+      "id": "tok_74cb08154699cb244e930527f25fcaa1",
+      "user_id": "usr_609200b451228a301f59972e7e34f4ce",
+      "token_hash": "9195b928d940698d9a8ae5749e0ca7007a9d6e36d73641a75f776cf7f845c240",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:36:09.424Z"
+    },
+    "dca9693f4605260ca235271a57f058177dc6266d6a93362906f4269d59c4725b": {
+      "id": "08b6e538-4c67-4179-80ed-f3b610397899",
+      "user_id": "52ec6de8-e159-44bb-a751-af5cc65343c2",
+      "token_hash": "dca9693f4605260ca235271a57f058177dc6266d6a93362906f4269d59c4725b",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:40:13.385Z"
+    },
+    "b58cc6226ff09966c86a0ff0a2d9e7a004e8e885a4604e284adc0e1b2c018fc0": {
+      "id": "84c42f40-ab56-4c95-814a-80f891085d68",
+      "user_id": "669f71ac-9ade-440e-a6a0-0e03ddf38f5a",
+      "token_hash": "b58cc6226ff09966c86a0ff0a2d9e7a004e8e885a4604e284adc0e1b2c018fc0",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:41:09.121Z"
+    },
+    "0ececcb667b411588ecc3813a62560184cfde4b45c9ffa2223a5f5326fcb882f": {
+      "id": "tok_d06f239dd8f24cbb7fd3faded3b198c1",
+      "user_id": "669f71ac-9ade-440e-a6a0-0e03ddf38f5a",
+      "token_hash": "0ececcb667b411588ecc3813a62560184cfde4b45c9ffa2223a5f5326fcb882f",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:41:09.956Z"
+    },
+    "b07649bdd232de0e350ced07cb36e072d91be56f102320420f34225a598e5e5b": {
+      "id": "a18cec36-b775-42f0-98c2-b203048edc1c",
+      "user_id": "2b879065-0ac2-4ab6-83db-ec7a1a98f3ff",
+      "token_hash": "b07649bdd232de0e350ced07cb36e072d91be56f102320420f34225a598e5e5b",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:43:03.100Z"
+    },
+    "fc29af0f77b8a267b2c38bb8dc4a5b090b8089ecd5a6626f048dbd2656ad99fe": {
+      "id": "tok_e60055012872afb41d0517c9cda08333",
+      "user_id": "2b879065-0ac2-4ab6-83db-ec7a1a98f3ff",
+      "token_hash": "fc29af0f77b8a267b2c38bb8dc4a5b090b8089ecd5a6626f048dbd2656ad99fe",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:43:03.691Z"
+    },
+    "ac4287580a8fecee5b9eade97bbf3c9a51454c05de1f182a2bfcbe2072b841c1": {
+      "id": "tok_a2af2843ad7e753e7f23378d3867d6c7",
+      "user_id": "2b879065-0ac2-4ab6-83db-ec7a1a98f3ff",
+      "token_hash": "ac4287580a8fecee5b9eade97bbf3c9a51454c05de1f182a2bfcbe2072b841c1",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:43:04.162Z"
+    },
+    "0c4aad0e8bbedd426bc7c84c27c30fd7c6d3812bd031381de58f4ec39e0e097a": {
+      "id": "5f8a661c-eca4-4f51-8b45-4ee79a6457d7",
+      "user_id": "c39b2cfc-c78c-4362-8c8d-b57d4f3cd97b",
+      "token_hash": "0c4aad0e8bbedd426bc7c84c27c30fd7c6d3812bd031381de58f4ec39e0e097a",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:43:32.246Z"
+    },
+    "5d97a8ebd2cc209c20ecce0eb58ec04df4be3f87db594c1aabc286fc8e0c27ae": {
+      "id": "tok_92615c21e3f45937b8d2377eaf36c4de",
+      "user_id": "c39b2cfc-c78c-4362-8c8d-b57d4f3cd97b",
+      "token_hash": "5d97a8ebd2cc209c20ecce0eb58ec04df4be3f87db594c1aabc286fc8e0c27ae",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:43:32.773Z"
+    },
+    "bc74fc7f9938421fd4c015228c18ed461df84bbfe3cea3d41e36ef5ee59f7142": {
+      "id": "tok_ea39fa79685aafb6ea97582341ec2781",
+      "user_id": "c39b2cfc-c78c-4362-8c8d-b57d4f3cd97b",
+      "token_hash": "bc74fc7f9938421fd4c015228c18ed461df84bbfe3cea3d41e36ef5ee59f7142",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:43:33.323Z"
+    },
+    "69411407c6494a61b9baa38de8cd894831e6cb2d61fc26360260e4e8b141b10b": {
+      "id": "df57a1c8-31f2-4146-8c3e-5bd0c7f8926a",
+      "user_id": "763b542a-2755-426f-b0da-b6022bdc6dbf",
+      "token_hash": "69411407c6494a61b9baa38de8cd894831e6cb2d61fc26360260e4e8b141b10b",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:44:51.187Z"
+    },
+    "8c2ee895a37096c6748f90171930a92890c8f5dc1178686e874269891c69e928": {
+      "id": "tok_03c50b8efe04d4431f34ba8858e7f3ff",
+      "user_id": "763b542a-2755-426f-b0da-b6022bdc6dbf",
+      "token_hash": "8c2ee895a37096c6748f90171930a92890c8f5dc1178686e874269891c69e928",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:44:51.801Z"
+    },
+    "e85900ce0e802a58c994a8858f7489e05c7499bdfc32d9c77710725f02db09f2": {
+      "id": "tok_8e38148e735d5c1db490b91b7e585d24",
+      "user_id": "763b542a-2755-426f-b0da-b6022bdc6dbf",
+      "token_hash": "e85900ce0e802a58c994a8858f7489e05c7499bdfc32d9c77710725f02db09f2",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:44:52.328Z"
+    },
+    "3e673315252d1aee97cbe39b818dd4a95613fb905c9462295c2ef8023763f409": {
+      "id": "8b656a3b-060c-4b40-a16b-5dc488973a2b",
+      "user_id": "d830f159-79a0-4eab-9c75-47d87675d1ca",
+      "token_hash": "3e673315252d1aee97cbe39b818dd4a95613fb905c9462295c2ef8023763f409",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:48:42.398Z"
+    },
+    "49ee2c31ab553cfcdf0add680f98203520b56346e43e3f8255d0a733a8c2133b": {
+      "id": "tok_5670ba8bfa6a99eba9dbe7313a7de40f",
+      "user_id": "d830f159-79a0-4eab-9c75-47d87675d1ca",
+      "token_hash": "49ee2c31ab553cfcdf0add680f98203520b56346e43e3f8255d0a733a8c2133b",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:48:42.877Z"
+    },
+    "f40aeb93c5e9265758f25ee46fa2b881c775488cfa5ed375733040d9d1832aaa": {
+      "id": "tok_6503fc87bc97e4a88ee05d66765acc7f",
+      "user_id": "d830f159-79a0-4eab-9c75-47d87675d1ca",
+      "token_hash": "f40aeb93c5e9265758f25ee46fa2b881c775488cfa5ed375733040d9d1832aaa",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:48:43.339Z"
+    },
+    "4f325cf4fc09ee51426676a21b95f9da6b481caea34faf1e764a957c56963200": {
+      "id": "6ee26913-1cae-4f5b-a820-f7969ca3a126",
+      "user_id": "93d24888-c66b-4ac5-92fd-e3dab2c4acfa",
+      "token_hash": "4f325cf4fc09ee51426676a21b95f9da6b481caea34faf1e764a957c56963200",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:51:18.369Z"
+    },
+    "691686fa8be6537d74e027387457a53ff7691d72b4d285ed760c97c6d249c3c0": {
+      "id": "tok_d5eefdc1263c659edbd767753837fded",
+      "user_id": "93d24888-c66b-4ac5-92fd-e3dab2c4acfa",
+      "token_hash": "691686fa8be6537d74e027387457a53ff7691d72b4d285ed760c97c6d249c3c0",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:51:18.908Z"
+    },
+    "4fa13363fb708f19a5a299459fbd8cfcc03a2affd115bb98d9714dacde446ded": {
+      "id": "tok_13ed0985ba57ac65e490686495796543",
+      "user_id": "93d24888-c66b-4ac5-92fd-e3dab2c4acfa",
+      "token_hash": "4fa13363fb708f19a5a299459fbd8cfcc03a2affd115bb98d9714dacde446ded",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:51:19.446Z"
+    },
+    "644226f8228afdd634bf606839115cfea2021014c5a2e3ccc0e206d9c6e9923a": {
+      "id": "e08e245d-b162-4257-94f2-2e65924aff50",
+      "user_id": "af812c18-b20e-4d83-9d1a-69490f070b6a",
+      "token_hash": "644226f8228afdd634bf606839115cfea2021014c5a2e3ccc0e206d9c6e9923a",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:51:51.423Z"
+    },
+    "6033aa5f111b0867757c9c19afd35fcebb94dda582297177e14e4bef353b7a3e": {
+      "id": "tok_4efec98c22aa8f56282be8df812aa1d2",
+      "user_id": "af812c18-b20e-4d83-9d1a-69490f070b6a",
+      "token_hash": "6033aa5f111b0867757c9c19afd35fcebb94dda582297177e14e4bef353b7a3e",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:51:52.013Z"
+    },
+    "fe6c072be285577d41c6eea85d757deadeadea440c872f3fe8adf9a7e56318b7": {
+      "id": "tok_cac86bf3a112c4d3c93e5eb802baaab4",
+      "user_id": "af812c18-b20e-4d83-9d1a-69490f070b6a",
+      "token_hash": "fe6c072be285577d41c6eea85d757deadeadea440c872f3fe8adf9a7e56318b7",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:51:52.667Z"
+    },
+    "c73ce3dec855c0345fc8e8cb39c7ebd7ef9fc6bb74e9ff2eb73b0c2c72fd86ef": {
+      "id": "f4eed361-25e0-4824-b357-bf2f54175494",
+      "user_id": "790c6cef-4075-4330-aee2-c4a0ec48506a",
+      "token_hash": "c73ce3dec855c0345fc8e8cb39c7ebd7ef9fc6bb74e9ff2eb73b0c2c72fd86ef",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:52:14.552Z"
+    },
+    "ef6d4a727e4209614bc8d012597728a18c2a0821993d006f67ea15e7adea6926": {
+      "id": "tok_0ceb829090e133d573198966b6baa30a",
+      "user_id": "790c6cef-4075-4330-aee2-c4a0ec48506a",
+      "token_hash": "ef6d4a727e4209614bc8d012597728a18c2a0821993d006f67ea15e7adea6926",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:52:15.112Z"
+    },
+    "f58edd922d4567fdad3e029d1da7d3df33c73477563c04c14716301195d7b93c": {
+      "id": "tok_204fe47362e20d53ba916b66d37c84ee",
+      "user_id": "790c6cef-4075-4330-aee2-c4a0ec48506a",
+      "token_hash": "f58edd922d4567fdad3e029d1da7d3df33c73477563c04c14716301195d7b93c",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:52:15.665Z"
+    },
+    "1aceb389decd92f7ff9034cf18823c0ba3abdc1d5c0b9428084313fe99070245": {
+      "id": "e32e461f-6b7a-4cf7-bb8a-ee1c633cc420",
+      "user_id": "9c24c570-7594-4274-9a67-276f39b70d93",
+      "token_hash": "1aceb389decd92f7ff9034cf18823c0ba3abdc1d5c0b9428084313fe99070245",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:52:15.974Z"
+    },
+    "b410955483430be15384b50f548e08173bc4ac1493e104456733d4f39283637c": {
+      "id": "c1abb28e-5144-4b28-8cbc-aa590d4b8ce1",
+      "user_id": "39a424a8-b461-4509-9207-4a0b92676cec",
+      "token_hash": "b410955483430be15384b50f548e08173bc4ac1493e104456733d4f39283637c",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:53:03.712Z"
+    },
+    "8f1bba2a201003c5b5072b3b971af659e05863ac38ffca6cca33943e3a55a8dd": {
+      "id": "tok_1cd96c267b6ad1e30c83508fcf09d4f0",
+      "user_id": "39a424a8-b461-4509-9207-4a0b92676cec",
+      "token_hash": "8f1bba2a201003c5b5072b3b971af659e05863ac38ffca6cca33943e3a55a8dd",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:53:04.168Z"
+    },
+    "43ddef6909ec685ce8b81abdf830683483ed657443928ed66377a17906329b63": {
+      "id": "tok_9889bb2afb82293931b2098b0c209f21",
+      "user_id": "39a424a8-b461-4509-9207-4a0b92676cec",
+      "token_hash": "43ddef6909ec685ce8b81abdf830683483ed657443928ed66377a17906329b63",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:53:04.662Z"
+    },
+    "2e4b5bd1d626a944db43f21d60ed20a8b1b6297bab6e9084c8fe1f8bf7781fe6": {
+      "id": "d8e29fd8-5f77-4edb-9976-7eb69b2c3d4c",
+      "user_id": "4242342a-2348-4140-933e-af8a7744209b",
+      "token_hash": "2e4b5bd1d626a944db43f21d60ed20a8b1b6297bab6e9084c8fe1f8bf7781fe6",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T15:53:04.950Z"
+    },
+    "99bcbf87db0faecf8918dfcd118246af1f3497a6b34c4d5e447ab46e60ea81d3": {
+      "id": "73687865-16e4-4db0-b711-cc628f0542ab",
+      "user_id": "e64c4e71-f0fa-4995-a1ca-f33437b078b7",
+      "token_hash": "99bcbf87db0faecf8918dfcd118246af1f3497a6b34c4d5e447ab46e60ea81d3",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:02:05.273Z"
+    },
+    "dbb6ad6c18c6d82a38b2c32d1c4d41541660a7f4d3fe29e2d910f96a865d0269": {
+      "id": "tok_5dddb62f952a879e9063e8e4a7820fbc",
+      "user_id": "e64c4e71-f0fa-4995-a1ca-f33437b078b7",
+      "token_hash": "dbb6ad6c18c6d82a38b2c32d1c4d41541660a7f4d3fe29e2d910f96a865d0269",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:02:05.771Z"
+    },
+    "6ba32104d6432758a4531922b6ada40ae626e952ac7bb82efedcc1b47ee29ec4": {
+      "id": "tok_0b2aea39154768385b4b0ceddbed147b",
+      "user_id": "e64c4e71-f0fa-4995-a1ca-f33437b078b7",
+      "token_hash": "6ba32104d6432758a4531922b6ada40ae626e952ac7bb82efedcc1b47ee29ec4",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:02:06.309Z"
+    },
+    "70101b179ea96780ba803353d79c7416ca82cd4bc4e1f418ff637bdf01cbdf36": {
+      "id": "181f35f6-8029-434d-a928-657b0056977c",
+      "user_id": "ecafa346-39b8-4698-bb7b-7e5c5aa5ad83",
+      "token_hash": "70101b179ea96780ba803353d79c7416ca82cd4bc4e1f418ff637bdf01cbdf36",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:02:06.654Z"
+    },
+    "212701a843880e7db97e058ea450364d410f5bb8e506af057039023b09114c2d": {
+      "id": "83af154a-beb3-4d01-ae7a-4a8ea33c781d",
+      "user_id": "77e231f4-face-44a1-bcca-9f7f039ed6fe",
+      "token_hash": "212701a843880e7db97e058ea450364d410f5bb8e506af057039023b09114c2d",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:08:15.324Z"
+    },
+    "a042456338897c4d7df45dbfcd8cba13948369ad9f95b0264be936849e1eeade": {
+      "id": "c8dc0d24-192d-4e1a-8f72-0dceb9c44fe0",
+      "user_id": "77e231f4-face-44a1-bcca-9f7f039ed6fe",
+      "token_hash": "a042456338897c4d7df45dbfcd8cba13948369ad9f95b0264be936849e1eeade",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:08:15.936Z"
+    },
+    "4decbac87e6ec8eaa6d0d334efa1870bca9d9ae8ef11a0babe45e249b61b50b1": {
+      "id": "fd6de66d-ab4b-4b33-8261-db5fc192ffc5",
+      "user_id": "77e231f4-face-44a1-bcca-9f7f039ed6fe",
+      "token_hash": "4decbac87e6ec8eaa6d0d334efa1870bca9d9ae8ef11a0babe45e249b61b50b1",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:08:16.518Z"
+    },
+    "d6130f516ded1c9cf8c8c232e01822a77cd06d18a6052e0774701d908d4ace4f": {
+      "id": "76d0c2eb-8e81-4995-9d1a-e2eabf3969b9",
+      "user_id": "7f12cf03-2ce8-4e74-9ffd-9311aaee7422",
+      "token_hash": "d6130f516ded1c9cf8c8c232e01822a77cd06d18a6052e0774701d908d4ace4f",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:08:16.833Z"
+    },
+    "7e09c3f54412ec9d64bb73ad0bd54724da35d24eeaa4a8296c7ef20df9dc6ca3": {
+      "id": "51463542-025a-4964-bb93-10b7dd9cc221",
+      "user_id": "e0fd7037-a3f5-4e13-b58f-84e46ab9bac6",
+      "token_hash": "7e09c3f54412ec9d64bb73ad0bd54724da35d24eeaa4a8296c7ef20df9dc6ca3",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:09:06.895Z"
+    },
+    "47c540e9346e5dabfa11c5b3059f63be643ec885cffca37b23d2fa0e8ca5b36f": {
+      "id": "c039886d-311f-4d76-896c-3d36bc2db2f8",
+      "user_id": "e0fd7037-a3f5-4e13-b58f-84e46ab9bac6",
+      "token_hash": "47c540e9346e5dabfa11c5b3059f63be643ec885cffca37b23d2fa0e8ca5b36f",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:09:07.391Z"
+    },
+    "5f231955cba18d7105e82e3f546407da46af4732f62ba004ce0281ec30618579": {
+      "id": "3ab44759-4987-40b3-9102-f9438183b815",
+      "user_id": "e0fd7037-a3f5-4e13-b58f-84e46ab9bac6",
+      "token_hash": "5f231955cba18d7105e82e3f546407da46af4732f62ba004ce0281ec30618579",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:09:07.884Z"
+    },
+    "8e52c69a5938a28c48b67fd018d4b2babc784743534dd0975de24443c0703c41": {
+      "id": "fdf4ac4d-e621-4ff4-837f-8dee50ba4dd3",
+      "user_id": "62dbe871-c789-4e57-82e6-071673afaae2",
+      "token_hash": "8e52c69a5938a28c48b67fd018d4b2babc784743534dd0975de24443c0703c41",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T16:09:08.199Z"
+    }
+  },
+  "RPMM_decks": {},
+  "RPMM_cards_catalog": {
+    "castle ardenvale": {
+      "id": "card_castle_ardenvale",
+      "name": "Castle Ardenvale",
+      "normalized_name": "castle ardenvale",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "Castle Ardenvale enters the battlefield tapped unless you control a Plains.\n{T}: Add {W}.\n{2}{W}{W}, {T}: Create a 1/1 white Human creature token.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "ocelot pride": {
+      "id": "card_ocelot_pride",
+      "name": "Ocelot Pride",
+      "normalized_name": "ocelot pride",
+      "mana_cost": "{W}",
+      "type_line": "Creature — Cat",
+      "oracle_text": "First strike, lifelink\nAscend\nAt the beginning of your end step, if you gained life this turn, create a 1/1 white Cat creature token. Then if you have the city's blessing, for each token you control, create a token that's a copy of that token.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "secure the wastes": {
+      "id": "card_secure_the_wastes",
+      "name": "Secure the Wastes",
+      "normalized_name": "secure the wastes",
+      "mana_cost": "{X}{W}",
+      "type_line": "Instant",
+      "oracle_text": "Create X 1/1 white Warrior creature tokens.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "soul warden": {
+      "id": "card_soul_warden",
+      "name": "Soul Warden",
+      "normalized_name": "soul warden",
+      "mana_cost": "{W}",
+      "type_line": "Creature — Human Cleric",
+      "oracle_text": "Whenever another creature enters the battlefield, you gain 1 life.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "raise the alarm": {
+      "id": "card_raise_the_alarm",
+      "name": "Raise the Alarm",
+      "normalized_name": "raise the alarm",
+      "mana_cost": "{1}{W}",
+      "type_line": "Instant",
+      "oracle_text": "Create two 1/1 white Soldier creature tokens.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "gather the townsfolk": {
+      "id": "card_gather_the_townsfolk",
+      "name": "Gather the Townsfolk",
+      "normalized_name": "gather the townsfolk",
+      "mana_cost": "{1}{W}",
+      "type_line": "Sorcery",
+      "oracle_text": "Create two 1/1 white Human creature tokens.\nFateful hour — If you have 5 or less life, create five of those tokens instead.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "intangible virtue": {
+      "id": "card_intangible_virtue",
+      "name": "Intangible Virtue",
+      "normalized_name": "intangible virtue",
+      "mana_cost": "{1}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "Creature tokens you control get +1/+1 and have vigilance.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "wedding announcement // wedding festivity": {
+      "id": "card_wedding_announcement____wedding_festivity",
+      "name": "Wedding Announcement // Wedding Festivity",
+      "normalized_name": "wedding announcement // wedding festivity",
+      "mana_cost": "{2}{W}",
+      "type_line": "Enchantment // Enchantment",
+      "oracle_text": "At the beginning of your end step, put an invitation counter on Wedding Announcement. If you attacked with two or more creatures this turn, draw a card. Otherwise, create a 1/1 white Human creature token. Then if Wedding Announcement has three or more invitation counters on it, transform it.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "wedding announcement": {
+      "id": "card_wedding_announcement",
+      "name": "Wedding Announcement // Wedding Festivity",
+      "normalized_name": "wedding announcement",
+      "mana_cost": "{2}{W}",
+      "type_line": "Enchantment // Enchantment",
+      "oracle_text": "At the beginning of your end step, put an invitation counter on Wedding Announcement. If you attacked with two or more creatures this turn, draw a card. Otherwise, create a 1/1 white Human creature token. Then if Wedding Announcement has three or more invitation counters on it, transform it.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "caretaker's talent": {
+      "id": "card_caretaker_s_talent",
+      "name": "Caretaker's Talent",
+      "normalized_name": "caretaker's talent",
+      "mana_cost": "{2}{W}",
+      "type_line": "Enchantment — Class",
+      "oracle_text": "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "hero of bladehold": {
+      "id": "card_hero_of_bladehold",
+      "name": "Hero of Bladehold",
+      "normalized_name": "hero of bladehold",
+      "mana_cost": "{2}{W}{W}",
+      "type_line": "Creature — Human Knight",
+      "oracle_text": "Battle cry\nWhenever Hero of Bladehold attacks, create two 1/1 white Soldier creature tokens tapped and attacking.",
+      "power": "3",
+      "toughness": "4",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "leyline of sanctity": {
+      "id": "card_leyline_of_sanctity",
+      "name": "Leyline of Sanctity",
+      "normalized_name": "leyline of sanctity",
+      "mana_cost": "{2}{W}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "If Leyline of Sanctity is in your opening hand, you may begin the game with it on the battlefield.\nYou have hexproof.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "archmage's charm": {
+      "id": "card_archmage_s_charm",
+      "name": "Archmage's Charm",
+      "normalized_name": "archmage's charm",
+      "mana_cost": "{U}{U}{U}",
+      "type_line": "Instant",
+      "oracle_text": "Choose one —\n• Counter target spell.\n• Target player draws two cards.\n• Gain control of target nonland permanent with mana value 1 or less.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "aspect of hydra": {
+      "id": "card_aspect_of_hydra",
+      "name": "Aspect of Hydra",
+      "normalized_name": "aspect of hydra",
+      "mana_cost": "{G}",
+      "type_line": "Instant",
+      "oracle_text": "Target creature gets +X/+X until end of turn, where X is your devotion to green.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "belt of giant strength": {
+      "id": "card_belt_of_giant_strength",
+      "name": "Belt of Giant Strength",
+      "normalized_name": "belt of giant strength",
+      "mana_cost": "{1}{G}",
+      "type_line": "Artifact — Equipment",
+      "oracle_text": "Equipped creature has base power and toughness 10/10.\nEquip {10}. This ability costs {X} less to activate, where X is the greatest power among creatures you control.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "benalish marshal": {
+      "id": "card_benalish_marshal",
+      "name": "Benalish Marshal",
+      "normalized_name": "benalish marshal",
+      "mana_cost": "{W}{W}{W}",
+      "type_line": "Creature — Human Knight",
+      "oracle_text": "Other creatures you control get +1/+1.",
+      "power": "3",
+      "toughness": "3",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "boros charm": {
+      "id": "card_boros_charm",
+      "name": "Boros Charm",
+      "normalized_name": "boros charm",
+      "mana_cost": "{R}{W}",
+      "type_line": "Instant",
+      "oracle_text": "Choose one —\n• Boros Charm deals 4 damage to target player or planeswalker.\n• Permanents you control gain indestructible until end of turn.\n• Target creature gains double strike until end of turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "R",
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "brave the elements": {
+      "id": "card_brave_the_elements",
+      "name": "Brave the Elements",
+      "normalized_name": "brave the elements",
+      "mana_cost": "{W}",
+      "type_line": "Instant",
+      "oracle_text": "Choose a color. White creatures you control gain protection from the chosen color until end of turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "brazen borrower": {
+      "id": "card_brazen_borrower",
+      "name": "Brazen Borrower",
+      "normalized_name": "brazen borrower",
+      "mana_cost": "{1}{U}{U}",
+      "type_line": "Creature — Faerie Rogue // Instant — Adventure",
+      "oracle_text": "Flash\nFlying\nBrazen Borrower can block only creatures with flying.\n// Petty Theft {1}{U} Instant — Adventure: Return target nonland permanent an opponent controls to its owner's hand.",
+      "power": "3",
+      "toughness": "1",
+      "colors": [
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "callous sell-sword // burn together": {
+      "id": "card_callous_sell_sword____burn_together",
+      "name": "Callous Sell-Sword // Burn Together",
+      "normalized_name": "callous sell-sword // burn together",
+      "mana_cost": "{1}{B} // {R}",
+      "type_line": "Creature — Human Soldier // Sorcery — Adventure",
+      "oracle_text": "Callous Sell-Sword enters the battlefield with a +1/+1 counter on it for each creature that died under your control this turn.\n// Burn Together {R} Sorcery — Adventure: Target creature you control deals damage equal to its power to any other target. Then sacrifice it.",
+      "power": "2",
+      "toughness": "2",
+      "colors": [
+        "B",
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "castle locthwain": {
+      "id": "card_castle_locthwain",
+      "name": "Castle Locthwain",
+      "normalized_name": "castle locthwain",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "Castle Locthwain enters the battlefield tapped unless you control a Swamp.\n{T}: Add {B}.\n{1}{B}{B}, {T}: Draw a card, then you lose life equal to the number of cards in your hand.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "celestial colonnade": {
+      "id": "card_celestial_colonnade",
+      "name": "Celestial Colonnade",
+      "normalized_name": "celestial colonnade",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "Celestial Colonnade enters the battlefield tapped.\n{T}: Add {W} or {U}.\n{3}{W}{U}: Until end of turn, Celestial Colonnade becomes a 4/4 white and blue Elemental creature with flying and vigilance. It's still a land.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "colossus hammer": {
+      "id": "card_colossus_hammer",
+      "name": "Colossus Hammer",
+      "normalized_name": "colossus hammer",
+      "mana_cost": "{1}",
+      "type_line": "Artifact — Equipment",
+      "oracle_text": "Equipped creature gets +10/+10 and loses flying.\nEquip {8}",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "consider": {
+      "id": "card_consider",
+      "name": "Consider",
+      "normalized_name": "consider",
+      "mana_cost": "{U}",
+      "type_line": "Instant",
+      "oracle_text": "Surveil 1.\nDraw a card.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "counterspell": {
+      "id": "card_counterspell",
+      "name": "Counterspell",
+      "normalized_name": "counterspell",
+      "mana_cost": "{U}{U}",
+      "type_line": "Instant",
+      "oracle_text": "Counter target spell.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "dauntless bodyguard": {
+      "id": "card_dauntless_bodyguard",
+      "name": "Dauntless Bodyguard",
+      "normalized_name": "dauntless bodyguard",
+      "mana_cost": "{W}",
+      "type_line": "Creature — Human Knight",
+      "oracle_text": "As Dauntless Bodyguard enters the battlefield, choose another creature you control.\nSacrifice Dauntless Bodyguard: The chosen creature gains indestructible until end of turn.",
+      "power": "2",
+      "toughness": "1",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "dismember": {
+      "id": "card_dismember",
+      "name": "Dismember",
+      "normalized_name": "dismember",
+      "mana_cost": "{1}{B/P}{B/P}",
+      "type_line": "Instant",
+      "oracle_text": "Target creature gets -5/-5 until end of turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "doc ock's tentacles": {
+      "id": "card_doc_ock_s_tentacles",
+      "name": "Doc Ock's Tentacles",
+      "normalized_name": "doc ock's tentacles",
+      "mana_cost": "{2}",
+      "type_line": "Artifact — Equipment",
+      "oracle_text": "Equipped creature gets +4/+4.\nWhenever a creature with mana value 5 or greater enters the battlefield under your control, you may attach Doc Ock's Tentacles to it.\nEquip {5}",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "eidolon of the great revel": {
+      "id": "card_eidolon_of_the_great_revel",
+      "name": "Eidolon of the Great Revel",
+      "normalized_name": "eidolon of the great revel",
+      "mana_cost": "{R}{R}",
+      "type_line": "Enchantment Creature — Spirit",
+      "oracle_text": "Whenever a player casts a spell with mana value 3 or less, Eidolon of the Great Revel deals 2 damage to that player.",
+      "power": "2",
+      "toughness": "2",
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "fatal push": {
+      "id": "card_fatal_push",
+      "name": "Fatal Push",
+      "normalized_name": "fatal push",
+      "mana_cost": "{B}",
+      "type_line": "Instant",
+      "oracle_text": "Destroy target creature if it has mana value 2 or less.\nRevolt — Destroy that creature if it has mana value 4 or less instead if a permanent you controlled left the battlefield this turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "fervent champion": {
+      "id": "card_fervent_champion",
+      "name": "Fervent Champion",
+      "normalized_name": "fervent champion",
+      "mana_cost": "{R}",
+      "type_line": "Creature — Human Knight",
+      "oracle_text": "First strike, haste\nWhenever Fervent Champion attacks, another target attacking Knight you control gets +1/+0 until end of turn.\nEquip abilities you activate that target Fervent Champion cost {3} less to activate.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "forest": {
+      "id": "card_forest",
+      "name": "Forest",
+      "normalized_name": "forest",
+      "mana_cost": "",
+      "type_line": "Basic Land — Forest",
+      "oracle_text": "({T}: Add {G}.)",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "forge anew": {
+      "id": "card_forge_anew",
+      "name": "Forge Anew",
+      "normalized_name": "forge anew",
+      "mana_cost": "{2}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "When Forge Anew enters the battlefield, you may return target Equipment card from your graveyard to the battlefield.\nAs long as it's your turn, you may activate equip abilities any time you could cast an instant.\nYou may pay {0} rather than pay the equip cost of the first equip ability you activate each turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "garruk's harbinger": {
+      "id": "card_garruk_s_harbinger",
+      "name": "Garruk's Harbinger",
+      "normalized_name": "garruk's harbinger",
+      "mana_cost": "{1}{G}{G}",
+      "type_line": "Creature — Beast",
+      "oracle_text": "Hexproof from black\nWhenever Garruk's Harbinger deals combat damage to a player or planeswalker, look at that many cards from the top of your library. You may reveal a creature card or Garruk planeswalker card from among them and put it into your hand. Put the rest on the bottom of your library in a random order.",
+      "power": "4",
+      "toughness": "3",
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "gifted aetherborn": {
+      "id": "card_gifted_aetherborn",
+      "name": "Gifted Aetherborn",
+      "normalized_name": "gifted aetherborn",
+      "mana_cost": "{B}{B}",
+      "type_line": "Creature — Aetherborn Vampire",
+      "oracle_text": "Deathtouch, lifelink",
+      "power": "2",
+      "toughness": "3",
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "glacial fortress": {
+      "id": "card_glacial_fortress",
+      "name": "Glacial Fortress",
+      "normalized_name": "glacial fortress",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "Glacial Fortress enters the battlefield tapped unless you control a Plains or an Island.\n{T}: Add {W} or {U}.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "go for the throat": {
+      "id": "card_go_for_the_throat",
+      "name": "Go for the Throat",
+      "normalized_name": "go for the throat",
+      "mana_cost": "{1}{B}",
+      "type_line": "Instant",
+      "oracle_text": "Destroy target nonartifact creature.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "goblin gaveleer": {
+      "id": "card_goblin_gaveleer",
+      "name": "Goblin Gaveleer",
+      "normalized_name": "goblin gaveleer",
+      "mana_cost": "{R}",
+      "type_line": "Creature — Goblin Warrior",
+      "oracle_text": "Trample\nGoblin Gaveleer gets +2/+0 for each Equipment attached to it.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "goblin guide": {
+      "id": "card_goblin_guide",
+      "name": "Goblin Guide",
+      "normalized_name": "goblin guide",
+      "mana_cost": "{R}",
+      "type_line": "Creature — Goblin Scout",
+      "oracle_text": "Haste\nWhenever Goblin Guide attacks, defending player reveals the top card of their library. If it's a land card, that player puts it into their hand.",
+      "power": "2",
+      "toughness": "2",
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "gray merchant of asphodel": {
+      "id": "card_gray_merchant_of_asphodel",
+      "name": "Gray Merchant of Asphodel",
+      "normalized_name": "gray merchant of asphodel",
+      "mana_cost": "{3}{B}{B}",
+      "type_line": "Creature — Zombie",
+      "oracle_text": "When Gray Merchant of Asphodel enters the battlefield, each opponent loses X life, where X is your devotion to black. You gain life equal to the life lost this way.",
+      "power": "2",
+      "toughness": "4",
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "hallowed fountain": {
+      "id": "card_hallowed_fountain",
+      "name": "Hallowed Fountain",
+      "normalized_name": "hallowed fountain",
+      "mana_cost": "",
+      "type_line": "Land — Plains Island",
+      "oracle_text": "({T}: Add {W} or {U}.)\nAs Hallowed Fountain enters the battlefield, you may pay 2 life. If you don't, it enters the battlefield tapped.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "heartfire hero": {
+      "id": "card_heartfire_hero",
+      "name": "Heartfire Hero",
+      "normalized_name": "heartfire hero",
+      "mana_cost": "{R}",
+      "type_line": "Creature — Mouse Soldier",
+      "oracle_text": "Valiant — Whenever Heartfire Hero becomes the target of a spell or ability you control for the first time each turn, put a +1/+1 counter on it.\nWhen Heartfire Hero dies, it deals damage equal to its power to each opponent.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "honor of the pure": {
+      "id": "card_honor_of_the_pure",
+      "name": "Honor of the Pure",
+      "normalized_name": "honor of the pure",
+      "mana_cost": "{1}{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "White creatures you control get +1/+1.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "inkmoth nexus": {
+      "id": "card_inkmoth_nexus",
+      "name": "Inkmoth Nexus",
+      "normalized_name": "inkmoth nexus",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "{T}: Add {C}.\n{1}: Inkmoth Nexus becomes a 1/1 Blinkmoth artifact creature with flying and infect until end of turn. It's still a land.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "inspiring vantage": {
+      "id": "card_inspiring_vantage",
+      "name": "Inspiring Vantage",
+      "normalized_name": "inspiring vantage",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "Inspiring Vantage enters the battlefield tapped unless you control two or fewer other lands.\n{T}: Add {R} or {W}.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "invasion of gobakhan": {
+      "id": "card_invasion_of_gobakhan",
+      "name": "Invasion of Gobakhan",
+      "normalized_name": "invasion of gobakhan",
+      "mana_cost": "{1}{W}",
+      "type_line": "Battle — Siege",
+      "oracle_text": "When Invasion of Gobakhan enters the battlefield, target opponent reveals their hand. You may exile a nonland card from it. For as long as that card remains exiled, its owner may play it. A spell cast this way costs {2} more to cast.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "island": {
+      "id": "card_island",
+      "name": "Island",
+      "normalized_name": "island",
+      "mana_cost": "",
+      "type_line": "Basic Land — Island",
+      "oracle_text": "({T}: Add {U}.)",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "lava spike": {
+      "id": "card_lava_spike",
+      "name": "Lava Spike",
+      "normalized_name": "lava spike",
+      "mana_cost": "{R}",
+      "type_line": "Sorcery — Arcane",
+      "oracle_text": "Lava Spike deals 3 damage to target player or planeswalker.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "leatherback baloth": {
+      "id": "card_leatherback_baloth",
+      "name": "Leatherback Baloth",
+      "normalized_name": "leatherback baloth",
+      "mana_cost": "{G}{G}{G}",
+      "type_line": "Creature — Beast",
+      "oracle_text": "",
+      "power": "4",
+      "toughness": "5",
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "leyline axe": {
+      "id": "card_leyline_axe",
+      "name": "Leyline Axe",
+      "normalized_name": "leyline axe",
+      "mana_cost": "{2}",
+      "type_line": "Artifact — Equipment",
+      "oracle_text": "If Leyline Axe is in your opening hand, you may begin the game with it on the battlefield.\nEquipped creature gets +1/+1 and has double strike and trample.\nEquip {3}",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "lightning bolt": {
+      "id": "card_lightning_bolt",
+      "name": "Lightning Bolt",
+      "normalized_name": "lightning bolt",
+      "mana_cost": "{R}",
+      "type_line": "Instant",
+      "oracle_text": "Lightning Bolt deals 3 damage to any target.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "llanowar elves": {
+      "id": "card_llanowar_elves",
+      "name": "Llanowar Elves",
+      "normalized_name": "llanowar elves",
+      "mana_cost": "{G}",
+      "type_line": "Creature — Elf Druid",
+      "oracle_text": "{T}: Add {G}.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "luminarch aspirant": {
+      "id": "card_luminarch_aspirant",
+      "name": "Luminarch Aspirant",
+      "normalized_name": "luminarch aspirant",
+      "mana_cost": "{1}{W}",
+      "type_line": "Creature — Human Cleric",
+      "oracle_text": "At the beginning of combat on your turn, put a +1/+1 counter on target creature you control.",
+      "power": "1",
+      "toughness": "1",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "mana confluence": {
+      "id": "card_mana_confluence",
+      "name": "Mana Confluence",
+      "normalized_name": "mana confluence",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "{T}, Pay 1 life: Add one mana of any color.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "monastery swiftspear": {
+      "id": "card_monastery_swiftspear",
+      "name": "Monastery Swiftspear",
+      "normalized_name": "monastery swiftspear",
+      "mana_cost": "{R}",
+      "type_line": "Creature — Human Monk",
+      "oracle_text": "Haste\nProwess",
+      "power": "1",
+      "toughness": "2",
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "mountain": {
+      "id": "card_mountain",
+      "name": "Mountain",
+      "normalized_name": "mountain",
+      "mana_cost": "",
+      "type_line": "Basic Land — Mountain",
+      "oracle_text": "({T}: Add {R}.)",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "murderous rider": {
+      "id": "card_murderous_rider",
+      "name": "Murderous Rider",
+      "normalized_name": "murderous rider",
+      "mana_cost": "{1}{B}{B} // {1}{B}{B}",
+      "type_line": "Creature — Zombie Knight // Instant — Adventure",
+      "oracle_text": "Lifelink\nWhen Murderous Rider dies, put it on the bottom of its owner's library.\n// Swift End {1}{B}{B} Instant — Adventure: Destroy target creature or planeswalker. You lose 2 life.",
+      "power": "2",
+      "toughness": "3",
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "mutavault": {
+      "id": "card_mutavault",
+      "name": "Mutavault",
+      "normalized_name": "mutavault",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "{T}: Add {C}.\n{1}: Mutavault becomes a 2/2 creature with all creature types until end of turn. It's still a land.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "nighthawk scavenger": {
+      "id": "card_nighthawk_scavenger",
+      "name": "Nighthawk Scavenger",
+      "normalized_name": "nighthawk scavenger",
+      "mana_cost": "{1}{B}{B}",
+      "type_line": "Creature — Vampire Nighthawk Rogue",
+      "oracle_text": "Flying, deathtouch, lifelink\nNighthawk Scavenger's power is equal to 1 plus the number of card types among cards in your opponents' graveyards.",
+      "power": "1",
+      "toughness": "3",
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "opt": {
+      "id": "card_opt",
+      "name": "Opt",
+      "normalized_name": "opt",
+      "mana_cost": "{U}",
+      "type_line": "Instant",
+      "oracle_text": "Scry 1.\nDraw a card.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "path to exile": {
+      "id": "card_path_to_exile",
+      "name": "Path to Exile",
+      "normalized_name": "path to exile",
+      "mana_cost": "{W}",
+      "type_line": "Instant",
+      "oracle_text": "Exile target creature. Its controller may search their library for a basic land card, put that card onto the battlefield tapped, then shuffle.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "plains": {
+      "id": "card_plains",
+      "name": "Plains",
+      "normalized_name": "plains",
+      "mana_cost": "",
+      "type_line": "Basic Land — Plains",
+      "oracle_text": "({T}: Add {W}.)",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "rancor": {
+      "id": "card_rancor",
+      "name": "Rancor",
+      "normalized_name": "rancor",
+      "mana_cost": "{G}",
+      "type_line": "Enchantment — Aura",
+      "oracle_text": "Enchant creature\nEnchanted creature gets +2/+0 and has trample.\nWhen Rancor is put into a graveyard from the battlefield, return Rancor to its owner's hand.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "resolute strike": {
+      "id": "card_resolute_strike",
+      "name": "Resolute Strike",
+      "normalized_name": "resolute strike",
+      "mana_cost": "{W}",
+      "type_line": "Instant",
+      "oracle_text": "Target creature gets +2/+2 until end of turn. If it's a Warrior, you may attach an Equipment you control to it.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "rift bolt": {
+      "id": "card_rift_bolt",
+      "name": "Rift Bolt",
+      "normalized_name": "rift bolt",
+      "mana_cost": "{1}{R}",
+      "type_line": "Sorcery",
+      "oracle_text": "Rift Bolt deals 3 damage to any target.\nSuspend 1—{R}",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "sacred foundry": {
+      "id": "card_sacred_foundry",
+      "name": "Sacred Foundry",
+      "normalized_name": "sacred foundry",
+      "mana_cost": "",
+      "type_line": "Land — Mountain Plains",
+      "oracle_text": "({T}: Add {R} or {W}.)\nAs Sacred Foundry enters the battlefield, you may pay 2 life. If you don't, it enters the battlefield tapped.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "searing blaze": {
+      "id": "card_searing_blaze",
+      "name": "Searing Blaze",
+      "normalized_name": "searing blaze",
+      "mana_cost": "{R}{R}",
+      "type_line": "Instant",
+      "oracle_text": "Searing Blaze deals 1 damage to target player and 1 damage to target creature that player controls.\nLandfall — If you had a land enter the battlefield under your control this turn, Searing Blaze deals 3 damage to that player and 3 damage to that creature instead.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "sigarda's aid": {
+      "id": "card_sigarda_s_aid",
+      "name": "Sigarda's Aid",
+      "normalized_name": "sigarda's aid",
+      "mana_cost": "{W}",
+      "type_line": "Enchantment",
+      "oracle_text": "You may cast Aura and Equipment spells as though they had flash.\nWhenever an Equipment enters the battlefield under your control, you may attach it to target creature you control.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "sign in blood": {
+      "id": "card_sign_in_blood",
+      "name": "Sign in Blood",
+      "normalized_name": "sign in blood",
+      "mana_cost": "{B}{B}",
+      "type_line": "Sorcery",
+      "oracle_text": "Target player draws two cards and loses 2 life.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "skewer the critics": {
+      "id": "card_skewer_the_critics",
+      "name": "Skewer the Critics",
+      "normalized_name": "skewer the critics",
+      "mana_cost": "{2}{R}",
+      "type_line": "Sorcery",
+      "oracle_text": "Spectacle {R}\nSkewer the Critics deals 3 damage to any target.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "R"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "soldier of the pantheon": {
+      "id": "card_soldier_of_the_pantheon",
+      "name": "Soldier of the Pantheon",
+      "normalized_name": "soldier of the pantheon",
+      "mana_cost": "{W}",
+      "type_line": "Creature — Human Soldier",
+      "oracle_text": "Protection from multicolored\nWhenever an opponent casts a multicolored spell, you gain 1 life.",
+      "power": "2",
+      "toughness": "1",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "spire of industry": {
+      "id": "card_spire_of_industry",
+      "name": "Spire of Industry",
+      "normalized_name": "spire of industry",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "{T}: Add {C}.\n{T}, Pay 1 life: Add one mana of any color. Activate only if you control an artifact.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "starting town": {
+      "id": "card_starting_town",
+      "name": "Starting Town",
+      "normalized_name": "starting town",
+      "mana_cost": "",
+      "type_line": "Land",
+      "oracle_text": "Starting Town enters the battlefield tapped unless it's the first, second, or third turn of the game.\n{T}: Add {C}.\n{T}, Pay 1 life: Add one mana of any color.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "steam vents": {
+      "id": "card_steam_vents",
+      "name": "Steam Vents",
+      "normalized_name": "steam vents",
+      "mana_cost": "",
+      "type_line": "Land — Island Mountain",
+      "oracle_text": "({T}: Add {U} or {R}.)\nAs Steam Vents enters the battlefield, you may pay 2 life. If you don't, it enters the battlefield tapped.",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "steel leaf champion": {
+      "id": "card_steel_leaf_champion",
+      "name": "Steel Leaf Champion",
+      "normalized_name": "steel leaf champion",
+      "mana_cost": "{G}{G}{G}",
+      "type_line": "Creature — Elf Knight",
+      "oracle_text": "Steel Leaf Champion can't be blocked by creatures with power 2 or less.",
+      "power": "5",
+      "toughness": "4",
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "stolen uniform": {
+      "id": "card_stolen_uniform",
+      "name": "Stolen Uniform",
+      "normalized_name": "stolen uniform",
+      "mana_cost": "{U}",
+      "type_line": "Instant",
+      "oracle_text": "Gain control of target Equipment until end of turn. Attach it to target creature you control. When you lose control of that Equipment, unattach it.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "strangleroot geist": {
+      "id": "card_strangleroot_geist",
+      "name": "Strangleroot Geist",
+      "normalized_name": "strangleroot geist",
+      "mana_cost": "{G}{G}",
+      "type_line": "Creature — Spirit",
+      "oracle_text": "Haste\nUndying",
+      "power": "2",
+      "toughness": "1",
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "supreme verdict": {
+      "id": "card_supreme_verdict",
+      "name": "Supreme Verdict",
+      "normalized_name": "supreme verdict",
+      "mana_cost": "{1}{W}{W}{U}",
+      "type_line": "Sorcery",
+      "oracle_text": "This spell can't be countered.\nDestroy all creatures.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W",
+        "U"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "surge of salvation": {
+      "id": "card_surge_of_salvation",
+      "name": "Surge of Salvation",
+      "normalized_name": "surge of salvation",
+      "mana_cost": "{W}",
+      "type_line": "Instant",
+      "oracle_text": "You and permanents you control gain hexproof until end of turn. Prevent all damage that black and/or red sources would deal to creatures you control this turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "swamp": {
+      "id": "card_swamp",
+      "name": "Swamp",
+      "normalized_name": "swamp",
+      "mana_cost": "",
+      "type_line": "Basic Land — Swamp",
+      "oracle_text": "({T}: Add {B}.)",
+      "power": null,
+      "toughness": null,
+      "colors": [],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "thalia, guardian of thraben": {
+      "id": "card_thalia__guardian_of_thraben",
+      "name": "Thalia, Guardian of Thraben",
+      "normalized_name": "thalia, guardian of thraben",
+      "mana_cost": "{1}{W}",
+      "type_line": "Legendary Creature — Human Soldier",
+      "oracle_text": "First strike\nNoncreature spells cost {1} more to cast.",
+      "power": "2",
+      "toughness": "1",
+      "colors": [
+        "W"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "thoughtseize": {
+      "id": "card_thoughtseize",
+      "name": "Thoughtseize",
+      "normalized_name": "thoughtseize",
+      "mana_cost": "{B}",
+      "type_line": "Sorcery",
+      "oracle_text": "Target player reveals their hand. You choose a nonland card from it. That player discards that card. You lose 2 life.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "B"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    },
+    "vines of vastwood": {
+      "id": "card_vines_of_vastwood",
+      "name": "Vines of Vastwood",
+      "normalized_name": "vines of vastwood",
+      "mana_cost": "{G}",
+      "type_line": "Instant",
+      "oracle_text": "Kicker {G}\nTarget creature can't be the target of spells or abilities your opponents control this turn. If this spell was kicked, that creature gets +4/+4 until end of turn.",
+      "power": null,
+      "toughness": null,
+      "colors": [
+        "G"
+      ],
+      "image_uris": {},
+      "metadata": {
+        "source": "STARTER_SEED"
+      }
+    }
+  },
+  "RPMM_card_aliases": {},
+  "RPMM_card_bindings": {
+    "Castle Ardenvale_Castle Ardenvale enters the battlefield tapped unless you control a Plains.": {
+      "id": "bind_castle_ardenvale_0",
+      "card_name": "Castle Ardenvale",
+      "clause_text": "Castle Ardenvale enters the battlefield tapped unless you control a Plains.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": "UNLESS_CONDITION",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Castle Ardenvale_{T}: Add {W}.": {
+      "id": "bind_castle_ardenvale_1",
+      "card_name": "Castle Ardenvale",
+      "clause_text": "{T}: Add {W}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Castle Ardenvale_{2}{W}{W}, {T}: Create a 1/1 white Human creature token.": {
+      "id": "bind_castle_ardenvale_2",
+      "card_name": "Castle Ardenvale",
+      "clause_text": "{2}{W}{W}, {T}: Create a 1/1 white Human creature token.",
+      "trigger": "NONE",
+      "primitive": "ACTIVATED_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Ocelot Pride_First strike, lifelink": {
+      "id": "bind_ocelot_pride_0",
+      "card_name": "Ocelot Pride",
+      "clause_text": "First strike, lifelink",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "first strike",
+          "lifelink"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Ocelot Pride_Ascend": {
+      "id": "bind_ocelot_pride_1",
+      "card_name": "Ocelot Pride",
+      "clause_text": "Ascend",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "ascend"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Ocelot Pride_At the beginning of your end step, if you gained life this turn, create a 1/1 white Cat creature token.": {
+      "id": "bind_ocelot_pride_2",
+      "card_name": "Ocelot Pride",
+      "clause_text": "At the beginning of your end step, if you gained life this turn, create a 1/1 white Cat creature token.",
+      "trigger": "ON_END_STEP",
+      "primitive": "CREATE_TOKEN",
+      "condition": "IF_GAINED_LIFE_THIS_TURN",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Ocelot Pride_Then if you have the city's blessing, for each token you control, create a token that's a copy of that token.": {
+      "id": "bind_ocelot_pride_3",
+      "card_name": "Ocelot Pride",
+      "clause_text": "Then if you have the city's blessing, for each token you control, create a token that's a copy of that token.",
+      "trigger": "NONE",
+      "primitive": "CREATE_TOKEN",
+      "condition": "IF_CITYS_BLESSING",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Secure the Wastes_Create X 1/1 white Warrior creature tokens.": {
+      "id": "bind_secure_the_wastes_0",
+      "card_name": "Secure the Wastes",
+      "clause_text": "Create X 1/1 white Warrior creature tokens.",
+      "trigger": "NONE",
+      "primitive": "CREATE_TOKEN",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Soul Warden_Whenever another creature enters the battlefield, you gain 1 life.": {
+      "id": "bind_soul_warden_0",
+      "card_name": "Soul Warden",
+      "clause_text": "Whenever another creature enters the battlefield, you gain 1 life.",
+      "trigger": "ON_ANOTHER_CREATURE_ETB",
+      "primitive": "GAIN_LIFE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Raise the Alarm_Create two 1/1 white Soldier creature tokens.": {
+      "id": "bind_raise_the_alarm_0",
+      "card_name": "Raise the Alarm",
+      "clause_text": "Create two 1/1 white Soldier creature tokens.",
+      "trigger": "NONE",
+      "primitive": "CREATE_TOKEN",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Gather the Townsfolk_Create two 1/1 white Human creature tokens.": {
+      "id": "bind_gather_the_townsfolk_0",
+      "card_name": "Gather the Townsfolk",
+      "clause_text": "Create two 1/1 white Human creature tokens.",
+      "trigger": "NONE",
+      "primitive": "CREATE_TOKEN",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Gather the Townsfolk_Fateful hour — If you have 5 or less life, create five of those tokens instead.": {
+      "id": "bind_gather_the_townsfolk_1",
+      "card_name": "Gather the Townsfolk",
+      "clause_text": "Fateful hour — If you have 5 or less life, create five of those tokens instead.",
+      "trigger": "NONE",
+      "primitive": "CREATE_TOKEN",
+      "condition": "FATEFUL_HOUR",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Intangible Virtue_Creature tokens you control get +1/+1 and have vigilance.": {
+      "id": "bind_intangible_virtue_0",
+      "card_name": "Intangible Virtue",
+      "clause_text": "Creature tokens you control get +1/+1 and have vigilance.",
+      "trigger": "NONE",
+      "primitive": "STATIC_ANTHEM",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Wedding Announcement // Wedding Festivity_At the beginning of your end step, put an invitation counter on Wedding Announcement.": {
+      "id": "bind_wedding_announcement_0",
+      "card_name": "Wedding Announcement // Wedding Festivity",
+      "clause_text": "At the beginning of your end step, put an invitation counter on Wedding Announcement.",
+      "trigger": "ON_END_STEP",
+      "primitive": "ADD_COUNTER",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Wedding Announcement // Wedding Festivity_If you attacked with two or more creatures this turn, draw a card.": {
+      "id": "bind_wedding_announcement_1",
+      "card_name": "Wedding Announcement // Wedding Festivity",
+      "clause_text": "If you attacked with two or more creatures this turn, draw a card.",
+      "trigger": "NONE",
+      "primitive": "DRAW_CARDS",
+      "condition": "IF_ATTACKED_WITH_2_PLUS",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Wedding Announcement // Wedding Festivity_Otherwise, create a 1/1 white Human creature token.": {
+      "id": "bind_wedding_announcement_2",
+      "card_name": "Wedding Announcement // Wedding Festivity",
+      "clause_text": "Otherwise, create a 1/1 white Human creature token.",
+      "trigger": "NONE",
+      "primitive": "CREATE_TOKEN",
+      "condition": "OTHERWISE",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Wedding Announcement // Wedding Festivity_Then if Wedding Announcement has three or more invitation counters on it, transform it.": {
+      "id": "bind_wedding_announcement_3",
+      "card_name": "Wedding Announcement // Wedding Festivity",
+      "clause_text": "Then if Wedding Announcement has three or more invitation counters on it, transform it.",
+      "trigger": "NONE",
+      "primitive": "TRANSFORM",
+      "condition": "COUNTER_THRESHOLD",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Caretaker's Talent_Whenever one or more tokens enter the battlefield under your control, draw a card.": {
+      "id": "bind_caretaker_s_talent_0",
+      "card_name": "Caretaker's Talent",
+      "clause_text": "Whenever one or more tokens enter the battlefield under your control, draw a card.",
+      "trigger": "ON_TOKENS_ETB",
+      "primitive": "DRAW_CARDS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Caretaker's Talent_This ability triggers only once each turn.": {
+      "id": "bind_caretaker_s_talent_1",
+      "card_name": "Caretaker's Talent",
+      "clause_text": "This ability triggers only once each turn.",
+      "trigger": "NONE",
+      "primitive": "CONDITIONAL_RESTRICTION",
+      "condition": "ONCE_PER_TURN",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Caretaker's Talent_{W}: Level 2": {
+      "id": "bind_caretaker_s_talent_2",
+      "card_name": "Caretaker's Talent",
+      "clause_text": "{W}: Level 2",
+      "trigger": "NONE",
+      "primitive": "LEVEL_UP_CLASS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Caretaker's Talent_When this Class becomes level 2, create a token that's a copy of a token you control.": {
+      "id": "bind_caretaker_s_talent_3",
+      "card_name": "Caretaker's Talent",
+      "clause_text": "When this Class becomes level 2, create a token that's a copy of a token you control.",
+      "trigger": "ON_CLASS_LEVEL",
+      "primitive": "CREATE_TOKEN",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Caretaker's Talent_{3}{W}: Level 3": {
+      "id": "bind_caretaker_s_talent_4",
+      "card_name": "Caretaker's Talent",
+      "clause_text": "{3}{W}: Level 3",
+      "trigger": "NONE",
+      "primitive": "LEVEL_UP_CLASS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Caretaker's Talent_Creature tokens you control get +2/+2.": {
+      "id": "bind_caretaker_s_talent_5",
+      "card_name": "Caretaker's Talent",
+      "clause_text": "Creature tokens you control get +2/+2.",
+      "trigger": "NONE",
+      "primitive": "STATIC_ANTHEM",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Hero of Bladehold_Battle cry": {
+      "id": "bind_hero_of_bladehold_0",
+      "card_name": "Hero of Bladehold",
+      "clause_text": "Battle cry",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "battle cry"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Hero of Bladehold_Whenever Hero of Bladehold attacks, create two 1/1 white Soldier creature tokens tapped and attacking.": {
+      "id": "bind_hero_of_bladehold_1",
+      "card_name": "Hero of Bladehold",
+      "clause_text": "Whenever Hero of Bladehold attacks, create two 1/1 white Soldier creature tokens tapped and attacking.",
+      "trigger": "ON_ATTACK",
+      "primitive": "CREATE_TOKEN",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Leyline of Sanctity_If Leyline of Sanctity is in your opening hand, you may begin the game with it on the battlefield.": {
+      "id": "bind_leyline_of_sanctity_0",
+      "card_name": "Leyline of Sanctity",
+      "clause_text": "If Leyline of Sanctity is in your opening hand, you may begin the game with it on the battlefield.",
+      "trigger": "NONE",
+      "primitive": "OPENING_HAND_ACTION",
+      "condition": "OPENING_HAND",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Leyline of Sanctity_You have hexproof.": {
+      "id": "bind_leyline_of_sanctity_1",
+      "card_name": "Leyline of Sanctity",
+      "clause_text": "You have hexproof.",
+      "trigger": "NONE",
+      "primitive": "GRANT_HEXPROOF",
+      "condition": null,
+      "params": {
+        "target": "YOU"
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Archmage's Charm_Choose one —": {
+      "id": "bind_archmage_s_charm_0",
+      "card_name": "Archmage's Charm",
+      "clause_text": "Choose one —",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Archmage's Charm_• Counter target spell.": {
+      "id": "bind_archmage_s_charm_1",
+      "card_name": "Archmage's Charm",
+      "clause_text": "• Counter target spell.",
+      "trigger": "NONE",
+      "primitive": "COUNTER_SPELL",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Archmage's Charm_• Target player draws two cards.": {
+      "id": "bind_archmage_s_charm_2",
+      "card_name": "Archmage's Charm",
+      "clause_text": "• Target player draws two cards.",
+      "trigger": "NONE",
+      "primitive": "DRAW_CARDS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Archmage's Charm_• Gain control of target nonland permanent with mana value 1 or less.": {
+      "id": "bind_archmage_s_charm_3",
+      "card_name": "Archmage's Charm",
+      "clause_text": "• Gain control of target nonland permanent with mana value 1 or less.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Aspect of Hydra_Target creature gets +X/+X until end of turn, where X is your devotion to green.": {
+      "id": "bind_aspect_of_hydra_0",
+      "card_name": "Aspect of Hydra",
+      "clause_text": "Target creature gets +X/+X until end of turn, where X is your devotion to green.",
+      "trigger": "NONE",
+      "primitive": "PUMP_PT_EOT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Belt of Giant Strength_Equipped creature has base power and toughness 10/10.": {
+      "id": "bind_belt_of_giant_strength_0",
+      "card_name": "Belt of Giant Strength",
+      "clause_text": "Equipped creature has base power and toughness 10/10.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Belt of Giant Strength_Equip {10}.": {
+      "id": "bind_belt_of_giant_strength_1",
+      "card_name": "Belt of Giant Strength",
+      "clause_text": "Equip {10}.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Belt of Giant Strength_This ability costs {X} less to activate, where X is the greatest power among creatures you control.": {
+      "id": "bind_belt_of_giant_strength_2",
+      "card_name": "Belt of Giant Strength",
+      "clause_text": "This ability costs {X} less to activate, where X is the greatest power among creatures you control.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Benalish Marshal_Other creatures you control get +1/+1.": {
+      "id": "bind_benalish_marshal_0",
+      "card_name": "Benalish Marshal",
+      "clause_text": "Other creatures you control get +1/+1.",
+      "trigger": "NONE",
+      "primitive": "STATIC_ANTHEM",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Boros Charm_Choose one —": {
+      "id": "bind_boros_charm_0",
+      "card_name": "Boros Charm",
+      "clause_text": "Choose one —",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Boros Charm_• Boros Charm deals 4 damage to target player or planeswalker.": {
+      "id": "bind_boros_charm_1",
+      "card_name": "Boros Charm",
+      "clause_text": "• Boros Charm deals 4 damage to target player or planeswalker.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Boros Charm_• Permanents you control gain indestructible until end of turn.": {
+      "id": "bind_boros_charm_2",
+      "card_name": "Boros Charm",
+      "clause_text": "• Permanents you control gain indestructible until end of turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Boros Charm_• Target creature gains double strike until end of turn.": {
+      "id": "bind_boros_charm_3",
+      "card_name": "Boros Charm",
+      "clause_text": "• Target creature gains double strike until end of turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Brave the Elements_Choose a color.": {
+      "id": "bind_brave_the_elements_0",
+      "card_name": "Brave the Elements",
+      "clause_text": "Choose a color.",
+      "trigger": "NONE",
+      "primitive": "CHOOSE_COLOR",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Brave the Elements_White creatures you control gain protection from the chosen color until end of turn.": {
+      "id": "bind_brave_the_elements_1",
+      "card_name": "Brave the Elements",
+      "clause_text": "White creatures you control gain protection from the chosen color until end of turn.",
+      "trigger": "NONE",
+      "primitive": "GRANT_PROTECTION",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Brazen Borrower_Flash": {
+      "id": "bind_brazen_borrower_0",
+      "card_name": "Brazen Borrower",
+      "clause_text": "Flash",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "flash"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Brazen Borrower_Flying": {
+      "id": "bind_brazen_borrower_1",
+      "card_name": "Brazen Borrower",
+      "clause_text": "Flying",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "flying"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Brazen Borrower_Brazen Borrower can block only creatures with flying.": {
+      "id": "bind_brazen_borrower_2",
+      "card_name": "Brazen Borrower",
+      "clause_text": "Brazen Borrower can block only creatures with flying.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Brazen Borrower_// Petty Theft {1}{U} Instant — Adventure: Return target nonland permanent an opponent controls to its owner's hand.": {
+      "id": "bind_brazen_borrower_3",
+      "card_name": "Brazen Borrower",
+      "clause_text": "// Petty Theft {1}{U} Instant — Adventure: Return target nonland permanent an opponent controls to its owner's hand.",
+      "trigger": "NONE",
+      "primitive": "BOUNCE_TO_HAND",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Callous Sell-Sword // Burn Together_Callous Sell-Sword enters the battlefield with a +1/+1 counter on it for each creature that died under your control this turn.": {
+      "id": "bind_callous_sell_sword____burn_together_0",
+      "card_name": "Callous Sell-Sword // Burn Together",
+      "clause_text": "Callous Sell-Sword enters the battlefield with a +1/+1 counter on it for each creature that died under your control this turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Callous Sell-Sword // Burn Together_// Burn Together {R} Sorcery — Adventure: Target creature you control deals damage equal to its power to any other target.": {
+      "id": "bind_callous_sell_sword____burn_together_1",
+      "card_name": "Callous Sell-Sword // Burn Together",
+      "clause_text": "// Burn Together {R} Sorcery — Adventure: Target creature you control deals damage equal to its power to any other target.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Callous Sell-Sword // Burn Together_Then sacrifice it.": {
+      "id": "bind_callous_sell_sword____burn_together_2",
+      "card_name": "Callous Sell-Sword // Burn Together",
+      "clause_text": "Then sacrifice it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Castle Locthwain_Castle Locthwain enters the battlefield tapped unless you control a Swamp.": {
+      "id": "bind_castle_locthwain_0",
+      "card_name": "Castle Locthwain",
+      "clause_text": "Castle Locthwain enters the battlefield tapped unless you control a Swamp.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": "UNLESS_CONDITION",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Castle Locthwain_{T}: Add {B}.": {
+      "id": "bind_castle_locthwain_1",
+      "card_name": "Castle Locthwain",
+      "clause_text": "{T}: Add {B}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Castle Locthwain_{1}{B}{B}, {T}: Draw a card, then you lose life equal to the number of cards in your hand.": {
+      "id": "bind_castle_locthwain_2",
+      "card_name": "Castle Locthwain",
+      "clause_text": "{1}{B}{B}, {T}: Draw a card, then you lose life equal to the number of cards in your hand.",
+      "trigger": "NONE",
+      "primitive": "ACTIVATED_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Celestial Colonnade_Celestial Colonnade enters the battlefield tapped.": {
+      "id": "bind_celestial_colonnade_0",
+      "card_name": "Celestial Colonnade",
+      "clause_text": "Celestial Colonnade enters the battlefield tapped.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Celestial Colonnade_{T}: Add {W} or {U}.": {
+      "id": "bind_celestial_colonnade_1",
+      "card_name": "Celestial Colonnade",
+      "clause_text": "{T}: Add {W} or {U}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Celestial Colonnade_{3}{W}{U}: Until end of turn, Celestial Colonnade becomes a 4/4 white and blue Elemental creature with flying and vigilance.": {
+      "id": "bind_celestial_colonnade_2",
+      "card_name": "Celestial Colonnade",
+      "clause_text": "{3}{W}{U}: Until end of turn, Celestial Colonnade becomes a 4/4 white and blue Elemental creature with flying and vigilance.",
+      "trigger": "NONE",
+      "primitive": "ACTIVATED_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Celestial Colonnade_It's still a land.": {
+      "id": "bind_celestial_colonnade_3",
+      "card_name": "Celestial Colonnade",
+      "clause_text": "It's still a land.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Colossus Hammer_Equipped creature gets +10/+10 and loses flying.": {
+      "id": "bind_colossus_hammer_0",
+      "card_name": "Colossus Hammer",
+      "clause_text": "Equipped creature gets +10/+10 and loses flying.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Colossus Hammer_Equip {8}": {
+      "id": "bind_colossus_hammer_1",
+      "card_name": "Colossus Hammer",
+      "clause_text": "Equip {8}",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Consider_Surveil 1.": {
+      "id": "bind_consider_0",
+      "card_name": "Consider",
+      "clause_text": "Surveil 1.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Consider_Draw a card.": {
+      "id": "bind_consider_1",
+      "card_name": "Consider",
+      "clause_text": "Draw a card.",
+      "trigger": "NONE",
+      "primitive": "DRAW_CARDS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Counterspell_Counter target spell.": {
+      "id": "bind_counterspell_0",
+      "card_name": "Counterspell",
+      "clause_text": "Counter target spell.",
+      "trigger": "NONE",
+      "primitive": "COUNTER_SPELL",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Dauntless Bodyguard_As Dauntless Bodyguard enters the battlefield, choose another creature you control.": {
+      "id": "bind_dauntless_bodyguard_0",
+      "card_name": "Dauntless Bodyguard",
+      "clause_text": "As Dauntless Bodyguard enters the battlefield, choose another creature you control.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Dauntless Bodyguard_Sacrifice Dauntless Bodyguard: The chosen creature gains indestructible until end of turn.": {
+      "id": "bind_dauntless_bodyguard_1",
+      "card_name": "Dauntless Bodyguard",
+      "clause_text": "Sacrifice Dauntless Bodyguard: The chosen creature gains indestructible until end of turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Dismember_Target creature gets -5/-5 until end of turn.": {
+      "id": "bind_dismember_0",
+      "card_name": "Dismember",
+      "clause_text": "Target creature gets -5/-5 until end of turn.",
+      "trigger": "NONE",
+      "primitive": "PUMP_STATS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Doc Ock's Tentacles_Equipped creature gets +4/+4.": {
+      "id": "bind_doc_ock_s_tentacles_0",
+      "card_name": "Doc Ock's Tentacles",
+      "clause_text": "Equipped creature gets +4/+4.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Doc Ock's Tentacles_Whenever a creature with mana value 5 or greater enters the battlefield under your control, you may attach Doc Ock's Tentacles to it.": {
+      "id": "bind_doc_ock_s_tentacles_1",
+      "card_name": "Doc Ock's Tentacles",
+      "clause_text": "Whenever a creature with mana value 5 or greater enters the battlefield under your control, you may attach Doc Ock's Tentacles to it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Doc Ock's Tentacles_Equip {5}": {
+      "id": "bind_doc_ock_s_tentacles_2",
+      "card_name": "Doc Ock's Tentacles",
+      "clause_text": "Equip {5}",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Eidolon of the Great Revel_Whenever a player casts a spell with mana value 3 or less, Eidolon of the Great Revel deals 2 damage to that player.": {
+      "id": "bind_eidolon_of_the_great_revel_0",
+      "card_name": "Eidolon of the Great Revel",
+      "clause_text": "Whenever a player casts a spell with mana value 3 or less, Eidolon of the Great Revel deals 2 damage to that player.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Fatal Push_Destroy target creature if it has mana value 2 or less.": {
+      "id": "bind_fatal_push_0",
+      "card_name": "Fatal Push",
+      "clause_text": "Destroy target creature if it has mana value 2 or less.",
+      "trigger": "NONE",
+      "primitive": "DESTROY_TARGET",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Fatal Push_Revolt — Destroy that creature if it has mana value 4 or less instead if a permanent you controlled left the battlefield this turn.": {
+      "id": "bind_fatal_push_1",
+      "card_name": "Fatal Push",
+      "clause_text": "Revolt — Destroy that creature if it has mana value 4 or less instead if a permanent you controlled left the battlefield this turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Fervent Champion_First strike, haste": {
+      "id": "bind_fervent_champion_0",
+      "card_name": "Fervent Champion",
+      "clause_text": "First strike, haste",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "first strike",
+          "haste"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Fervent Champion_Whenever Fervent Champion attacks, another target attacking Knight you control gets +1/+0 until end of turn.": {
+      "id": "bind_fervent_champion_1",
+      "card_name": "Fervent Champion",
+      "clause_text": "Whenever Fervent Champion attacks, another target attacking Knight you control gets +1/+0 until end of turn.",
+      "trigger": "ON_ATTACK",
+      "primitive": "PUMP_STATS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Fervent Champion_Equip abilities you activate that target Fervent Champion cost {3} less to activate.": {
+      "id": "bind_fervent_champion_2",
+      "card_name": "Fervent Champion",
+      "clause_text": "Equip abilities you activate that target Fervent Champion cost {3} less to activate.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Forest_({T}: Add {G}.)": {
+      "id": "bind_forest_0",
+      "card_name": "Forest",
+      "clause_text": "({T}: Add {G}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Forge Anew_When Forge Anew enters the battlefield, you may return target Equipment card from your graveyard to the battlefield.": {
+      "id": "bind_forge_anew_0",
+      "card_name": "Forge Anew",
+      "clause_text": "When Forge Anew enters the battlefield, you may return target Equipment card from your graveyard to the battlefield.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Forge Anew_As long as it's your turn, you may activate equip abilities any time you could cast an instant.": {
+      "id": "bind_forge_anew_1",
+      "card_name": "Forge Anew",
+      "clause_text": "As long as it's your turn, you may activate equip abilities any time you could cast an instant.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Forge Anew_You may pay {0} rather than pay the equip cost of the first equip ability you activate each turn.": {
+      "id": "bind_forge_anew_2",
+      "card_name": "Forge Anew",
+      "clause_text": "You may pay {0} rather than pay the equip cost of the first equip ability you activate each turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Garruk's Harbinger_Hexproof from black": {
+      "id": "bind_garruk_s_harbinger_0",
+      "card_name": "Garruk's Harbinger",
+      "clause_text": "Hexproof from black",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Garruk's Harbinger_Whenever Garruk's Harbinger deals combat damage to a player or planeswalker, look at that many cards from the top of your library.": {
+      "id": "bind_garruk_s_harbinger_1",
+      "card_name": "Garruk's Harbinger",
+      "clause_text": "Whenever Garruk's Harbinger deals combat damage to a player or planeswalker, look at that many cards from the top of your library.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Garruk's Harbinger_You may reveal a creature card or Garruk planeswalker card from among them and put it into your hand.": {
+      "id": "bind_garruk_s_harbinger_2",
+      "card_name": "Garruk's Harbinger",
+      "clause_text": "You may reveal a creature card or Garruk planeswalker card from among them and put it into your hand.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Garruk's Harbinger_Put the rest on the bottom of your library in a random order.": {
+      "id": "bind_garruk_s_harbinger_3",
+      "card_name": "Garruk's Harbinger",
+      "clause_text": "Put the rest on the bottom of your library in a random order.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Gifted Aetherborn_Deathtouch, lifelink": {
+      "id": "bind_gifted_aetherborn_0",
+      "card_name": "Gifted Aetherborn",
+      "clause_text": "Deathtouch, lifelink",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "deathtouch",
+          "lifelink"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Glacial Fortress_Glacial Fortress enters the battlefield tapped unless you control a Plains or an Island.": {
+      "id": "bind_glacial_fortress_0",
+      "card_name": "Glacial Fortress",
+      "clause_text": "Glacial Fortress enters the battlefield tapped unless you control a Plains or an Island.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": "UNLESS_CONDITION",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Glacial Fortress_{T}: Add {W} or {U}.": {
+      "id": "bind_glacial_fortress_1",
+      "card_name": "Glacial Fortress",
+      "clause_text": "{T}: Add {W} or {U}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Go for the Throat_Destroy target nonartifact creature.": {
+      "id": "bind_go_for_the_throat_0",
+      "card_name": "Go for the Throat",
+      "clause_text": "Destroy target nonartifact creature.",
+      "trigger": "NONE",
+      "primitive": "DESTROY_TARGET",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Goblin Gaveleer_Trample": {
+      "id": "bind_goblin_gaveleer_0",
+      "card_name": "Goblin Gaveleer",
+      "clause_text": "Trample",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "trample"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Goblin Gaveleer_Goblin Gaveleer gets +2/+0 for each Equipment attached to it.": {
+      "id": "bind_goblin_gaveleer_1",
+      "card_name": "Goblin Gaveleer",
+      "clause_text": "Goblin Gaveleer gets +2/+0 for each Equipment attached to it.",
+      "trigger": "NONE",
+      "primitive": "PUMP_STATS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Goblin Guide_Haste": {
+      "id": "bind_goblin_guide_0",
+      "card_name": "Goblin Guide",
+      "clause_text": "Haste",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "haste"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Goblin Guide_Whenever Goblin Guide attacks, defending player reveals the top card of their library.": {
+      "id": "bind_goblin_guide_1",
+      "card_name": "Goblin Guide",
+      "clause_text": "Whenever Goblin Guide attacks, defending player reveals the top card of their library.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Goblin Guide_If it's a land card, that player puts it into their hand.": {
+      "id": "bind_goblin_guide_2",
+      "card_name": "Goblin Guide",
+      "clause_text": "If it's a land card, that player puts it into their hand.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Gray Merchant of Asphodel_When Gray Merchant of Asphodel enters the battlefield, each opponent loses X life, where X is your devotion to black.": {
+      "id": "bind_gray_merchant_of_asphodel_0",
+      "card_name": "Gray Merchant of Asphodel",
+      "clause_text": "When Gray Merchant of Asphodel enters the battlefield, each opponent loses X life, where X is your devotion to black.",
+      "trigger": "ON_ETB",
+      "primitive": "LOSE_LIFE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Gray Merchant of Asphodel_You gain life equal to the life lost this way.": {
+      "id": "bind_gray_merchant_of_asphodel_1",
+      "card_name": "Gray Merchant of Asphodel",
+      "clause_text": "You gain life equal to the life lost this way.",
+      "trigger": "NONE",
+      "primitive": "GAIN_LIFE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Hallowed Fountain_({T}: Add {W} or {U}.)": {
+      "id": "bind_hallowed_fountain_0",
+      "card_name": "Hallowed Fountain",
+      "clause_text": "({T}: Add {W} or {U}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Hallowed Fountain_As Hallowed Fountain enters the battlefield, you may pay 2 life.": {
+      "id": "bind_hallowed_fountain_1",
+      "card_name": "Hallowed Fountain",
+      "clause_text": "As Hallowed Fountain enters the battlefield, you may pay 2 life.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Hallowed Fountain_If you don't, it enters the battlefield tapped.": {
+      "id": "bind_hallowed_fountain_2",
+      "card_name": "Hallowed Fountain",
+      "clause_text": "If you don't, it enters the battlefield tapped.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Heartfire Hero_Valiant — Whenever Heartfire Hero becomes the target of a spell or ability you control for the first time each turn, put a +1/+1 counter on it.": {
+      "id": "bind_heartfire_hero_0",
+      "card_name": "Heartfire Hero",
+      "clause_text": "Valiant — Whenever Heartfire Hero becomes the target of a spell or ability you control for the first time each turn, put a +1/+1 counter on it.",
+      "trigger": "ON_BECOMES_TARGET",
+      "primitive": "ADD_COUNTER",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Heartfire Hero_When Heartfire Hero dies, it deals damage equal to its power to each opponent.": {
+      "id": "bind_heartfire_hero_1",
+      "card_name": "Heartfire Hero",
+      "clause_text": "When Heartfire Hero dies, it deals damage equal to its power to each opponent.",
+      "trigger": "ON_DIES",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Honor of the Pure_White creatures you control get +1/+1.": {
+      "id": "bind_honor_of_the_pure_0",
+      "card_name": "Honor of the Pure",
+      "clause_text": "White creatures you control get +1/+1.",
+      "trigger": "NONE",
+      "primitive": "STATIC_ANTHEM",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Inkmoth Nexus_{T}: Add {C}.": {
+      "id": "bind_inkmoth_nexus_0",
+      "card_name": "Inkmoth Nexus",
+      "clause_text": "{T}: Add {C}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Inkmoth Nexus_{1}: Inkmoth Nexus becomes a 1/1 Blinkmoth artifact creature with flying and infect until end of turn.": {
+      "id": "bind_inkmoth_nexus_1",
+      "card_name": "Inkmoth Nexus",
+      "clause_text": "{1}: Inkmoth Nexus becomes a 1/1 Blinkmoth artifact creature with flying and infect until end of turn.",
+      "trigger": "NONE",
+      "primitive": "ACTIVATED_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Inkmoth Nexus_It's still a land.": {
+      "id": "bind_inkmoth_nexus_2",
+      "card_name": "Inkmoth Nexus",
+      "clause_text": "It's still a land.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Inspiring Vantage_Inspiring Vantage enters the battlefield tapped unless you control two or fewer other lands.": {
+      "id": "bind_inspiring_vantage_0",
+      "card_name": "Inspiring Vantage",
+      "clause_text": "Inspiring Vantage enters the battlefield tapped unless you control two or fewer other lands.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": "UNLESS_CONDITION",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Inspiring Vantage_{T}: Add {R} or {W}.": {
+      "id": "bind_inspiring_vantage_1",
+      "card_name": "Inspiring Vantage",
+      "clause_text": "{T}: Add {R} or {W}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Invasion of Gobakhan_When Invasion of Gobakhan enters the battlefield, target opponent reveals their hand.": {
+      "id": "bind_invasion_of_gobakhan_0",
+      "card_name": "Invasion of Gobakhan",
+      "clause_text": "When Invasion of Gobakhan enters the battlefield, target opponent reveals their hand.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Invasion of Gobakhan_You may exile a nonland card from it.": {
+      "id": "bind_invasion_of_gobakhan_1",
+      "card_name": "Invasion of Gobakhan",
+      "clause_text": "You may exile a nonland card from it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Invasion of Gobakhan_For as long as that card remains exiled, its owner may play it.": {
+      "id": "bind_invasion_of_gobakhan_2",
+      "card_name": "Invasion of Gobakhan",
+      "clause_text": "For as long as that card remains exiled, its owner may play it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Invasion of Gobakhan_A spell cast this way costs {2} more to cast.": {
+      "id": "bind_invasion_of_gobakhan_3",
+      "card_name": "Invasion of Gobakhan",
+      "clause_text": "A spell cast this way costs {2} more to cast.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Island_({T}: Add {U}.)": {
+      "id": "bind_island_0",
+      "card_name": "Island",
+      "clause_text": "({T}: Add {U}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Lava Spike_Lava Spike deals 3 damage to target player or planeswalker.": {
+      "id": "bind_lava_spike_0",
+      "card_name": "Lava Spike",
+      "clause_text": "Lava Spike deals 3 damage to target player or planeswalker.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Leyline Axe_If Leyline Axe is in your opening hand, you may begin the game with it on the battlefield.": {
+      "id": "bind_leyline_axe_0",
+      "card_name": "Leyline Axe",
+      "clause_text": "If Leyline Axe is in your opening hand, you may begin the game with it on the battlefield.",
+      "trigger": "NONE",
+      "primitive": "OPENING_HAND_ACTION",
+      "condition": "OPENING_HAND",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Leyline Axe_Equipped creature gets +1/+1 and has double strike and trample.": {
+      "id": "bind_leyline_axe_1",
+      "card_name": "Leyline Axe",
+      "clause_text": "Equipped creature gets +1/+1 and has double strike and trample.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Leyline Axe_Equip {3}": {
+      "id": "bind_leyline_axe_2",
+      "card_name": "Leyline Axe",
+      "clause_text": "Equip {3}",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Lightning Bolt_Lightning Bolt deals 3 damage to any target.": {
+      "id": "bind_lightning_bolt_0",
+      "card_name": "Lightning Bolt",
+      "clause_text": "Lightning Bolt deals 3 damage to any target.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Llanowar Elves_{T}: Add {G}.": {
+      "id": "bind_llanowar_elves_0",
+      "card_name": "Llanowar Elves",
+      "clause_text": "{T}: Add {G}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Luminarch Aspirant_At the beginning of combat on your turn, put a +1/+1 counter on target creature you control.": {
+      "id": "bind_luminarch_aspirant_0",
+      "card_name": "Luminarch Aspirant",
+      "clause_text": "At the beginning of combat on your turn, put a +1/+1 counter on target creature you control.",
+      "trigger": "NONE",
+      "primitive": "ADD_COUNTER",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Mana Confluence_{T}, Pay 1 life: Add one mana of any color.": {
+      "id": "bind_mana_confluence_0",
+      "card_name": "Mana Confluence",
+      "clause_text": "{T}, Pay 1 life: Add one mana of any color.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Monastery Swiftspear_Haste": {
+      "id": "bind_monastery_swiftspear_0",
+      "card_name": "Monastery Swiftspear",
+      "clause_text": "Haste",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "haste"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Monastery Swiftspear_Prowess": {
+      "id": "bind_monastery_swiftspear_1",
+      "card_name": "Monastery Swiftspear",
+      "clause_text": "Prowess",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "prowess"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Mountain_({T}: Add {R}.)": {
+      "id": "bind_mountain_0",
+      "card_name": "Mountain",
+      "clause_text": "({T}: Add {R}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Murderous Rider_Lifelink": {
+      "id": "bind_murderous_rider_0",
+      "card_name": "Murderous Rider",
+      "clause_text": "Lifelink",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "lifelink"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Murderous Rider_When Murderous Rider dies, put it on the bottom of its owner's library.": {
+      "id": "bind_murderous_rider_1",
+      "card_name": "Murderous Rider",
+      "clause_text": "When Murderous Rider dies, put it on the bottom of its owner's library.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Murderous Rider_// Swift End {1}{B}{B} Instant — Adventure: Destroy target creature or planeswalker.": {
+      "id": "bind_murderous_rider_2",
+      "card_name": "Murderous Rider",
+      "clause_text": "// Swift End {1}{B}{B} Instant — Adventure: Destroy target creature or planeswalker.",
+      "trigger": "NONE",
+      "primitive": "DESTROY_TARGET",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Murderous Rider_You lose 2 life.": {
+      "id": "bind_murderous_rider_3",
+      "card_name": "Murderous Rider",
+      "clause_text": "You lose 2 life.",
+      "trigger": "NONE",
+      "primitive": "LOSE_LIFE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Mutavault_{T}: Add {C}.": {
+      "id": "bind_mutavault_0",
+      "card_name": "Mutavault",
+      "clause_text": "{T}: Add {C}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Mutavault_{1}: Mutavault becomes a 2/2 creature with all creature types until end of turn.": {
+      "id": "bind_mutavault_1",
+      "card_name": "Mutavault",
+      "clause_text": "{1}: Mutavault becomes a 2/2 creature with all creature types until end of turn.",
+      "trigger": "NONE",
+      "primitive": "ACTIVATED_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Mutavault_It's still a land.": {
+      "id": "bind_mutavault_2",
+      "card_name": "Mutavault",
+      "clause_text": "It's still a land.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Nighthawk Scavenger_Flying, deathtouch, lifelink": {
+      "id": "bind_nighthawk_scavenger_0",
+      "card_name": "Nighthawk Scavenger",
+      "clause_text": "Flying, deathtouch, lifelink",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "flying",
+          "deathtouch",
+          "lifelink"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Nighthawk Scavenger_Nighthawk Scavenger's power is equal to 1 plus the number of card types among cards in your opponents' graveyards.": {
+      "id": "bind_nighthawk_scavenger_1",
+      "card_name": "Nighthawk Scavenger",
+      "clause_text": "Nighthawk Scavenger's power is equal to 1 plus the number of card types among cards in your opponents' graveyards.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Opt_Scry 1.": {
+      "id": "bind_opt_0",
+      "card_name": "Opt",
+      "clause_text": "Scry 1.",
+      "trigger": "NONE",
+      "primitive": "SCRY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Opt_Draw a card.": {
+      "id": "bind_opt_1",
+      "card_name": "Opt",
+      "clause_text": "Draw a card.",
+      "trigger": "NONE",
+      "primitive": "DRAW_CARDS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Path to Exile_Exile target creature.": {
+      "id": "bind_path_to_exile_0",
+      "card_name": "Path to Exile",
+      "clause_text": "Exile target creature.",
+      "trigger": "NONE",
+      "primitive": "EXILE_TARGET",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Path to Exile_Its controller may search their library for a basic land card, put that card onto the battlefield tapped, then shuffle.": {
+      "id": "bind_path_to_exile_1",
+      "card_name": "Path to Exile",
+      "clause_text": "Its controller may search their library for a basic land card, put that card onto the battlefield tapped, then shuffle.",
+      "trigger": "NONE",
+      "primitive": "SEARCH_LIBRARY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Plains_({T}: Add {W}.)": {
+      "id": "bind_plains_0",
+      "card_name": "Plains",
+      "clause_text": "({T}: Add {W}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Rancor_Enchant creature": {
+      "id": "bind_rancor_0",
+      "card_name": "Rancor",
+      "clause_text": "Enchant creature",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Rancor_Enchanted creature gets +2/+0 and has trample.": {
+      "id": "bind_rancor_1",
+      "card_name": "Rancor",
+      "clause_text": "Enchanted creature gets +2/+0 and has trample.",
+      "trigger": "NONE",
+      "primitive": "PUMP_STATS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Rancor_When Rancor is put into a graveyard from the battlefield, return Rancor to its owner's hand.": {
+      "id": "bind_rancor_2",
+      "card_name": "Rancor",
+      "clause_text": "When Rancor is put into a graveyard from the battlefield, return Rancor to its owner's hand.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Resolute Strike_Target creature gets +2/+2 until end of turn.": {
+      "id": "bind_resolute_strike_0",
+      "card_name": "Resolute Strike",
+      "clause_text": "Target creature gets +2/+2 until end of turn.",
+      "trigger": "NONE",
+      "primitive": "PUMP_STATS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Resolute Strike_If it's a Warrior, you may attach an Equipment you control to it.": {
+      "id": "bind_resolute_strike_1",
+      "card_name": "Resolute Strike",
+      "clause_text": "If it's a Warrior, you may attach an Equipment you control to it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Rift Bolt_Rift Bolt deals 3 damage to any target.": {
+      "id": "bind_rift_bolt_0",
+      "card_name": "Rift Bolt",
+      "clause_text": "Rift Bolt deals 3 damage to any target.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Rift Bolt_Suspend 1—{R}": {
+      "id": "bind_rift_bolt_1",
+      "card_name": "Rift Bolt",
+      "clause_text": "Suspend 1—{R}",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Sacred Foundry_({T}: Add {R} or {W}.)": {
+      "id": "bind_sacred_foundry_0",
+      "card_name": "Sacred Foundry",
+      "clause_text": "({T}: Add {R} or {W}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Sacred Foundry_As Sacred Foundry enters the battlefield, you may pay 2 life.": {
+      "id": "bind_sacred_foundry_1",
+      "card_name": "Sacred Foundry",
+      "clause_text": "As Sacred Foundry enters the battlefield, you may pay 2 life.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Sacred Foundry_If you don't, it enters the battlefield tapped.": {
+      "id": "bind_sacred_foundry_2",
+      "card_name": "Sacred Foundry",
+      "clause_text": "If you don't, it enters the battlefield tapped.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Searing Blaze_Searing Blaze deals 1 damage to target player and 1 damage to target creature that player controls.": {
+      "id": "bind_searing_blaze_0",
+      "card_name": "Searing Blaze",
+      "clause_text": "Searing Blaze deals 1 damage to target player and 1 damage to target creature that player controls.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Searing Blaze_Landfall — If you had a land enter the battlefield under your control this turn, Searing Blaze deals 3 damage to that player and 3 damage to that creature instead.": {
+      "id": "bind_searing_blaze_1",
+      "card_name": "Searing Blaze",
+      "clause_text": "Landfall — If you had a land enter the battlefield under your control this turn, Searing Blaze deals 3 damage to that player and 3 damage to that creature instead.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Sigarda's Aid_You may cast Aura and Equipment spells as though they had flash.": {
+      "id": "bind_sigarda_s_aid_0",
+      "card_name": "Sigarda's Aid",
+      "clause_text": "You may cast Aura and Equipment spells as though they had flash.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Sigarda's Aid_Whenever an Equipment enters the battlefield under your control, you may attach it to target creature you control.": {
+      "id": "bind_sigarda_s_aid_1",
+      "card_name": "Sigarda's Aid",
+      "clause_text": "Whenever an Equipment enters the battlefield under your control, you may attach it to target creature you control.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Sign in Blood_Target player draws two cards and loses 2 life.": {
+      "id": "bind_sign_in_blood_0",
+      "card_name": "Sign in Blood",
+      "clause_text": "Target player draws two cards and loses 2 life.",
+      "trigger": "NONE",
+      "primitive": "DRAW_CARDS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Skewer the Critics_Spectacle {R}": {
+      "id": "bind_skewer_the_critics_0",
+      "card_name": "Skewer the Critics",
+      "clause_text": "Spectacle {R}",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Skewer the Critics_Skewer the Critics deals 3 damage to any target.": {
+      "id": "bind_skewer_the_critics_1",
+      "card_name": "Skewer the Critics",
+      "clause_text": "Skewer the Critics deals 3 damage to any target.",
+      "trigger": "NONE",
+      "primitive": "DEAL_DAMAGE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Soldier of the Pantheon_Protection from multicolored": {
+      "id": "bind_soldier_of_the_pantheon_0",
+      "card_name": "Soldier of the Pantheon",
+      "clause_text": "Protection from multicolored",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "protection from multicolored"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Soldier of the Pantheon_Whenever an opponent casts a multicolored spell, you gain 1 life.": {
+      "id": "bind_soldier_of_the_pantheon_1",
+      "card_name": "Soldier of the Pantheon",
+      "clause_text": "Whenever an opponent casts a multicolored spell, you gain 1 life.",
+      "trigger": "NONE",
+      "primitive": "GAIN_LIFE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Spire of Industry_{T}: Add {C}.": {
+      "id": "bind_spire_of_industry_0",
+      "card_name": "Spire of Industry",
+      "clause_text": "{T}: Add {C}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Spire of Industry_{T}, Pay 1 life: Add one mana of any color.": {
+      "id": "bind_spire_of_industry_1",
+      "card_name": "Spire of Industry",
+      "clause_text": "{T}, Pay 1 life: Add one mana of any color.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Spire of Industry_Activate only if you control an artifact.": {
+      "id": "bind_spire_of_industry_2",
+      "card_name": "Spire of Industry",
+      "clause_text": "Activate only if you control an artifact.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Starting Town_Starting Town enters the battlefield tapped unless it's the first, second, or third turn of the game.": {
+      "id": "bind_starting_town_0",
+      "card_name": "Starting Town",
+      "clause_text": "Starting Town enters the battlefield tapped unless it's the first, second, or third turn of the game.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": "UNLESS_CONDITION",
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Starting Town_{T}: Add {C}.": {
+      "id": "bind_starting_town_1",
+      "card_name": "Starting Town",
+      "clause_text": "{T}: Add {C}.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Starting Town_{T}, Pay 1 life: Add one mana of any color.": {
+      "id": "bind_starting_town_2",
+      "card_name": "Starting Town",
+      "clause_text": "{T}, Pay 1 life: Add one mana of any color.",
+      "trigger": "NONE",
+      "primitive": "MANA_ABILITY",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Steam Vents_({T}: Add {U} or {R}.)": {
+      "id": "bind_steam_vents_0",
+      "card_name": "Steam Vents",
+      "clause_text": "({T}: Add {U} or {R}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Steam Vents_As Steam Vents enters the battlefield, you may pay 2 life.": {
+      "id": "bind_steam_vents_1",
+      "card_name": "Steam Vents",
+      "clause_text": "As Steam Vents enters the battlefield, you may pay 2 life.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Steam Vents_If you don't, it enters the battlefield tapped.": {
+      "id": "bind_steam_vents_2",
+      "card_name": "Steam Vents",
+      "clause_text": "If you don't, it enters the battlefield tapped.",
+      "trigger": "NONE",
+      "primitive": "ETB_TAPPED",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Steel Leaf Champion_Steel Leaf Champion can't be blocked by creatures with power 2 or less.": {
+      "id": "bind_steel_leaf_champion_0",
+      "card_name": "Steel Leaf Champion",
+      "clause_text": "Steel Leaf Champion can't be blocked by creatures with power 2 or less.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Stolen Uniform_Gain control of target Equipment until end of turn.": {
+      "id": "bind_stolen_uniform_0",
+      "card_name": "Stolen Uniform",
+      "clause_text": "Gain control of target Equipment until end of turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Stolen Uniform_Attach it to target creature you control.": {
+      "id": "bind_stolen_uniform_1",
+      "card_name": "Stolen Uniform",
+      "clause_text": "Attach it to target creature you control.",
+      "trigger": "NONE",
+      "primitive": "EQUIP",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Stolen Uniform_When you lose control of that Equipment, unattach it.": {
+      "id": "bind_stolen_uniform_2",
+      "card_name": "Stolen Uniform",
+      "clause_text": "When you lose control of that Equipment, unattach it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Strangleroot Geist_Haste": {
+      "id": "bind_strangleroot_geist_0",
+      "card_name": "Strangleroot Geist",
+      "clause_text": "Haste",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "haste"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Strangleroot Geist_Undying": {
+      "id": "bind_strangleroot_geist_1",
+      "card_name": "Strangleroot Geist",
+      "clause_text": "Undying",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Supreme Verdict_This spell can't be countered.": {
+      "id": "bind_supreme_verdict_0",
+      "card_name": "Supreme Verdict",
+      "clause_text": "This spell can't be countered.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Supreme Verdict_Destroy all creatures.": {
+      "id": "bind_supreme_verdict_1",
+      "card_name": "Supreme Verdict",
+      "clause_text": "Destroy all creatures.",
+      "trigger": "NONE",
+      "primitive": "DESTROY_TARGET",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Surge of Salvation_You and permanents you control gain hexproof until end of turn.": {
+      "id": "bind_surge_of_salvation_0",
+      "card_name": "Surge of Salvation",
+      "clause_text": "You and permanents you control gain hexproof until end of turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Surge of Salvation_Prevent all damage that black and/or red sources would deal to creatures you control this turn.": {
+      "id": "bind_surge_of_salvation_1",
+      "card_name": "Surge of Salvation",
+      "clause_text": "Prevent all damage that black and/or red sources would deal to creatures you control this turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Swamp_({T}: Add {B}.)": {
+      "id": "bind_swamp_0",
+      "card_name": "Swamp",
+      "clause_text": "({T}: Add {B}.)",
+      "trigger": "NONE",
+      "primitive": "REMINDER_TEXT",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Thalia, Guardian of Thraben_First strike": {
+      "id": "bind_thalia__guardian_of_thraben_0",
+      "card_name": "Thalia, Guardian of Thraben",
+      "clause_text": "First strike",
+      "trigger": "NONE",
+      "primitive": "KEYWORDS",
+      "condition": null,
+      "params": {
+        "keywords": [
+          "first strike"
+        ]
+      },
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 1
+      }
+    },
+    "Thalia, Guardian of Thraben_Noncreature spells cost {1} more to cast.": {
+      "id": "bind_thalia__guardian_of_thraben_1",
+      "card_name": "Thalia, Guardian of Thraben",
+      "clause_text": "Noncreature spells cost {1} more to cast.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Thoughtseize_Target player reveals their hand.": {
+      "id": "bind_thoughtseize_0",
+      "card_name": "Thoughtseize",
+      "clause_text": "Target player reveals their hand.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Thoughtseize_You choose a nonland card from it.": {
+      "id": "bind_thoughtseize_1",
+      "card_name": "Thoughtseize",
+      "clause_text": "You choose a nonland card from it.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Thoughtseize_That player discards that card.": {
+      "id": "bind_thoughtseize_2",
+      "card_name": "Thoughtseize",
+      "clause_text": "That player discards that card.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Thoughtseize_You lose 2 life.": {
+      "id": "bind_thoughtseize_3",
+      "card_name": "Thoughtseize",
+      "clause_text": "You lose 2 life.",
+      "trigger": "NONE",
+      "primitive": "LOSE_LIFE",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Vines of Vastwood_Kicker {G}": {
+      "id": "bind_vines_of_vastwood_0",
+      "card_name": "Vines of Vastwood",
+      "clause_text": "Kicker {G}",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Vines of Vastwood_Target creature can't be the target of spells or abilities your opponents control this turn.": {
+      "id": "bind_vines_of_vastwood_1",
+      "card_name": "Vines of Vastwood",
+      "clause_text": "Target creature can't be the target of spells or abilities your opponents control this turn.",
+      "trigger": "NONE",
+      "primitive": "CUSTOM",
+      "condition": null,
+      "params": {},
+      "status": "UNBOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    },
+    "Vines of Vastwood_If this spell was kicked, that creature gets +4/+4 until end of turn.": {
+      "id": "bind_vines_of_vastwood_2",
+      "card_name": "Vines of Vastwood",
+      "clause_text": "If this spell was kicked, that creature gets +4/+4 until end of turn.",
+      "trigger": "NONE",
+      "primitive": "PUMP_STATS",
+      "condition": null,
+      "params": {},
+      "status": "BOUND",
+      "is_certified": true,
+      "metadata": {
+        "pass": 2
+      }
+    }
+  },
+  "RPMM_review_queue": {},
+  "RPMM_live_rooms": {},
+  "RPMM_match_snapshots": {},
+  "RPMM_matches": {},
+  "RPMM_match_logs": []
+}

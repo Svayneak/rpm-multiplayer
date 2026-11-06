@@ -17,6 +17,8 @@
  */
 
 import assert from 'node:assert';
+import path from 'node:path';
+import fs from 'node:fs';
 import { OracleEffectCompiler, compileCard, compileCardMechanics, normalizeCardName, evaluateDeckSupportPercentage, auditDeckSupport, auditCardClauses, registerCustomCardBindings, clearCustomCardBindings } from '../src/OracleEffectCompiler.js';
 import { DeckSlotManager } from '../src/deckbuilder/DeckSlotManager.js';
 import { PerkinsAgent } from '../src/PerkinsAgent.js';
@@ -3980,6 +3982,176 @@ try {
 } catch (err) {
   recordTest('Class Permanents & Protection', 'ADV-43: Class Permanents, Protection From Color & Interactive Perks Resolution', 'FAIL', err.message);
 }
+
+
+// ── ADV-44: RPMM_* Schema, 365-Day Tokens & Strict Auth Gate ──
+try {
+  const schemaPath = path.resolve(process.cwd(), 'supabase', 'migrations', '001_rpmm_schema.sql');
+  assert.ok(fs.existsSync(schemaPath), '001_rpmm_schema.sql must exist');
+  
+  const sql = fs.readFileSync(schemaPath, 'utf8');
+  const requiredTables = [
+    'RPMM_profiles',
+    'RPMM_auth_tokens',
+    'RPMM_decks',
+    'RPMM_cards_catalog',
+    'RPMM_card_aliases',
+    'RPMM_card_bindings',
+    'RPMM_review_queue',
+    'RPMM_live_rooms',
+    'RPMM_match_snapshots',
+    'RPMM_matches',
+    'RPMM_match_logs'
+  ];
+
+  for (const table of requiredTables) {
+    const tableRegex = new RegExp(`CREATE\\s+TABLE\\s+(IF\\s+NOT\\s+EXISTS\\s+)?['"\`]?${table}['"\`]?`, 'i');
+    assert.ok(tableRegex.test(sql), `Schema must define table: ${table}`);
+  }
+
+  // Set up isolated HTTP test server
+  const http = await import('node:http');
+  const os = await import('node:os');
+  const { createAuthHttpHandler } = await import('../src/relay.js');
+  const { AuthManager } = await import('../src/AuthManager.js');
+
+  const tempStorePath = path.join(os.tmpdir(), `rpm_adv44_test_${Date.now()}_${Math.random().toString(36).slice(2)}.json`);
+  const authHandler = createAuthHttpHandler({ storePath: tempStorePath });
+
+  const server = http.createServer(async (req, res) => {
+    const handled = await authHandler(req, res);
+    if (!handled) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    }
+  });
+
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = server.address().port;
+  const apiBaseUrl = `http://127.0.0.1:${port}`;
+
+  const registrationPayload = {
+    email: 'test_duelist_' + Date.now() + '@svayneaksoft.com',
+    password: 'SuperSecretPassword2026!',
+    birthdayDay: 15,
+    deviceLabel: 'DESKTOP'
+  };
+
+  const now = Date.now();
+  const response = await fetch(`${apiBaseUrl}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(registrationPayload)
+  });
+
+  assert.strictEqual(response.status, 201, 'Registration must return 201 Created');
+  const data = await response.json();
+
+  assert.ok(data.token, 'Response must contain auth token');
+  assert.ok(data.expiresAt, 'Response must contain expiresAt');
+
+  const expiryDurationMs = new Date(data.expiresAt).getTime() - now;
+  const expected365DaysMs = 365 * 24 * 60 * 60 * 1000;
+  assert.ok(
+    Math.abs(expiryDurationMs - expected365DaysMs) < 10000,
+    `Token duration must be approximately 365 days. Got ${expiryDurationMs}ms`
+  );
+
+  const tokenHash = (await import('node:crypto')).createHash('sha256').update(data.token).digest('hex');
+  assert.strictEqual(data.tokenHash, tokenHash, 'Server token_hash must match SHA-256 of bearer token');
+
+  // Verify Zero Guest Mode
+  const unauthRes = await fetch(`${apiBaseUrl}/api/auth/me`, {
+    method: 'GET',
+    headers: { 'Accept': 'application/json' }
+  });
+  assert.strictEqual(unauthRes.status, 401, 'Unauthenticated request must be rejected with 401');
+
+  // ── ADV-46: RPMM_decks Slot Sync, AI Settings & Bug Reporting ──
+  const authToken = data.token;
+  const headers = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${authToken}`
+  };
+
+  for (let i = 1; i <= 12; i++) {
+    const updateRes = await fetch(`${apiBaseUrl}/api/auth/decks/1`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({
+        slotNumber: 1,
+        deckName: `Mono Red Burn v${i}`,
+        cards: [{ cardId: 'lightning_bolt', count: 4 }]
+      })
+    });
+    assert.strictEqual(updateRes.status, 200, `Deck update revision ${i} should succeed`);
+  }
+
+  const getRes = await fetch(`${apiBaseUrl}/api/auth/decks/1`, {
+    headers: { 'Authorization': `Bearer ${authToken}` }
+  });
+  assert.strictEqual(getRes.status, 200);
+  const deck = await getRes.json();
+  assert.strictEqual(deck.slot_number, 1);
+  assert.ok(Array.isArray(deck.history_json), 'history_json must be an array');
+  assert.strictEqual(deck.history_json.length, 10, 'history_json must cap at exactly the last 10 revisions');
+  assert.strictEqual(deck.history_json[9].deckName, 'Mono Red Burn v12', 'Latest revision must be head of history');
+  assert.strictEqual(deck.history_json[0].deckName, 'Mono Red Burn v3', 'Oldest retained revision must be v3 (v1 & v2 pruned)');
+
+  // AI settings
+  const aiPayload = {
+    botId: 'Perkins',
+    preferredDeckId: 'deck_slot_4',
+    difficulty: 'HARD'
+  };
+  const updateAiRes = await fetch(`${apiBaseUrl}/api/auth/ai-settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(aiPayload)
+  });
+  assert.strictEqual(updateAiRes.status, 200);
+
+  const getAiRes = await fetch(`${apiBaseUrl}/api/auth/ai-settings`, { headers });
+  assert.strictEqual(getAiRes.status, 200);
+  const settings = await getAiRes.json();
+  assert.strictEqual(settings.preferred_deck || settings.Perkins?.preferredDeckId || settings.preferredDeck, 'deck_slot_4');
+
+  // Bug report telemetry
+  const traceEvents = Array.from({ length: 100 }, (_, i) => ({
+    sequence: i + 1,
+    action: i % 2 === 0 ? 'PASS_PRIORITY' : 'TAP_LAND',
+    timestamp: Date.now() - (100 - i) * 100
+  }));
+
+  const bugReportPayload = {
+    matchId: 'match_perf_test_999',
+    snapshot: { turn: 5, activePlayer: 'p1', p1Life: 18, p2Life: 14, stack: [] },
+    traceEvents,
+    userDescription: 'Priority hung after instant cast on opponent end step'
+  };
+
+  const bugRes = await fetch(`${apiBaseUrl}/api/matches/report-bug`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(bugReportPayload)
+  });
+  assert.strictEqual(bugRes.status, 200, 'Bug report endpoint must return 200 OK');
+  const bugData = await bugRes.json();
+  assert.strictEqual(bugData.success, true);
+  assert.ok(bugData.logId, 'Must return generated logId');
+  assert.strictEqual(bugData.flaggedBug, true, 'Reported log must have flagged_bug: true');
+  assert.strictEqual(bugData.recordedTraceCount, 100, 'Must record all 100 trace events');
+
+  await new Promise(resolve => server.close(resolve));
+  try { if (fs.existsSync(tempStorePath)) fs.unlinkSync(tempStorePath); } catch (_) {}
+
+  recordTest('RPMM_* Schema & Auth Gate', 'ADV-44: 11 RPMM_* Tables, 365-Day Token & Strict Auth Gate', 'PASS');
+  recordTest('RPMM Persistence & Telemetry', 'ADV-46: RPMM_decks Slot Sync, AI Settings & Bug Reporting', 'PASS');
+} catch (err) {
+  recordTest('RPMM_* Schema & Auth Gate', 'ADV-44: 11 RPMM_* Tables, 365-Day Token & Strict Auth Gate', 'FAIL', err.message);
+  recordTest('RPMM Persistence & Telemetry', 'ADV-46: RPMM_decks Slot Sync, AI Settings & Bug Reporting', 'FAIL', err.message);
+}
+
 
 // ── Summary Report ──
 console.log('\n==================================================================');

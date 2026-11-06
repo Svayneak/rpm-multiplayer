@@ -1,26 +1,41 @@
 /**
  * src/AuthManager.js
- * Supabase Magic Link OTP, Instant Dev Bypass, Profile Hydration & Telemetry Buffer
+ * PostgREST 365-Day Authentication, Device Handover, AI Settings & Bug Reporting
  * 
  * Part of RPM Multiplayer - Feature 15
  * Document ID: SPEC-RPM-ONBOARD-015
  * Enforces Architectural Invariants:
- * - INV-AUTH-1: Authentication Gate & Session Persistence
+ * - INV-AUTH-1: Authentication Gate & 365-Day Session Persistence
  * - INV-ONBOARD-1: Mandatory Deck Creator Gate
  * - INV-TELEMETRY-1: Event Logging & Non-Blocking Audit Trail
+ * - INV-ARCH-HEADLESS: Strict typeof guards on browser globals
  * 
  * @module AuthManager
  */
 
 import { EventEmitter } from './EventEmitter.js';
 
-export const SUPABASE_URL = 'https://naacgdwtglvcumaccime.supabase.co';
-export const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hYWNnZHd0Z2x2Y3VtYWNjaW1lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5Nzc2NDUsImV4cCI6MjEwMzU1MzY0NX0.QzVkPr7-aKYLTxVc6RzB_maVBykHBUvtvIIZm-522JE';
+export const SUPABASE_URL = (typeof process !== 'undefined' && process.env?.SUPABASE_URL) || 'https://naacgdwtglvcumaccime.supabase.co';
+export const SUPABASE_ANON_KEY = (typeof process !== 'undefined' && (process.env?.SUPABASE_SERVICE_ROLE_KEY || process.env?.SUPABASE_ANON_KEY)) || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hYWNnZHd0Z2x2Y3VtYWNjaW1lIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc5Nzc2NDUsImV4cCI6MjEwMzU1MzY0NX0.QzVkPr7-aKYLTxVc6RzB_maVBykHBUvtvIIZm-522JE';
 
 export const AUTH_STORAGE_KEY = 'rpm_auth_session';
 export const AUTH_TOKEN_STORAGE_KEY = 'rpm_auth_token_v1';
 export const TELEMETRY_STORAGE_KEY = 'rpm_telemetry_buffer';
 export const MAX_TELEMETRY_BUFFER_SIZE = 100;
+export const TOKEN_EXPIRY_DAYS = 365;
+
+/**
+ * Detects client device label ('MOBILE' | 'DESKTOP') with safe typeof guards.
+ * @returns {'MOBILE'|'DESKTOP'}
+ */
+export function getDeviceLabel() {
+  if (typeof window !== 'undefined') {
+    const isSmallScreen = typeof window.innerWidth === 'number' && window.innerWidth < 768;
+    const isMobileUa = typeof navigator !== 'undefined' && /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+    if (isSmallScreen || isMobileUa) return 'MOBILE';
+  }
+  return 'DESKTOP';
+}
 
 /**
  * 5 Tournament Modern Starter Archetypes (Section 5.1)
@@ -151,7 +166,6 @@ export const STARTER_ARCHETYPES = Object.freeze({
   }
 });
 
-// Alias mapping for flexible starter archetype lookups
 export const STARTER_ALIASES = Object.freeze({
   STARTER_RED_BURN: STARTER_ARCHETYPES.MODERN_BURN_R,
   STARTER_IZZET_MURKTIDE: STARTER_ARCHETYPES.MODERN_MURKTIDE_UR,
@@ -165,11 +179,6 @@ export const STARTER_ALIASES = Object.freeze({
   URG: STARTER_ARCHETYPES.MODERN_RHINOS_URG
 });
 
-/**
- * Resolves starter archetype by code or key.
- * @param {string} codeOrKey 
- * @returns {Object|null}
- */
 export function getStarterDeck(codeOrKey) {
   if (!codeOrKey) return null;
   const key = String(codeOrKey).trim();
@@ -178,11 +187,6 @@ export function getStarterDeck(codeOrKey) {
   return null;
 }
 
-/**
- * Calculates player age based on YYYY-MM-DD Date of Birth.
- * @param {string} dobString 
- * @returns {number}
- */
 export function calculateAge(dobString) {
   if (!dobString) return 0;
   const birth = new Date(dobString);
@@ -196,10 +200,6 @@ export function calculateAge(dobString) {
   return age;
 }
 
-/**
- * Cryptographic UUID v4 Generator.
- * @returns {string}
- */
 export function generateUUID() {
   if (typeof globalThis !== 'undefined' && globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID();
@@ -220,9 +220,6 @@ export function generateUUID() {
   });
 }
 
-/**
- * Headless In-Memory LocalStorage Mock.
- */
 class MemoryStorage {
   constructor() {
     this._store = new Map();
@@ -235,22 +232,10 @@ class MemoryStorage {
 
 /**
  * AuthManager
- * Orchestrates Supabase Magic Link OTP, instant developer bypass,
- * profile hydration, and non-blocking telemetry event auditing.
+ * Orchestrates relay PostgREST authentication, device takeover handover,
+ * 365-day sessions, AI preferences, bug telemetry, and offline fallback.
  */
 export class AuthManager extends EventEmitter {
-  /**
-   * @param {Object} [options={}]
-   * @param {string} [options.supabaseUrl]
-   * @param {string} [options.supabaseAnonKey]
-   * @param {string} [options.storageKey]
-   * @param {string} [options.telemetryStorageKey]
-   * @param {Object} [options.storage]
-   * @param {Function} [options.fetch]
-   * @param {Function} [options.fetchImpl]
-   * @param {string} [options.apiBaseUrl]
-   * @param {string} [options.authTokenKey]
-   */
   constructor(options = {}) {
     super();
     this.supabaseUrl = options.supabaseUrl || SUPABASE_URL;
@@ -262,7 +247,7 @@ export class AuthManager extends EventEmitter {
     this.fetchImpl = options.fetchImpl || options.fetch || (typeof globalThis !== 'undefined' && globalThis.fetch ? globalThis.fetch.bind(globalThis) : null);
     this.fetch = this.fetchImpl;
     this.authTokenKey = options.authTokenKey || AUTH_TOKEN_STORAGE_KEY;
-    this.syncSupabaseAuth = Boolean(options.syncSupabaseAuth);
+    this.deviceLabel = options.deviceLabel || getDeviceLabel();
 
     this.session = null;
     this.user = null;
@@ -270,10 +255,6 @@ export class AuthManager extends EventEmitter {
     this._loadSession();
   }
 
-  /**
-   * Safe getter for stored auth token across storage engines.
-   * @private
-   */
   _getStoredToken() {
     try {
       if (this.storage && typeof this.storage.getItem === 'function') {
@@ -287,10 +268,6 @@ export class AuthManager extends EventEmitter {
     return null;
   }
 
-  /**
-   * Safe setter for stored auth token across storage engines.
-   * @private
-   */
   _setStoredToken(token) {
     try {
       if (this.storage && typeof this.storage.setItem === 'function') {
@@ -302,25 +279,17 @@ export class AuthManager extends EventEmitter {
     } catch (_) {}
   }
 
-  /**
-   * Safe remover for stored auth token across storage engines.
-   * @private
-   */
   _removeStoredToken() {
     try {
       if (this.storage && typeof this.storage.removeItem === 'function') {
         this.storage.removeItem(this.authTokenKey);
       }
-      if (typeof localStorage !== 'undefined' && typeof localStorage.setItem === 'function') {
+      if (typeof localStorage !== 'undefined' && typeof localStorage.getItem === 'function') {
         localStorage.removeItem(this.authTokenKey);
       }
     } catch (_) {}
   }
 
-  /**
-   * Internal session loader from persistent storage.
-   * @private
-   */
   _loadSession() {
     try {
       const raw = this.storage.getItem(this.storageKey);
@@ -343,10 +312,6 @@ export class AuthManager extends EventEmitter {
     } catch (_) {}
   }
 
-  /**
-   * Internal session persister to storage.
-   * @private
-   */
   _persistSession() {
     try {
       if (this.session) {
@@ -357,270 +322,25 @@ export class AuthManager extends EventEmitter {
     } catch (_) {}
   }
 
-  /**
-   * Checks if user currently has an authenticated session.
-   * @returns {boolean}
-   */
   isAuthenticated() {
     return Boolean(this.session && this.user && this.session.accessToken);
   }
 
-  /**
-   * Returns current hydrated user profile, or null.
-   * @returns {Object|null}
-   */
   getCurrentUser() {
     return this.user ? { ...this.user } : null;
   }
 
-  /**
-   * Checks if current user has an active deck configured.
-   * @returns {boolean}
-   */
   hasActiveDeck() {
     return Boolean(this.user && (this.user.activeDeckId || this.user.active_deck_id));
   }
 
-  /**
-   * Checks if current user has completed mandatory onboarding (INV-ONBOARD-1).
-   * @returns {boolean}
-   */
   isOnboarded() {
     return Boolean(this.user && (this.user.onboarded || this.hasActiveDeck()));
   }
 
   /**
-   * Initiates Supabase Magic Link OTP email flow (INV-AUTH-1).
-   * 
-   * @param {string} email 
-   * @returns {Promise<{ success: boolean, message?: string }>}
-   */
-  async sendMagicLink(email) {
-    const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
-    if (!email || !emailRegex.test(String(email).trim())) {
-      throw new Error('Invalid email format');
-    }
-    const cleanEmail = String(email).trim();
-
-    if (!this.fetch) {
-      throw new Error('Fetch API is not available.');
-    }
-
-    const res = await this.fetch(`${this.supabaseUrl}/auth/v1/otp`, {
-      method: 'POST',
-      headers: {
-        'apikey': this.supabaseAnonKey,
-        'Authorization': `Bearer ${this.supabaseAnonKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email: cleanEmail, create_user: true })
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.msg || errData.error_description || errData.message || `Supabase OTP failed: ${res.status}`);
-    }
-
-    this.emit('otp_sent', { email: cleanEmail });
-    return { success: true, message: 'OTP sent' };
-  }
-
-  /**
-   * Verifies 6-digit OTP code against Supabase Auth API (INV-AUTH-1).
-   * 
-   * @param {string} email 
-   * @param {string} token 
-   * @returns {Promise<{ success: boolean, session: Object, user: Object }>}
-   */
-  async verifyOtp(email, token) {
-    const cleanEmail = String(email).trim();
-    const cleanToken = String(token).trim();
-
-    if (!this.fetch) {
-      throw new Error('Fetch API is not available.');
-    }
-
-    const res = await this.fetch(`${this.supabaseUrl}/auth/v1/verify`, {
-      method: 'POST',
-      headers: {
-        'apikey': this.supabaseAnonKey,
-        'Authorization': `Bearer ${this.supabaseAnonKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ email: cleanEmail, token: cleanToken, type: 'magiclink' })
-    });
-
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.msg || errData.error_description || errData.message || `OTP verification failed: ${res.status}`);
-    }
-
-    const authData = await res.json();
-    const accessToken = authData.access_token || authData.token || `token_${Date.now()}`;
-    const userId = authData.user?.id || generateUUID();
-
-    let profile = await this._fetchProfileByEmail(cleanEmail, accessToken);
-    if (!profile) {
-      profile = {
-        id: userId,
-        email: cleanEmail,
-        username: cleanEmail.split('@')[0],
-        dob: '2000-01-01',
-        elo: 1200,
-        activeDeckId: null,
-        onboarded: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      await this._upsertProfile(profile, accessToken).catch(() => {});
-    }
-
-    const session = {
-      accessToken,
-      user: profile,
-      isDevBypass: false,
-      expiresAt: Date.now() + 86400000 * 7
-    };
-
-    this.session = session;
-    this.user = profile;
-    this._persistSession();
-    this.emit('auth_state_changed', { session, user: profile });
-    this.emit('login', { session, user: profile });
-    return { success: true, session, user: profile };
-  }
-
-  /**
-   * Instant dev bypass login for rapid testing and headless mock workflows (INV-AUTH-1).
-   * Validates age >= 13 years and email format.
-   * 
-   * @param {string} email 
-   * @param {string} [username] 
-   * @param {string} [dob] 
-   * @returns {Promise<{ success: boolean, session: Object, user: Object }>}
-   */
-  async instantDevLogin(email, username = '', dob = '2000-01-01') {
-    const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
-    if (!email || !emailRegex.test(String(email).trim())) {
-      throw new Error('Invalid email format');
-    }
-    const cleanEmail = String(email).trim();
-
-    const age = calculateAge(dob);
-    if (age < 13) {
-      throw new Error('Registration requires player to be at least 13 years of age.');
-    }
-
-    const userId = generateUUID();
-    let existingProfile = await this._fetchProfileByEmail(cleanEmail).catch(() => null);
-
-    const profile = existingProfile || {
-      id: userId,
-      email: cleanEmail,
-      username: username ? String(username).trim() : cleanEmail.split('@')[0],
-      dob: String(dob).trim(),
-      elo: 1200,
-      activeDeckId: null,
-      onboarded: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
-
-    if (existingProfile) {
-      if (username) profile.username = String(username).trim();
-      if (dob) profile.dob = String(dob).trim();
-    }
-
-    await this._upsertProfile(profile).catch(() => {});
-
-    const session = {
-      accessToken: `dev_bypass_${userId}_${Date.now()}`,
-      user: profile,
-      isDevBypass: true,
-      expiresAt: Date.now() + 86400000 * 30
-    };
-
-    this.session = session;
-    this.user = profile;
-    this._persistSession();
-    this.emit('auth_state_changed', { session, user: profile });
-    this.emit('login', { session, user: profile });
-    return { success: true, session, user: profile };
-  }
-
-  /**
-   * Updates user profile attributes in Supabase and local storage.
-   * 
-   * @param {Object} updates 
-   * @returns {Promise<Object>} Updated profile
-   */
-  async updateProfile(updates = {}) {
-    if (!this.user) {
-      throw new Error('Cannot update profile: User is not authenticated.');
-    }
-
-    Object.assign(this.user, updates);
-    if (updates.active_deck_id && !this.user.activeDeckId) {
-      this.user.activeDeckId = updates.active_deck_id;
-    }
-    if (this.user.activeDeckId) {
-      this.user.onboarded = true;
-    }
-    this.user.updatedAt = new Date().toISOString();
-
-    if (this.session) {
-      this.session.user = this.user;
-    }
-    this._persistSession();
-
-    await this._updateProfileOnServer(updates).catch(() => {});
-
-    this.emit('profile_updated', { user: this.user });
-    return { ...this.user };
-  }
-
-  /**
-   * Saves an active deck and sets onboarded = true (INV-ONBOARD-1).
-   * 
-   * @param {string} deckId 
-   * @param {Object} [deckData] 
-   * @returns {Promise<Object>} Updated profile
-   */
-  async saveActiveDeck(deckId, deckData = null) {
-    if (!this.user) {
-      throw new Error('Cannot save active deck: User is not authenticated.');
-    }
-
-    const cleanDeckId = String(deckId).trim();
-    this.user.activeDeckId = cleanDeckId;
-    this.user.active_deck_id = cleanDeckId;
-    this.user.onboarded = true;
-    if (deckData) {
-      this.user.activeDeckData = deckData;
-    }
-    this.user.updatedAt = new Date().toISOString();
-
-    if (this.session) {
-      this.session.user = this.user;
-    }
-    this._persistSession();
-
-    await this._updateProfileOnServer({ active_deck_id: cleanDeckId }).catch(() => {});
-
-    this.emit('active_deck_saved', { deckId: cleanDeckId, deckData, user: this.user });
-    this.emit('onboarding_completed', { user: this.user });
-    this.emit('profile_updated', { user: this.user });
-    return { ...this.user };
-  }
-
-  /**
-   * Registers a new Planeswalker account with Email + Password.
-   * Relay endpoint is authoritative; Supabase is secondary (never fatal).
-   *
-   * @param {string} email
-   * @param {string} password
-   * @param {string} [displayName='']
-   * @returns {Promise<{ success: boolean, token: string, user: Object, session: Object }>}
+   * Registers a new account with Email + Password via PostgREST Relay Proxy.
+   * Eliminates direct /auth/v1/signup calls to prevent 429 rate limit errors.
    */
   async signUpWithPassword(email, password, displayName = '') {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -633,19 +353,20 @@ export class AuthManager extends EventEmitter {
 
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanDisplayName = String(displayName || '').trim() || cleanEmail.split('@')[0];
+    const deviceLabel = this.deviceLabel || getDeviceLabel();
 
     if (!this.fetchImpl) {
       throw new Error('Fetch API is not available.');
     }
 
-    // 1. Relay endpoint first
     const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: cleanEmail,
         password: String(password),
-        displayName: cleanDisplayName
+        displayName: cleanDisplayName,
+        deviceLabel
       })
     });
 
@@ -658,31 +379,17 @@ export class AuthManager extends EventEmitter {
     const token = resData.token;
     const user = resData.user;
 
-    // Secondary Supabase signup attempt (only if enabled to prevent 429 OTP rate limits)
-    if (this.syncSupabaseAuth) {
-      try {
-        this.fetchImpl(`${this.supabaseUrl}/auth/v1/signup`, {
-          method: 'POST',
-          headers: {
-            'apikey': this.supabaseAnonKey,
-            'Authorization': `Bearer ${this.supabaseAnonKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ email: cleanEmail, password: String(password) })
-        }).catch(() => {});
-      } catch (_) {}
-    }
-
     const profile = {
       id: user.id,
       email: user.email,
       username: user.displayName || cleanDisplayName,
       displayName: user.displayName || cleanDisplayName,
       dob: '2000-01-01',
-      elo: 1200,
+      elo: user.elo ?? 1200,
       activeDeckId: user.activeDeckId || null,
       onboarded: Boolean(user.activeDeckId),
-      unlockedSlots: user.unlockedSlots || ['slot_1', 'slot_2'],
+      unlockedSlots: user.unlockedSlots || 2,
+      ai_settings: user.ai_settings || { preferred_deck: 'STARTER_WHITE_WEENIE', difficulty: 'BALANCED' },
       decks: user.decks || {},
       createdAt: user.createdAt || new Date().toISOString(),
       updatedAt: user.updatedAt || new Date().toISOString()
@@ -691,8 +398,9 @@ export class AuthManager extends EventEmitter {
     const session = {
       accessToken: token,
       user: profile,
+      deviceLabel,
       isDevBypass: false,
-      expiresAt: Date.now() + 86400000 * 90
+      expiresAt: Date.now() + 86400000 * TOKEN_EXPIRY_DAYS
     };
 
     this._setStoredToken(token);
@@ -708,11 +416,6 @@ export class AuthManager extends EventEmitter {
 
   /**
    * Signs in an existing Planeswalker account with Email + Password.
-   * Relay endpoint is authoritative; Supabase is secondary (never fatal).
-   *
-   * @param {string} email
-   * @param {string} password
-   * @returns {Promise<{ success: boolean, token: string, user: Object, session: Object }>}
    */
   async signInWithPassword(email, password) {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -724,6 +427,7 @@ export class AuthManager extends EventEmitter {
     }
 
     const cleanEmail = String(email).trim().toLowerCase();
+    const deviceLabel = this.deviceLabel || getDeviceLabel();
 
     if (!this.fetchImpl) {
       throw new Error('Fetch API is not available.');
@@ -732,7 +436,7 @@ export class AuthManager extends EventEmitter {
     const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: cleanEmail, password: String(password) })
+      body: JSON.stringify({ email: cleanEmail, password: String(password), deviceLabel })
     });
 
     if (!res.ok) {
@@ -743,33 +447,20 @@ export class AuthManager extends EventEmitter {
     const resData = await res.json();
     const token = resData.token;
     const user = resData.user;
-
-    // Secondary Supabase token attempt (only if enabled to prevent 429 OTP rate limits)
-    if (this.syncSupabaseAuth) {
-      try {
-        this.fetchImpl(`${this.supabaseUrl}/auth/v1/token?grant_type=password`, {
-          method: 'POST',
-          headers: {
-            'apikey': this.supabaseAnonKey,
-            'Authorization': `Bearer ${this.supabaseAnonKey}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ email: cleanEmail, password: String(password) })
-        }).catch(() => {});
-      } catch (_) {}
-    }
+    const decks = resData.decks || user.decks || {};
 
     const profile = {
       id: user.id,
       email: user.email,
-      username: user.displayName || cleanEmail.split('@')[0],
-      displayName: user.displayName || cleanEmail.split('@')[0],
+      username: user.displayName || user.username || cleanEmail.split('@')[0],
+      displayName: user.displayName || user.username || cleanEmail.split('@')[0],
       dob: '2000-01-01',
-      elo: 1200,
+      elo: user.elo ?? 1200,
       activeDeckId: user.activeDeckId || null,
       onboarded: Boolean(user.activeDeckId),
-      unlockedSlots: user.unlockedSlots || ['slot_1', 'slot_2'],
-      decks: user.decks || {},
+      unlockedSlots: user.unlockedSlots || 2,
+      ai_settings: user.ai_settings || { preferred_deck: 'STARTER_WHITE_WEENIE', difficulty: 'BALANCED' },
+      decks,
       createdAt: user.createdAt || new Date().toISOString(),
       updatedAt: user.updatedAt || new Date().toISOString()
     };
@@ -777,8 +468,9 @@ export class AuthManager extends EventEmitter {
     const session = {
       accessToken: token,
       user: profile,
+      deviceLabel,
       isDevBypass: false,
-      expiresAt: Date.now() + 86400000 * 90
+      expiresAt: Date.now() + 86400000 * TOKEN_EXPIRY_DAYS
     };
 
     this._setStoredToken(token);
@@ -789,13 +481,11 @@ export class AuthManager extends EventEmitter {
     this.emit('auth_state_changed', { session, user: profile });
     this.emit('login', { session, user: profile });
 
-    return { success: true, token, user: profile, session };
+    return { success: true, token, user: profile, session, decks };
   }
 
   /**
-   * Attempts to restore active session automatically from stored token.
-   *
-   * @returns {Promise<Object|null>} Restored user profile or null
+   * Automatically restores active session from 365-day stored token.
    */
   async autoRestoreSession() {
     const token = this._getStoredToken() || this.session?.accessToken;
@@ -808,9 +498,7 @@ export class AuthManager extends EventEmitter {
       try {
         const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/me`, {
           method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+          headers: { 'Authorization': `Bearer ${token}` }
         });
 
         if (res.ok) {
@@ -820,13 +508,14 @@ export class AuthManager extends EventEmitter {
             const profile = {
               id: u.id,
               email: u.email,
-              username: u.displayName || u.email?.split('@')[0] || 'Planeswalker',
-              displayName: u.displayName || u.email?.split('@')[0] || 'Planeswalker',
+              username: u.displayName || u.username || u.email?.split('@')[0] || 'Planeswalker',
+              displayName: u.displayName || u.username || u.email?.split('@')[0] || 'Planeswalker',
               dob: '2000-01-01',
-              elo: 1200,
+              elo: u.elo ?? 1200,
               activeDeckId: u.activeDeckId || null,
               onboarded: Boolean(u.activeDeckId),
-              unlockedSlots: u.unlockedSlots || ['slot_1', 'slot_2'],
+              unlockedSlots: u.unlockedSlots || 2,
+              ai_settings: u.ai_settings || {},
               decks: u.decks || {},
               createdAt: u.createdAt || new Date().toISOString(),
               updatedAt: u.updatedAt || new Date().toISOString()
@@ -836,7 +525,7 @@ export class AuthManager extends EventEmitter {
               accessToken: token,
               user: profile,
               isDevBypass: false,
-              expiresAt: Date.now() + 86400000 * 90
+              expiresAt: Date.now() + 86400000 * TOKEN_EXPIRY_DAYS
             };
 
             this._setStoredToken(token);
@@ -847,7 +536,6 @@ export class AuthManager extends EventEmitter {
             return this.user;
           }
         } else if (res.status === 401) {
-          // Token expired or invalid
           this._removeStoredToken();
           if (this.session && this.session.accessToken === token) {
             this.session = null;
@@ -855,9 +543,7 @@ export class AuthManager extends EventEmitter {
             this._persistSession();
           }
         }
-      } catch (_) {
-        // Network offline or error - keep existing cached session if valid
-      }
+      } catch (_) {}
     }
 
     this._loadSession();
@@ -865,10 +551,80 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
-   * Synchronizes saved deck slots with the relay server.
-   *
-   * @param {Object} decks
-   * @returns {Promise<{ success: boolean, decks: Object }>}
+   * Updates player AI settings profile ([D16]).
+   * @param {Object} aiSettings
+   */
+  async updateAiSettings(aiSettings = {}) {
+    const token = this._getStoredToken() || this.session?.accessToken;
+    if (this.user) {
+      this.user.ai_settings = { ...(this.user.ai_settings || {}), ...aiSettings };
+      this._persistSession();
+    }
+
+    if (!token || !this.fetchImpl) return { success: true, ai_settings: this.user?.ai_settings };
+
+    try {
+      const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/ai-settings`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ai_settings: aiSettings })
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        return { success: true, ai_settings: data.ai_settings || this.user?.ai_settings };
+      }
+    } catch (_) {}
+
+    return { success: true, ai_settings: this.user?.ai_settings };
+  }
+
+  /**
+   * Submits a match bug report with state snapshot and recent trace events ([D39]).
+   * @param {string} roomId
+   * @param {string} notes
+   * @param {Object} [snapshot]
+   * @param {Array} [traceEvents]
+   */
+  async reportBug(roomId, notes = '', snapshot = null, traceEvents = []) {
+    const token = this._getStoredToken() || this.session?.accessToken;
+    const payload = {
+      roomId: roomId || 'UNKNOWN',
+      notes: String(notes || '').trim(),
+      snapshot,
+      traceEvents: Array.isArray(traceEvents) ? traceEvents.slice(-100) : [],
+      clientInfo: {
+        deviceLabel: this.deviceLabel || getDeviceLabel(),
+        reportedAt: new Date().toISOString()
+      }
+    };
+
+    if (!this.fetchImpl) return { success: false, error: 'Fetch unavailable' };
+
+    try {
+      const res = await this.fetchImpl(`${this.apiBaseUrl}/api/matches/report-bug`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        this.emit('bug_reported', { roomId, reportId: data.reportId });
+        return { success: true, reportId: data.reportId };
+      }
+      return { success: false, status: res.status };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Synchronizes saved deck slots with relay server ([D15]).
    */
   async syncDecks(decks) {
     const token = this._getStoredToken() || this.session?.accessToken;
@@ -909,9 +665,7 @@ export class AuthManager extends EventEmitter {
   }
 
   /**
-   * Fetches saved deck slots from the relay server.
-   *
-   * @returns {Promise<Object>}
+   * Fetches saved deck slots from relay server.
    */
   async fetchDecks() {
     const token = this._getStoredToken() || this.session?.accessToken;
@@ -922,9 +676,7 @@ export class AuthManager extends EventEmitter {
     try {
       const res = await this.fetchImpl(`${this.apiBaseUrl}/api/auth/decks`, {
         method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (res.ok) {
@@ -941,9 +693,6 @@ export class AuthManager extends EventEmitter {
     return this.user?.decks || {};
   }
 
-  /**
-   * Clears session and local credentials.
-   */
   logout() {
     const token = this._getStoredToken() || this.session?.accessToken;
     if (token && this.fetchImpl) {
@@ -964,151 +713,166 @@ export class AuthManager extends EventEmitter {
     this.emit('logout');
   }
 
-  /**
-   * Non-blocking telemetry dispatcher (INV-TELEMETRY-1).
-   * Dispatches event to Supabase public.player_events.
-   * On failure or offline, appends to localStorage FIFO buffer (max 100).
-   * 
-   * @param {string} eventType 
-   * @param {string|null} [cardName=null] 
-   * @param {Object} [details={}] 
-   */
-  dispatchTelemetry(eventType, cardName = null, details = {}) {
-    const event = {
-      id: generateUUID(),
-      player_id: this.user?.id || null,
-      event_type: eventType,
-      card_name: cardName || null,
-      details: details || {},
-      created_at: new Date().toISOString()
+  // Developer bypass fallback
+  async instantDevLogin(email, username = '', dob = '2000-01-01') {
+    const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+    if (!email || !emailRegex.test(String(email).trim())) {
+      throw new Error('Invalid email format');
+    }
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    if (dob) {
+      const birth = new Date(dob);
+      if (!isNaN(birth.getTime())) {
+        const today = new Date();
+        let age = today.getFullYear() - birth.getFullYear();
+        const m = today.getMonth() - birth.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birth.getDate())) {
+          age--;
+        }
+        if (age < 13) {
+          throw new Error('Registration requires player to be at least 13 years of age.');
+        }
+      }
+    }
+
+    const userId = generateUUID();
+    let existingProfile = await this._fetchProfileByEmail(cleanEmail).catch(() => null);
+
+    const profile = existingProfile || {
+      id: userId,
+      email: cleanEmail,
+      username: username ? String(username).trim() : cleanEmail.split('@')[0],
+      dob: String(dob).trim(),
+      elo: 1200,
+      activeDeckId: null,
+      onboarded: false,
+      ai_settings: { preferred_deck: 'STARTER_WHITE_WEENIE', difficulty: 'BALANCED' },
+      decks: {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
 
-    this.emit('telemetry', event);
-    this.emit('telemetry_event', event);
-
-    if (typeof this.fetch === 'function') {
-      try {
-        const p = this.fetch(`${this.supabaseUrl}/rest/v1/player_events`, {
-          method: 'POST',
-          headers: {
-            'apikey': this.supabaseAnonKey,
-            'Authorization': `Bearer ${this._getAuthBearerToken()}`,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify(event)
-        });
-        if (p && typeof p.catch === 'function') {
-          p.catch(() => {
-            this._bufferTelemetry(event);
-          });
-        }
-      } catch (_) {
-        this._bufferTelemetry(event);
-      }
-    } else {
-      this._bufferTelemetry(event);
+    if (existingProfile) {
+      if (username) profile.username = String(username).trim();
+      if (dob) profile.dob = String(dob).trim();
     }
+
+    await this._upsertProfile(profile).catch(() => {});
+
+    const session = {
+      accessToken: `dev_bypass_${userId}_${Date.now()}`,
+      user: profile,
+      isDevBypass: true,
+      expiresAt: Date.now() + 86400000 * TOKEN_EXPIRY_DAYS
+    };
+    this.session = session;
+    this.user = profile;
+    this._persistSession();
+    this.emit('auth_state_changed', { session, user: profile });
+    this.emit('login', { session, user: profile });
+    return { success: true, session, user: profile };
   }
 
-  /**
-   * Appends event to offline FIFO ring buffer (INV-TELEMETRY-1).
-   * @private
-   */
-  _bufferTelemetry(event) {
-    try {
-      const raw = this.storage.getItem(this.telemetryStorageKey);
-      const buf = raw ? JSON.parse(raw) : [];
-      buf.push(event);
-      if (buf.length > MAX_TELEMETRY_BUFFER_SIZE) {
-        buf.shift();
-      }
-      this.storage.setItem(this.telemetryStorageKey, JSON.stringify(buf));
-    } catch (_) {}
-  }
-
-  /**
-   * Retrieves array of currently buffered offline telemetry events.
-   * @returns {Array<Object>}
-   */
-  getBufferedTelemetry() {
-    try {
-      const raw = this.storage.getItem(this.telemetryStorageKey);
-      return raw ? JSON.parse(raw) : [];
-    } catch (_) {
-      return [];
+  // Legacy Supabase OTP Magic Link Fallback
+  async sendMagicLink(email) {
+    const emailRegex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+    if (!email || !emailRegex.test(String(email).trim())) {
+      throw new Error('Invalid email format');
     }
-  }
-
-  /**
-   * Flushes offline telemetry buffer to Supabase.
-   * @returns {Promise<number>} Count of flushed events
-   */
-  async flushTelemetryBuffer() {
-    let buf = [];
-    try {
-      const raw = this.storage.getItem(this.telemetryStorageKey);
-      if (raw) buf = JSON.parse(raw);
-    } catch (_) {
-      return 0;
+    const cleanEmail = String(email).trim();
+    const fetchFn = this.fetchImpl || this.fetch;
+    if (!fetchFn) {
+      throw new Error('Fetch API is not available.');
     }
 
-    if (!Array.isArray(buf) || buf.length === 0) return 0;
-    const count = buf.length;
-
-    if (!this.fetch) {
-      throw new Error('Fetch API is not available to flush telemetry buffer.');
-    }
-
-    const res = await this.fetch(`${this.supabaseUrl}/rest/v1/player_events`, {
+    const res = await fetchFn(`${this.supabaseUrl}/auth/v1/otp`, {
       method: 'POST',
       headers: {
         'apikey': this.supabaseAnonKey,
-        'Authorization': `Bearer ${this._getAuthBearerToken()}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal'
+        'Authorization': `Bearer ${this.supabaseAnonKey}`,
+        'Content-Type': 'application/json'
       },
-      body: JSON.stringify(buf)
+      body: JSON.stringify({ email: cleanEmail, create_user: true })
     });
 
     if (!res.ok) {
-      throw new Error(`Failed to flush telemetry: ${res.status}`);
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.msg || errData.error_description || errData.message || `Supabase OTP failed: ${res.status}`);
     }
 
-    this.storage.removeItem(this.telemetryStorageKey);
-    return count;
+    this.emit('otp_sent', { email: cleanEmail });
+    return { success: true, message: 'OTP sent' };
   }
 
-  /**
-   * Resolves valid bearer authorization token for Supabase PostgREST endpoints.
-   * If session is a dev bypass or token is not a valid Supabase JWT, defaults to supabaseAnonKey.
-   * @param {string|null} [token=null]
-   * @returns {string}
-   * @private
-   */
-  _getAuthBearerToken(token = null) {
-    if (token && typeof token === 'string' && !token.startsWith('dev_bypass_')) {
-      return token;
+  async verifyOtp(email, token) {
+    const cleanEmail = String(email).trim();
+    const cleanToken = String(token).trim();
+    const fetchFn = this.fetchImpl || this.fetch;
+    if (!fetchFn) {
+      throw new Error('Fetch API is not available.');
     }
-    if (this.session?.accessToken && !this.session.isDevBypass && typeof this.session.accessToken === 'string' && !this.session.accessToken.startsWith('dev_bypass_')) {
-      return this.session.accessToken;
+
+    const res = await fetchFn(`${this.supabaseUrl}/auth/v1/verify`, {
+      method: 'POST',
+      headers: {
+        'apikey': this.supabaseAnonKey,
+        'Authorization': `Bearer ${this.supabaseAnonKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ email: cleanEmail, token: cleanToken, type: 'magiclink' })
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.msg || errData.error_description || errData.message || `OTP verification failed: ${res.status}`);
     }
-    return this.supabaseAnonKey;
+
+    const authData = await res.json();
+    const accessToken = authData.access_token || authData.token || `token_${Date.now()}`;
+    const userId = authData.user?.id || generateUUID();
+
+    let profile = await this._fetchProfileByEmail(cleanEmail, accessToken);
+    if (!profile) {
+      profile = {
+        id: userId,
+        email: cleanEmail,
+        username: cleanEmail.split('@')[0],
+        dob: '2000-01-01',
+        elo: 1200,
+        activeDeckId: null,
+        onboarded: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      await this._upsertProfile(profile, accessToken).catch(() => {});
+    }
+
+    const session = {
+      accessToken,
+      user: profile,
+      isDevBypass: false,
+      expiresAt: Date.now() + 86400000 * TOKEN_EXPIRY_DAYS
+    };
+
+    this.session = session;
+    this.user = profile;
+    this._persistSession();
+    this.emit('auth_state_changed', { session, user: profile });
+    this.emit('login', { session, user: profile });
+    return { success: true, session, user: profile };
   }
 
-  /**
-   * Internal helper to fetch player profile by email.
-   * @private
-   */
   async _fetchProfileByEmail(email, token = null) {
-    if (!this.fetch) return null;
+    const fetchFn = this.fetchImpl || this.fetch;
+    if (!fetchFn) return null;
     try {
-      const res = await this.fetch(
+      const res = await fetchFn(
         `${this.supabaseUrl}/rest/v1/player_profiles?email=eq.${encodeURIComponent(email)}&select=*`,
         {
           headers: {
             'apikey': this.supabaseAnonKey,
-            'Authorization': `Bearer ${this._getAuthBearerToken(token)}`
+            'Authorization': `Bearer ${token || this._getStoredToken() || this.supabaseAnonKey}`
           }
         }
       );
@@ -1134,51 +898,147 @@ export class AuthManager extends EventEmitter {
     }
   }
 
-  /**
-   * Internal helper to upsert player profile.
-   * @private
-   */
   async _upsertProfile(profile, token = null) {
-    if (!this.fetch) return;
+    const fetchFn = this.fetchImpl || this.fetch;
+    if (!fetchFn) return;
     try {
-      const payload = {
-        id: profile.id,
-        email: profile.email,
-        username: profile.username,
-        dob: profile.dob,
-        elo: profile.elo ?? 1200,
-        active_deck_id: profile.activeDeckId || profile.active_deck_id || null
-      };
-      await this.fetch(`${this.supabaseUrl}/rest/v1/player_profiles`, {
+      await fetchFn(`${this.supabaseUrl}/rest/v1/player_profiles`, {
         method: 'POST',
         headers: {
           'apikey': this.supabaseAnonKey,
-          'Authorization': `Bearer ${this._getAuthBearerToken(token)}`,
+          'Authorization': `Bearer ${token || this._getStoredToken() || this.supabaseAnonKey}`,
           'Content-Type': 'application/json',
           'Prefer': 'resolution=merge-duplicates'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          id: profile.id,
+          email: profile.email,
+          username: profile.username,
+          dob: profile.dob,
+          elo: profile.elo,
+          active_deck_id: profile.activeDeckId || null
+        })
       });
     } catch (_) {}
   }
 
+  saveActiveDeck(deckId, deckData = null) {
+    if (!this.user) throw new Error('Not authenticated');
+    this.user.activeDeckId = String(deckId).trim();
+    this.user.onboarded = true;
+    if (deckData) this.user.activeDeckData = deckData;
+    this._persistSession();
+    this.emit('active_deck_saved', { deckId, deckData, user: this.user });
+    return Promise.resolve(this.user);
+  }
+
+  dispatchTelemetry(eventType, cardName = null, details = {}) {
+    const event = {
+      id: generateUUID(),
+      player_id: this.user?.id || null,
+      event_type: eventType,
+      card_name: cardName || null,
+      details: details || {},
+      created_at: new Date().toISOString()
+    };
+    this.emit('telemetry', event);
+    this.emit('telemetry_event', event);
+
+    const fetchFn = this.fetchImpl || this.fetch;
+    if (typeof fetchFn === 'function') {
+      try {
+        const p = fetchFn(`${this.apiBaseUrl || this.supabaseUrl}/rest/v1/player_events`, {
+          method: 'POST',
+          headers: {
+            'apikey': this.supabaseAnonKey,
+            'Authorization': `Bearer ${this._getStoredToken() || ''}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify(event)
+        });
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {
+            this._bufferTelemetry(event);
+          });
+        }
+      } catch (_) {
+        this._bufferTelemetry(event);
+      }
+    } else {
+      this._bufferTelemetry(event);
+    }
+  }
+
   /**
-   * Internal helper to patch player profile on server.
+   * Appends event to offline FIFO ring buffer (INV-TELEMETRY-1).
    * @private
    */
-  async _updateProfileOnServer(updates, token = null) {
-    if (!this.fetch || !this.user?.id) return;
+  _bufferTelemetry(event) {
     try {
-      await this.fetch(`${this.supabaseUrl}/rest/v1/player_profiles?id=eq.${this.user.id}`, {
-        method: 'PATCH',
-        headers: {
-          'apikey': this.supabaseAnonKey,
-          'Authorization': `Bearer ${this._getAuthBearerToken(token)}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(updates)
-      });
+      const raw = this.storage?.getItem(this.telemetryStorageKey);
+      const buf = raw ? JSON.parse(raw) : [];
+      buf.push(event);
+      if (buf.length > 50) {
+        buf.shift();
+      }
+      this.storage?.setItem(this.telemetryStorageKey, JSON.stringify(buf));
     } catch (_) {}
+  }
+
+  /**
+   * Retrieves array of currently buffered offline telemetry events.
+   * @returns {Array<Object>}
+   */
+  getBufferedTelemetry() {
+    try {
+      const raw = this.storage?.getItem(this.telemetryStorageKey);
+      return raw ? JSON.parse(raw) : [];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  /**
+   * Flushes offline telemetry buffer.
+   * @returns {Promise<number>} Count of flushed events
+   */
+  async flushTelemetryBuffer() {
+    let buf = [];
+    try {
+      const raw = this.storage?.getItem(this.telemetryStorageKey);
+      if (raw) buf = JSON.parse(raw);
+    } catch (_) {
+      return 0;
+    }
+
+    if (!Array.isArray(buf) || buf.length === 0) return 0;
+    const count = buf.length;
+    const fetchFn = this.fetchImpl || this.fetch;
+
+    if (!fetchFn) {
+      throw new Error('Fetch API is not available to flush telemetry buffer.');
+    }
+
+    const res = await fetchFn(`${this.apiBaseUrl || this.supabaseUrl}/rest/v1/player_events`, {
+      method: 'POST',
+      headers: {
+        'apikey': this.supabaseAnonKey,
+        'Authorization': `Bearer ${this._getStoredToken() || ''}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify(buf)
+    });
+
+    if (res && (res.ok || res.status < 400)) {
+      try {
+        this.storage?.removeItem(this.telemetryStorageKey);
+      } catch (_) {}
+      return count;
+    }
+
+    return 0;
   }
 }
 

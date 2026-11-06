@@ -8,6 +8,7 @@ import { groundDeckForEngine, normalizeCardName } from '../OracleEffectCompiler.
 const STORAGE_KEY_SLOTS = 'rpm_unlocked_deck_slots';
 const STORAGE_KEY_DECKS = 'rpm_deck_slots_data';
 const STORAGE_KEY_REVIEW = 'rpm_compatibility_review_queue';
+export const STORAGE_KEY_RPMM_DECKS = 'RPMM_decks';
 
 const memoryStore = new Map();
 
@@ -32,6 +33,7 @@ function safeSetStorageItem(key, val) {
 export class DeckSlotManager {
   constructor(options = {}) {
     this.totalSlots = options.totalSlots || 6;
+    this.authManager = options.authManager || null;
     this._unlockedSlots = new Set(['slot_1', 'slot_2']);
     this._deckData = {};
     this._load();
@@ -48,7 +50,7 @@ export class DeckSlotManager {
       } catch (_) {}
     }
 
-    const rawDecks = safeGetStorageItem(STORAGE_KEY_DECKS);
+    const rawDecks = safeGetStorageItem(STORAGE_KEY_DECKS) || safeGetStorageItem(STORAGE_KEY_RPMM_DECKS);
     if (rawDecks) {
       try {
         this._deckData = JSON.parse(rawDecks) || {};
@@ -59,6 +61,12 @@ export class DeckSlotManager {
   _save() {
     safeSetStorageItem(STORAGE_KEY_SLOTS, JSON.stringify(Array.from(this._unlockedSlots)));
     safeSetStorageItem(STORAGE_KEY_DECKS, JSON.stringify(this._deckData));
+    safeSetStorageItem(STORAGE_KEY_RPMM_DECKS, JSON.stringify(this._deckData));
+    if (this.authManager && typeof this.authManager.syncDecks === 'function') {
+      try {
+        this.authManager.syncDecks(this._deckData).catch(() => {});
+      } catch (_) {}
+    }
   }
 
   getSlots() {
@@ -175,6 +183,66 @@ export class DeckSlotManager {
       decklistText: rawText,
       totalCount
     };
+  }
+
+  /**
+   * Synchronizes saved deck slots with RPMM_decks and relay server via authManager ([D14]).
+   * @param {Object} [authManager=this.authManager]
+   * @returns {Promise<{ success: boolean, decks: Object }>}
+   */
+  async syncWithCloud(authManager = this.authManager) {
+    const mgr = authManager || this.authManager;
+    if (!mgr) {
+      return { success: false, reason: 'NO_AUTH_MANAGER', decks: this._deckData };
+    }
+    try {
+      if (typeof mgr.fetchDecks === 'function') {
+        const cloudDecks = await mgr.fetchDecks();
+        if (cloudDecks && typeof cloudDecks === 'object' && Object.keys(cloudDecks).length > 0) {
+          this._deckData = { ...this._deckData, ...cloudDecks };
+          this._save();
+        }
+      }
+      if (typeof mgr.syncDecks === 'function') {
+        await mgr.syncDecks(this._deckData);
+      }
+      return { success: true, decks: this._deckData };
+    } catch (err) {
+      return { success: false, error: err.message, decks: this._deckData };
+    }
+  }
+
+  /**
+   * Loads saved deck slots from cloud via authManager.
+   * @param {Object} [authManager=this.authManager]
+   * @returns {Promise<Object>}
+   */
+  async loadFromCloud(authManager = this.authManager) {
+    const mgr = authManager || this.authManager;
+    if (!mgr || typeof mgr.fetchDecks !== 'function') return this._deckData;
+    try {
+      const cloudDecks = await mgr.fetchDecks();
+      if (cloudDecks && typeof cloudDecks === 'object') {
+        this._deckData = { ...this._deckData, ...cloudDecks };
+        this._save();
+      }
+    } catch (_) {}
+    return this._deckData;
+  }
+
+  /**
+   * Pushes local deck slots to cloud via authManager.
+   * @param {Object} [authManager=this.authManager]
+   * @returns {Promise<any>}
+   */
+  async pushToCloud(authManager = this.authManager) {
+    const mgr = authManager || this.authManager;
+    if (!mgr || typeof mgr.syncDecks !== 'function') return null;
+    try {
+      return await mgr.syncDecks(this._deckData);
+    } catch (_) {
+      return null;
+    }
   }
 }
 
