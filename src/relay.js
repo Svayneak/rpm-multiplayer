@@ -1483,7 +1483,7 @@ export function createAuthHttpHandler({ storePath } = {}) {
         const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
         const label = deviceLabel || 'DESKTOP';
 
-        const profileRecord = {
+        const dbProfile = {
           id: userId,
           email: normalizedEmail,
           username: displayName ? String(displayName).trim() : normalizedEmail.split('@')[0],
@@ -1496,10 +1496,14 @@ export function createAuthHttpHandler({ storePath } = {}) {
           total_rpbd_triggers: 0,
           metadata: { salt }
         };
-        profileRecord.password_salt = salt;
-        profileRecord.salt = salt;
-        profileRecord.hash = hash;
-        profileRecord.decks = {};
+
+        const profileRecord = {
+          ...dbProfile,
+          password_salt: salt,
+          salt,
+          hash,
+          decks: {}
+        };
 
         const tokenRecord = {
           id: crypto.randomUUID(),
@@ -1512,7 +1516,7 @@ export function createAuthHttpHandler({ storePath } = {}) {
 
         // Write to Supabase with fallback to cache & in-memory
         try {
-          await postgrestRequest('RPMM_profiles', { method: 'POST', body: profileRecord });
+          await postgrestRequest('RPMM_profiles', { method: 'POST', body: dbProfile });
           await postgrestRequest('RPMM_auth_tokens', { method: 'POST', body: tokenRecord });
         } catch (_) {
           const cache = loadFallbackCache();
