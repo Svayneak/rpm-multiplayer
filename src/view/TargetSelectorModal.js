@@ -873,6 +873,118 @@ export class TargetSelectorModal {
       list.appendChild(itemEl);
     }
   }
+
+  /**
+   * Opens 5-color choice modal for spells like Brave the Elements.
+   * 
+   * @param {Object} options
+   * @param {Function} options.onSelectColor - Callback with ('white'|'blue'|'black'|'red'|'green')
+   * @param {Function} [options.onCancel]
+   * @param {string} [options.title]
+   * @param {string} [options.instructions]
+   */
+  openColorChoice(options = {}) {
+    if (!this.element) this.init();
+    if (!this.element) return;
+
+    const onSelect = options.onSelectColor || options.onSelect || (() => {});
+    const onCancel = options.onCancel || (() => {});
+
+    const titleEl = this.element.querySelector('#target-modal-title');
+    const instrEl = this.element.querySelector('#target-instructions');
+    const list = this.element.querySelector('#target-candidates-list');
+    const confirmBtn = this.element.querySelector('#target-btn-confirm, #btn-confirm-target-modal, .btn-confirm-combination');
+
+    if (titleEl) titleEl.textContent = options.title || 'Choose a Color / Elige un Color';
+    if (instrEl) instrEl.textContent = options.instructions || 'White creatures you control gain protection from the chosen color until end of turn.';
+    if (confirmBtn) confirmBtn.style.display = 'none';
+
+    if (list) {
+      list.innerHTML = `
+        <div class="color-choice-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; padding: 12px 0;">
+          <button class="btn btn-color-choice btn-color-white" data-color="white" style="background:#f8fafc; color:#0f172a; border:2px solid #cbd5e1; padding:10px; font-weight:bold; border-radius:6px; cursor:pointer;">⚪ White (Blanco)</button>
+          <button class="btn btn-color-choice btn-color-blue" data-color="blue" style="background:#1e3a8a; color:#f0f9ff; border:2px solid #38bdf8; padding:10px; font-weight:bold; border-radius:6px; cursor:pointer;">🔵 Blue (Azul)</button>
+          <button class="btn btn-color-choice btn-color-black" data-color="black" style="background:#18181b; color:#f4f4f5; border:2px solid #71717a; padding:10px; font-weight:bold; border-radius:6px; cursor:pointer;">⚫ Black (Negro)</button>
+          <button class="btn btn-color-choice btn-color-red" data-color="red" style="background:#7f1d1d; color:#fef2f2; border:2px solid #f87171; padding:10px; font-weight:bold; border-radius:6px; cursor:pointer;">🔴 Red (Rojo)</button>
+          <button class="btn btn-color-choice btn-color-green" data-color="green" style="background:#14532d; color:#f0fdf4; border:2px solid #4ade80; padding:10px; font-weight:bold; border-radius:6px; cursor:pointer;">🟢 Green (Verde)</button>
+        </div>
+      `;
+
+      list.querySelectorAll('.btn-color-choice').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const col = btn.getAttribute('data-color');
+          this.close();
+          onSelect(col);
+        });
+      });
+    }
+
+    this.onCancel = onCancel;
+    this.isOpen = true;
+    this.element.classList.remove('hidden');
+    this.element.style.display = 'flex';
+  }
+
+  /**
+   * Opens interactive choice modal for Perks (#13, #55, #66) with candidate list.
+   * 
+   * @param {Object} options
+   * @param {Array<Object>} options.candidates
+   * @param {Function} options.onSelectChoice
+   * @param {Function} [options.onCancel]
+   * @param {string} [options.title]
+   * @param {string} [options.instructions]
+   */
+  openPermanentChoice(options = {}) {
+    if (!this.element) this.init();
+    if (!this.element) return;
+
+    const candidates = options.candidates || [];
+    const onSelect = options.onSelectChoice || options.onSelect || (() => {});
+    const onCancel = options.onCancel || (() => {});
+
+    const titleEl = this.element.querySelector('#target-modal-title');
+    const instrEl = this.element.querySelector('#target-instructions');
+    const list = this.element.querySelector('#target-candidates-list');
+    const confirmBtn = this.element.querySelector('#target-btn-confirm, #btn-confirm-target-modal, .btn-confirm-combination');
+
+    if (titleEl) titleEl.textContent = options.title || 'Choose Target Permanent / Selecciona Permanente';
+    if (instrEl) instrEl.textContent = options.instructions || 'Choose a candidate to resolve perk effect.';
+    if (confirmBtn) confirmBtn.style.display = 'none';
+
+    if (list) {
+      list.innerHTML = '';
+      if (candidates.length === 0) {
+        list.innerHTML = '<div style="padding:12px; color:#94a3b8; text-align:center;">No valid candidates available / No hay candidatos válidos.</div>';
+      } else {
+        for (const item of candidates) {
+          const row = document.createElement('div');
+          row.className = 'target-candidate-item target-candidate-row legal';
+          row.style.cursor = 'pointer';
+          const pt = (item.power !== undefined && item.toughness !== undefined) ? ` (${item.power}/${item.toughness})` : '';
+          row.innerHTML = `
+            <div class="target-item-info">
+              <span class="target-item-name" style="font-weight:bold;">${item.name || 'Permanent'}${pt}</span>
+              <span class="target-item-sub" style="font-size:0.75rem; color:#94a3b8;">${item.typeLine || ''}</span>
+            </div>
+            <div class="target-item-badge">
+              <span class="badge-legal" style="background:#16a34a; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.75rem;">Select</span>
+            </div>
+          `;
+          row.addEventListener('click', () => {
+            this.close();
+            onSelect(item.instanceId || item.id || item.targetId || item);
+          });
+          list.appendChild(row);
+        }
+      }
+    }
+
+    this.onCancel = onCancel;
+    this.isOpen = true;
+    this.element.classList.remove('hidden');
+    this.element.style.display = 'flex';
+  }
 }
 
 export default TargetSelectorModal;

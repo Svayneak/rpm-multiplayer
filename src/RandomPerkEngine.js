@@ -864,6 +864,64 @@ export class RandomPerkEngine extends EventEmitter {
       ...(options || {})
     };
 
+    const perkKey = String(item.perkKey);
+    const sm = this.stateManager || this.tabletopState;
+    const targetPlayerId = (typeof options === 'string' ? options : null) ||
+      mergedOptions.activePlayerId ||
+      mergedOptions.playerId ||
+      item.sourcePlayerId ||
+      item.controllerId ||
+      item.activePlayerId ||
+      item.playerId ||
+      this.humanPlayerId;
+    const playerObj = sm?.getPlayer ? sm.getPlayer(targetPlayerId) : sm?.players?.[targetPlayerId];
+    const isBot = Boolean(
+      playerObj?.isBot ||
+      targetPlayerId?.startsWith('bot_') ||
+      targetPlayerId?.includes('perkins') ||
+      (this.humanPlayerId && targetPlayerId !== this.humanPlayerId)
+    );
+
+    // Interactive Perks: #13, #55, #66
+    if (['13', '55', '66'].includes(perkKey)) {
+      // Two-step for Perk #55: Step 1 strips hexproof and indestructible
+      if (perkKey === '55') {
+        this._stripHexproofAndIndestructible(sm);
+      }
+
+      const candidates = this._getInteractivePerkCandidates(perkKey, targetPlayerId, sm);
+      const explicitChosen = mergedOptions.chosenTargetId || mergedOptions.targetId || mergedOptions.chosenInstanceId || (mergedOptions.targets?.[0]?.targetId || mergedOptions.targets?.[0]?.instanceId);
+
+      // Always emit PERK_TARGET_CHOICE_REQUIRED so human UI or test harnesses can inspect and choose
+      this.emit('PERK_TARGET_CHOICE_REQUIRED', {
+        perkKey,
+        playerId: targetPlayerId,
+        stage: perkKey === '55' ? 2 : 1,
+        candidates,
+        item,
+        resolve: (chosenInstanceId) => this.resolvePerkTargetChoice(perkKey, targetPlayerId, chosenInstanceId, item, mergedOptions)
+      });
+
+      if (!explicitChosen && !isBot && options.waitForChoice) {
+        return { awaitingChoice: true, perkKey, playerId: targetPlayerId, candidates };
+      }
+
+      if (explicitChosen) {
+        if (perkKey === '55') {
+          mergedOptions.targets = [{ targetType: 'PERMANENT', targetId: explicitChosen }];
+        } else if (perkKey === '13' || perkKey === '66') {
+          mergedOptions.sacrificeChoices = { ...(mergedOptions.sacrificeChoices || {}), [targetPlayerId]: explicitChosen };
+        }
+      } else if (candidates.length > 0) {
+        const fallback = candidates[0].instanceId || candidates[0].id || candidates[0].targetId;
+        if (perkKey === '55') {
+          mergedOptions.targets = [{ targetType: 'PERMANENT', targetId: fallback }];
+        } else if (perkKey === '13' || perkKey === '66') {
+          mergedOptions.sacrificeChoices = { ...(mergedOptions.sacrificeChoices || {}), [targetPlayerId]: fallback };
+        }
+      }
+    }
+
     if (item.perkKey === '66' || item.perkName === 'Mutual Sacrifice') {
       this._handleMutualSacrificeChoices(item, mergedOptions);
     }
@@ -901,6 +959,102 @@ export class RandomPerkEngine extends EventEmitter {
     this.emit('PERK_RESOLVED', payload);
 
     return executionResult;
+  }
+
+  /**
+   * Resolves interactive target selection for Perks #13, #55, #66.
+   * 
+   * @param {string} perkKey
+   * @param {string} playerId
+   * @param {string} chosenInstanceId
+   * @param {Object} [item=null]
+   * @param {Object} [options={}]
+   * @returns {Object}
+   */
+  resolvePerkTargetChoice(perkKey, playerId, chosenInstanceId, item = null, options = {}) {
+    const targetItem = item || this.activeStep2Item;
+    const opts = { ...options, waitForChoice: false };
+    if (String(perkKey) === '55') {
+      opts.targets = [{ targetType: 'PERMANENT', targetId: chosenInstanceId }];
+      opts.chosenTargetId = chosenInstanceId;
+    } else {
+      opts.sacrificeChoices = { ...(opts.sacrificeChoices || {}), [playerId]: chosenInstanceId };
+      opts.chosenTargetId = chosenInstanceId;
+    }
+    return this.handleStep2Resolution(targetItem, opts);
+  }
+
+  _stripHexproofAndIndestructible(state) {
+    if (!state) return;
+    const players = state.players || {};
+    for (const player of Object.values(players)) {
+      const bf = player.battlefield || {};
+      for (const subzone of ['lands', 'creatures', 'noncreatures', 'planeswalkers']) {
+        for (const card of (bf[subzone] || [])) {
+          if (!card) continue;
+          card.strippedProtectionUntilEOT = true;
+          card.hexproof = false;
+          card.indestructible = false;
+          if (card.keywords) {
+            card.keywords.hexproof = false;
+            card.keywords.Hexproof = false;
+            card.keywords.indestructible = false;
+            card.keywords.Indestructible = false;
+          }
+        }
+      }
+    }
+    if (state.abilityEngine && typeof state.abilityEngine.evaluateAllLayers === 'function') {
+      state.abilityEngine.evaluateAllLayers(state);
+    }
+  }
+
+  _getInteractivePerkCandidates(perkKey, playerId, state) {
+    if (!state) return [];
+    const player = state.getPlayer ? state.getPlayer(playerId) : state.players?.[playerId];
+    if (perkKey === '13' || perkKey === '66') {
+      return (player?.battlefield?.creatures || []).map(c => ({
+        instanceId: c.instanceId || c.id,
+        id: c.instanceId || c.id,
+        name: c.name,
+        typeLine: c.typeLine,
+        power: c.power,
+        toughness: c.toughness
+      }));
+    }
+    if (perkKey === '55') {
+      const oppTargets = [];
+      const ownTargets = [];
+      for (const [pId, p] of Object.entries(state.players || {})) {
+        if (p.isEliminated) continue;
+        const perms = [
+          ...(p.battlefield?.creatures || []),
+          ...(p.battlefield?.noncreatures || []),
+          ...(p.battlefield?.lands || []),
+          ...(p.battlefield?.planeswalkers || [])
+        ];
+        for (const card of perms) {
+          if (!card) continue;
+          const entry = {
+            instanceId: card.instanceId || card.id,
+            id: card.instanceId || card.id,
+            targetId: card.instanceId || card.id,
+            targetType: 'PERMANENT',
+            ownerId: pId,
+            name: card.name,
+            typeLine: card.typeLine,
+            card
+          };
+          if (pId === playerId) {
+            ownTargets.push(entry);
+          } else {
+            oppTargets.push(entry);
+          }
+        }
+      }
+      return [...oppTargets, ...ownTargets];
+    }
+    return [];
   }
 
   /**

@@ -1460,3 +1460,99 @@
   font-size: 0.78rem;
   padding: 4px 10px;
 }
+
+/* In-Board Class Level-Up Bubble & Badges (Corrida 1) */
+.class-level-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #1e293b, #0f172a);
+  border: 1.5px solid #fbbf24;
+  color: #fef3c7;
+  border-radius: 9999px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: all 0.15s ease-in-out;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.class-level-bubble:hover:not(:disabled) {
+  background: linear-gradient(135deg, #b45309, #d97706);
+  color: #ffffff;
+  border-color: #fde68a;
+  transform: translateY(-1px);
+}
+
+.class-level-bubble.max-level {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: #10b981;
+  color: #6ee7b7;
+  cursor: default;
+}
+
+.counter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(99, 102, 241, 0.2);
+  border: 1px solid #818cf8;
+  color: #c7d2fe;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-left: 4px;
+}
+
+.prot-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(234, 179, 8, 0.25);
+  border: 1px solid #facc15;
+  color: #fef08a;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-left: 4px;
+}
+
+/* Card Hook Binder Panel */
+.hook-binder-panel {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 10px;
+}
+
+.hook-binder-clause {
+  background: #1e293b;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 8px;
+  font-size: 0.8rem;
+}
+
+.hook-badge-bound {
+  background: #15803d;
+  color: #dcfce7;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: bold;
+}
+
+.hook-badge-unbound {
+  background: #b91c1c;
+  color: #fee2e2;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  font-weight: bold;
+}

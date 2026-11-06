@@ -35,7 +35,42 @@ export class CombatDamageEngine {
    * @param {Object} tabletopState - Active TabletopStateManager instance
    * @returns {Object} DamageResult
    */
-  static dealDamage(payload, tabletopState) {
+  dealDamage(payloadOrSource, tabletopStateOrTarget, customAmount, customOptions) {
+    return CombatDamageEngine.dealDamage(payloadOrSource, tabletopStateOrTarget, customAmount, customOptions);
+  }
+
+  canCreatureBlock(blocker, attacker, tabletopState) {
+    return CombatDamageEngine.canCreatureBlock(blocker, attacker, tabletopState);
+  }
+
+  static dealDamage(payloadOrSource, tabletopStateOrTarget, customAmount, customOptions) {
+    let payload = payloadOrSource;
+    let tabletopState = tabletopStateOrTarget;
+    if (payloadOrSource && typeof payloadOrSource === 'object' && (payloadOrSource.instanceId || payloadOrSource.id) && typeof customAmount === 'number') {
+      const source = payloadOrSource;
+      const target = tabletopStateOrTarget;
+      const opts = customOptions || {};
+      tabletopState = opts.tabletopState || null;
+      const isPlayer = Boolean(target && (target.id === 'p1' || target.id === 'p2' || target.resources || target.zones));
+      payload = {
+        sourceId: source.instanceId || source.id,
+        sourceCard: source,
+        sourceName: source.name,
+        sourceColors: source.colors || (source.isRed ? ['R'] : source.isWhite ? ['W'] : []),
+        sourceControllerId: source.controllerId,
+        targetId: isPlayer ? (target.id || target.playerId) : (target?.instanceId || target?.id),
+        targetType: isPlayer ? 'PLAYER' : 'CREATURE',
+        amount: customAmount,
+        isCombat: !!opts.isCombat,
+        keywords: {
+          lifelink: Boolean(source.keywords?.lifelink || opts.hasLifelink),
+          infect: Boolean(source.keywords?.infect || opts.hasInfect),
+          toxic: Number(source.keywords?.toxic || opts.toxic || 0),
+          deathtouch: Boolean(source.keywords?.deathtouch || opts.hasDeathtouch)
+        }
+      };
+    }
+
     const {
       sourceId,
       sourceControllerId,
@@ -129,6 +164,39 @@ export class CombatDamageEngine {
       }
 
       if (targetCreature) {
+        // Protection damage prevention (CR 702.16e)
+        const srcObj = sourceCard || payload.sourceCard || { colors: payload.sourceColors || [], name: payload.sourceName };
+        const protColor = String(targetCreature.protectionFromColor || targetCreature.protectionColor || '').toLowerCase();
+        const protCode = (protColor === 'red' || protColor === 'r') ? 'r' :
+          (protColor === 'white' || protColor === 'w') ? 'w' :
+          (protColor === 'blue' || protColor === 'u') ? 'u' :
+          (protColor === 'black' || protColor === 'b') ? 'b' :
+          (protColor === 'green' || protColor === 'g') ? 'g' : (protColor || null);
+
+        const srcColors = (srcObj.colors || payload.sourceColors || []).map(c => String(c).toLowerCase());
+        const hasProtection = (tabletopState && typeof tabletopState.constructor?.hasProtectionFrom === 'function' && tabletopState.constructor.hasProtectionFrom(targetCreature, srcObj)) ||
+          Boolean(protCode && (
+            srcColors.includes(protCode) ||
+            srcColors.includes(protColor) ||
+            (protCode === 'r' && (srcObj.isRed || /\{r\}/i.test(srcObj.manaCost || '') || /red/i.test(srcObj.color || ''))) ||
+            (protCode === 'w' && (srcObj.isWhite || /\{w\}/i.test(srcObj.manaCost || '') || /white/i.test(srcObj.color || ''))) ||
+            (protCode === 'u' && (srcObj.isBlue || /\{u\}/i.test(srcObj.manaCost || '') || /blue/i.test(srcObj.color || ''))) ||
+            (protCode === 'b' && (srcObj.isBlack || /\{b\}/i.test(srcObj.manaCost || '') || /black/i.test(srcObj.color || ''))) ||
+            (protCode === 'g' && (srcObj.isGreen || /\{g\}/i.test(srcObj.manaCost || '') || /green/i.test(srcObj.color || '')))
+          ));
+
+        if (hasProtection) {
+          damageDealt = 0;
+          if (tabletopState?.emit) {
+            tabletopState.emit('DAMAGE_PREVENTED', {
+              sourceId,
+              targetId,
+              reason: 'PROTECTION',
+              protectionFrom: targetCreature.protectionFromColor
+            });
+          }
+        }
+
         if (hasInfect) {
           // CR 120.3d: Damage from source with infect placed as -1/-1 counters
           targetCreature.counters = targetCreature.counters || {};
@@ -230,10 +298,19 @@ export class CombatDamageEngine {
 
     // 3. Lifelink simultaneous life gain (CR 120.3f)
     if (hasLifelink && damageDealt > 0 && sourceControllerId) {
-      const controller = tabletopState.getPlayer ? tabletopState.getPlayer(sourceControllerId) : tabletopState.players?.[sourceControllerId];
-      if (controller) {
-        controller.resources = controller.resources || {};
-        controller.resources.life = (controller.resources.life ?? 20) + damageDealt;
+      if (tabletopState && typeof tabletopState.gainLife === 'function') {
+        tabletopState.gainLife(sourceControllerId, damageDealt, {
+          source: sourceCard || { instanceId: sourceId, name: payload.sourceName, controllerId: sourceControllerId },
+          isCombat,
+          isLifelink: true
+        });
+      } else {
+        const controller = tabletopState.getPlayer ? tabletopState.getPlayer(sourceControllerId) : tabletopState.players?.[sourceControllerId];
+        if (controller) {
+          controller.resources = controller.resources || {};
+          controller.resources.life = (controller.resources.life ?? 20) + damageDealt;
+          controller.lifeGainedThisTurn = (controller.lifeGainedThisTurn || 0) + damageDealt;
+        }
       }
     }
 
@@ -462,6 +539,22 @@ export class CombatDamageEngine {
     );
     if (cannotBlock) {
       return { canBlock: false, reason: 'CANT_BLOCK' };
+    }
+
+    // 0b. Protection blocker check (CR 702.16b: Protected creature cannot be blocked by creatures of that quality)
+    if (tabletopState && typeof tabletopState.constructor?.hasProtectionFrom === 'function') {
+      if (tabletopState.constructor.hasProtectionFrom(evalAttacker, evalBlocker)) {
+        return { canBlock: false, reason: 'PROTECTION_CANT_BE_BLOCKED' };
+      }
+    } else if (evalAttacker?.protectionFromColor) {
+      const prot = String(evalAttacker.protectionFromColor).toLowerCase();
+      const bColors = [
+        ...(Array.isArray(evalBlocker?.colors) ? evalBlocker.colors : []),
+        ...(Array.isArray(blocker?.colors) ? blocker.colors : [])
+      ].map(c => String(c).toLowerCase());
+      if (bColors.includes(prot) || (prot === 'r' && (bColors.includes('red') || /\{r\}/i.test(blocker?.manaCost || '')))) {
+        return { canBlock: false, reason: 'PROTECTION_CANT_BE_BLOCKED' };
+      }
     }
 
     // 1. Unblockable check

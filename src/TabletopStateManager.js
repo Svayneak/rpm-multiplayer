@@ -1688,7 +1688,81 @@ export class TabletopStateManager extends EventEmitter {
       }
     }
 
+    // Typed per-turn event bus mirror (Corrida 1)
+    const turnEvents = TabletopStateManager.ensureTurnEvents(player);
+    turnEvents.lifeGained = Math.max(turnEvents.lifeGained || 0, player.lifeGainedThisTurn || 0);
+
     return { life: player.resources.life };
+  }
+
+  /**
+   * Ensures `player.turnEvents` exists with typed per-turn counters.
+   * @param {Object} player
+   * @returns {{creaturesEntered:number,tokensCreated:number,lifeGained:number,attackersDeclared:number}}
+   */
+  static ensureTurnEvents(player) {
+    if (!player) return { creaturesEntered: 0, tokensCreated: 0, lifeGained: 0, attackersDeclared: 0 };
+    if (!player.turnEvents || typeof player.turnEvents !== 'object') {
+      player.turnEvents = { creaturesEntered: 0, tokensCreated: 0, lifeGained: 0, attackersDeclared: 0 };
+    }
+    return player.turnEvents;
+  }
+
+  static resetTurnEvents(player) {
+    if (!player) return;
+    player.turnEvents = { creaturesEntered: 0, tokensCreated: 0, lifeGained: 0, attackersDeclared: 0 };
+  }
+
+  /**
+   * Normalizes a color name/letter ('red', 'Rojo', 'r', 'R') to its WUBRG letter.
+   * @param {string} color
+   * @returns {string|null}
+   */
+  static normalizeColorCode(color) {
+    if (!color) return null;
+    const s = String(color).trim().toLowerCase();
+    const map = {
+      w: 'W', white: 'W', blanco: 'W',
+      u: 'U', blue: 'U', azul: 'U',
+      b: 'B', black: 'B', negro: 'B',
+      r: 'R', red: 'R', rojo: 'R',
+      g: 'G', green: 'G', verde: 'G'
+    };
+    return map[s] || null;
+  }
+
+  /**
+   * Returns the WUBRG color letters of a card/source object.
+   * @param {Object|string[]} source
+   * @returns {string[]}
+   */
+  static getSourceColors(source) {
+    if (!source) return [];
+    if (Array.isArray(source)) return source.map(c => TabletopStateManager.normalizeColorCode(c)).filter(Boolean);
+    const out = new Set();
+    for (const c of (Array.isArray(source.colors) ? source.colors : [])) {
+      const n = TabletopStateManager.normalizeColorCode(c);
+      if (n) out.add(n);
+    }
+    if (out.size === 0 && typeof source.manaCost === 'string') {
+      for (const m of source.manaCost.matchAll(/\{([WUBRG])(?:\/[WUBRGP])?\}/gi)) out.add(m[1].toUpperCase());
+    }
+    if (source.isWhite) out.add('W');
+    return [...out];
+  }
+
+  /**
+   * True if `permanent` has protection from any color of `source` (CR 702.16).
+   * @param {Object} permanent
+   * @param {Object|string[]} source
+   */
+  static hasProtectionFrom(permanent, source) {
+    if (!permanent) return false;
+    const srcColors = TabletopStateManager.getSourceColors(source);
+    if (srcColors.length === 0) return false;
+    const protColor = TabletopStateManager.normalizeColorCode(permanent.protectionFromColor);
+    const kw = permanent.keywords || {};
+    return srcColors.some(col => col === protColor || kw[`protectionFrom_${col}`] === true);
   }
 
   _handleUpdateManaPool(payload) {
@@ -2108,6 +2182,7 @@ export class TabletopStateManager extends EventEmitter {
     }
 
     player.attackersDeclaredThisTurn = (player.attackersDeclaredThisTurn || 0) + declaredAttackers.length;
+    TabletopStateManager.ensureTurnEvents(player).attackersDeclared += declaredAttackers.length;
 
     const defendingPlayerIds = [...new Set(declaredAttackers.map(a => a.defendingPlayerId).filter(Boolean))];
     const finalDefenderId = defendingPlayerIds[0] || defaultDefenderId || null;
@@ -2390,6 +2465,9 @@ export class TabletopStateManager extends EventEmitter {
 
       const blockCheck = CombatDamageEngine.canCreatureBlock(blocker, attacker, this);
       if (!blockCheck.canBlock) {
+        if (blockCheck.reason === 'PROTECTION_CANT_BE_BLOCKED') {
+          throw new StateTransitionError(`Attacker '${attacker.name || attackerId}' has protection and cannot be blocked by '${blocker.name || blockerId}'`);
+        }
         if (blockCheck.reason === 'UNBLOCKABLE') {
           throw new StateTransitionError(`Attacker '${attacker.name || attackerId}' is unblockable and cannot be blocked`);
         }
@@ -3814,6 +3892,27 @@ export class TabletopStateManager extends EventEmitter {
     // Soul Warden Trigger for entering creatures
     const isEnteringCreature = /creature/i.test(card.typeLine || card.type || '');
     if (isEnteringCreature) {
+      const ctrlPlayer = this.players?.[controllerId];
+      if (ctrlPlayer) TabletopStateManager.ensureTurnEvents(ctrlPlayer).creaturesEntered += 1;
+    }
+
+    // Class enchantments (Caretaker's Talent): guarantee level metadata on entry (CR 716)
+    if (/caretaker'?s talent/i.test(card.name || '') || /\bclass\b/i.test(card.typeLine || '')) {
+      card.isClass = true;
+      card.classLevel = Number(card.classLevel || card.level || 1);
+      card.level = card.classLevel;
+      card.maxLevel = card.maxLevel || 3;
+      if (/caretaker'?s talent/i.test(card.name || '')) {
+        card.levelCosts = { 2: '{W}', 3: '{3}{W}' };
+      } else if (!card.levelCosts) {
+        const oracle = card.oracleText || '';
+        const costs = {};
+        for (const m of oracle.matchAll(/(\{[^\n:]+?\})\s*:\s*Level\s+(\d)/gi)) costs[Number(m[2])] = m[1];
+        card.levelCosts = costs;
+      }
+    }
+
+    if (isEnteringCreature) {
       for (const [wPid, wPlayer] of Object.entries(this.players || {})) {
         if (!wPlayer || wPlayer.isEliminated) continue;
         const allWardenPerms = [
@@ -5102,7 +5201,8 @@ export class TabletopStateManager extends EventEmitter {
         targets: targetIds,
         targetId: targetIds[0],
         targetCreatureId: targetIds[0],
-        xValue: resolvedItem.xValue ?? originalCard.xValue ?? resolvedItem.options?.xValue
+        xValue: resolvedItem.xValue ?? originalCard.xValue ?? resolvedItem.options?.xValue,
+        chosenColor: resolvedItem.chosenColor ?? resolvedItem.options?.chosenColor ?? resolvedItem.payload?.chosenColor ?? originalCard.chosenColor
       });
     }
 
@@ -5759,11 +5859,13 @@ export class TabletopStateManager extends EventEmitter {
     return this.adjustLife(playerId, { targetValue: life });
   }
 
-  gainLife(playerId, amount = 1) {
+  gainLife(playerId, amount = 1, options = {}) {
     const amt = Math.max(0, Number(amount) || 0);
     if (amt <= 0) return 0;
     this.adjustLife(playerId, { delta: amt });
-    this.emit('LIFE_GAINED', { playerId, amount: amt });
+    const payload = { playerId, amount: amt, ...(options || {}) };
+    this.emit('LIFE_GAINED', payload);
+    this.emit('ON_LIFE_GAINED', payload);
     return amt;
   }
 
@@ -5786,7 +5888,8 @@ export class TabletopStateManager extends EventEmitter {
     const colors = Array.isArray(tokenSpec.colors) ? [...tokenSpec.colors] : (tokenSpec.color ? [tokenSpec.color] : ['W']);
     const isWhite = tokenSpec.isWhite ?? colors.includes('W');
     const tokenName = tokenSpec.name || (subtypes.length > 0 ? `${subtypes.join(' ')} Token` : 'Creature Token');
-    const typeLine = tokenSpec.typeLine || `Creature — ${subtypes.length > 0 ? subtypes.join(' ') : 'Token'}`;
+    const typeLine = tokenSpec.typeLine || `Token Creature — ${subtypes.length > 0 ? subtypes.join(' ') : 'Token'}`;
+    const isSick = !options.haste && !options.tappedAndAttacking;
 
     for (let i = 0; i < numTokens; i++) {
       const instanceId = 'token_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
@@ -5800,16 +5903,18 @@ export class TabletopStateManager extends EventEmitter {
         toughness: baseToughness,
         basePower,
         baseToughness,
+        effectivePower: basePower,
+        effectiveToughness: baseToughness,
         colors,
         isWhite,
         isToken: true,
         subtypes,
         controllerId: playerId,
         ownerId: playerId,
-        hasSummoningSickness: true,
-        isSummoningSick: true,
-        summoningSickness: true,
-        isTapped: false,
+        hasSummoningSickness: isSick,
+        isSummoningSick: isSick,
+        summoningSickness: isSick,
+        isTapped: Boolean(options.tappedAndAttacking),
         isAttacking: false,
         zone: 'battlefield',
         subzone: 'creatures',
@@ -5867,6 +5972,9 @@ export class TabletopStateManager extends EventEmitter {
 
     // Track tokens created this turn and record templates
     player.tokensCreatedThisTurn = (player.tokensCreatedThisTurn || 0) + numTokens;
+    const tokenTurnEvents = TabletopStateManager.ensureTurnEvents(player);
+    tokenTurnEvents.tokensCreated += numTokens;
+    tokenTurnEvents.creaturesEntered += numTokens;
     player.tokensCreatedTemplatesThisTurn = player.tokensCreatedTemplatesThisTurn || [];
     for (let i = 0; i < numTokens; i++) {
       player.tokensCreatedTemplatesThisTurn.push({
@@ -5973,19 +6081,14 @@ export class TabletopStateManager extends EventEmitter {
     }
 
     if (currentLevel === 1) {
-      const cost = options.cost || options.ability?.cost?.mana || '{1}{W}';
+      const cost = options.cost || options.ability?.cost?.mana || card.levelCosts?.[2] || '{W}';
       const pool = player.resources?.manaPool;
-      if (pool && pool.W > 0 && (pool.C > 0 || (pool.W + pool.U + pool.B + pool.R + pool.G + pool.C >= 2))) {
-        pool.W -= 1;
-        let generic = 1;
-        for (const col of ['C', 'W', 'U', 'B', 'R', 'G']) {
-          const take = Math.min(generic, pool[col] || 0);
-          pool[col] -= take;
-          generic -= take;
-          if (generic <= 0) break;
+      if (!options.isFree) {
+        if (cost === '{W}' && pool && pool.W > 0) {
+          pool.W -= 1;
+        } else {
+          try { this.autoTapForMana(playerId, cost); } catch (e) {}
         }
-      } else {
-        try { this.autoTapForMana(playerId, cost); } catch (e) {}
       }
       card.classLevel = 2;
       card.level = 2;
@@ -6017,9 +6120,11 @@ export class TabletopStateManager extends EventEmitter {
       this.emit('CLASS_LEVEL_UP', { card, newLevel: 2, playerId });
       return { card, newLevel: 2 };
     } else if (currentLevel === 2) {
-      const cost = options.cost || options.ability?.cost?.mana || '{3}{W}';
+      const cost = options.cost || options.ability?.cost?.mana || card.levelCosts?.[3] || '{3}{W}';
       const pool = player.resources?.manaPool;
-      if (pool && pool.W > 0 && (pool.W + pool.U + pool.B + pool.R + pool.G + pool.C >= 4)) {
+      if (options.isFree) {
+        // no payment
+      } else if (pool && pool.W > 0 && (pool.W + pool.U + pool.B + pool.R + pool.G + pool.C >= 4)) {
         pool.W -= 1;
         let generic = 3;
         for (const col of ['C', 'W', 'U', 'B', 'R', 'G']) {
@@ -6600,11 +6705,21 @@ export class TabletopStateManager extends EventEmitter {
     const player = this.getPlayer(activePlayerId);
     this.untapAll(activePlayerId);
     if (player) {
-      for (const card of (player.battlefield?.creatures || [])) {
+      const untapCreatures = new Set([
+        ...(player.battlefield?.creatures || []),
+        ...((player.zones?.battlefield || []).filter(c => c && (c.isToken || /creature/i.test(c.typeLine || c.type || ''))))
+      ]);
+      for (const card of untapCreatures) {
+        if (!card) continue;
         card.hasSummoningSickness = false;
         card.isSummoningSick = false;
         card.summoningSickness = false;
+        if (!card.doesNotUntap && !card.doesNotUntapDuringUntapStep) {
+          card.isTapped = false;
+        }
       }
+      TabletopStateManager.resetTurnEvents(player);
+      player.lifeGainedThisTurn = 0;
       player.landsPlayedThisTurn = 0;
       player.creaturesDiedThisTurn = 0;
       player.maxLandsPerTurn = 1;
@@ -6676,7 +6791,7 @@ export class TabletopStateManager extends EventEmitter {
       if (/wedding announcement/i.test(card.name || '') && !card.isTransformed) {
         seenAnnouncements.add(id);
         card.invitationCounters = (card.invitationCounters || 0) + 1;
-        if ((player.attackersDeclaredThisTurn || 0) >= 2) {
+        if ((player.attackersDeclaredThisTurn || 0) >= 2 || (player.turnEvents?.attackersDeclared || 0) >= 2) {
           this.drawCard(activePlayerId, 1);
         } else {
           this.createCreatureTokens(activePlayerId, 1, {
@@ -6714,7 +6829,7 @@ export class TabletopStateManager extends EventEmitter {
         player.hasCitysBlessing = true;
       }
 
-      if ((player.lifeGainedThisTurn || 0) > 0) {
+      if ((player.lifeGainedThisTurn || 0) > 0 || (player.turnEvents?.lifeGained || 0) > 0) {
         this.createCreatureTokens(activePlayerId, 1, {
           name: 'Cat Token',
           power: 1,
@@ -7542,6 +7657,9 @@ export class TabletopStateManager extends EventEmitter {
           cr.protectionFromColor = chosenColor;
           cr.protectionColor = chosenColor;
           cr.protectionFrom = chosenColor;
+          cr.keywords = cr.keywords || {};
+          cr.keywords['protectionFrom_' + chosenColor] = true;
+          cr.keywords['protectionFrom_' + (chosenColor.charAt(0).toUpperCase() + chosenColor.slice(1))] = true;
           if (this.abilityEngine) {
             this.abilityEngine.registerStaticEffect({
               id: `brave_${chosenColor}_${Date.now()}_${cr.instanceId}`,
@@ -7552,6 +7670,9 @@ export class TabletopStateManager extends EventEmitter {
                 perm.protectionFromColor = chosenColor;
                 perm.protectionColor = chosenColor;
                 perm.protectionFrom = chosenColor;
+                perm.keywords = perm.keywords || {};
+                perm.keywords['protectionFrom_' + chosenColor] = true;
+                perm.keywords['protectionFrom_' + (chosenColor.charAt(0).toUpperCase() + chosenColor.slice(1))] = true;
               },
               appliesTo: (perm) => perm && (perm.instanceId === cr.instanceId || perm.id === cr.instanceId)
             });

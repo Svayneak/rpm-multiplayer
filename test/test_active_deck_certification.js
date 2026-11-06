@@ -17,7 +17,7 @@
  */
 
 import assert from 'node:assert';
-import { OracleEffectCompiler, compileCard, compileCardMechanics, normalizeCardName, evaluateDeckSupportPercentage, auditDeckSupport } from '../src/OracleEffectCompiler.js';
+import { OracleEffectCompiler, compileCard, compileCardMechanics, normalizeCardName, evaluateDeckSupportPercentage, auditDeckSupport, auditCardClauses, registerCustomCardBindings, clearCustomCardBindings } from '../src/OracleEffectCompiler.js';
 import { DeckSlotManager } from '../src/deckbuilder/DeckSlotManager.js';
 import { PerkinsAgent } from '../src/PerkinsAgent.js';
 import { TabletopStateManager } from '../src/TabletopStateManager.js';
@@ -3733,6 +3733,252 @@ try {
   recordTest('Mono-White Tokens Mechanics', 'ADV-40: Anthems, Token Engine, Soul Warden, Ocelot Pride Ascend, Hero Battle Cry & Leyline Hexproof (CR 508, 603, 613)', 'PASS');
 } catch (err) {
   recordTest('Mono-White Tokens Mechanics', 'ADV-40: Anthems, Token Engine, Soul Warden, Ocelot Pride Ascend, Hero Battle Cry & Leyline Hexproof (CR 508, 603, 613)', 'FAIL', err.message);
+}
+
+// ==================================================================
+// ADV-41: Clause-Level Residual Auditor & 2nd-Pass Auto-Healer
+// ==================================================================
+try {
+  // 1. Multi-clause card without custom bindings has unbound clauses
+  const unknownCard = {
+    name: 'Mystic Archive Engine',
+    typeLine: 'Artifact',
+    oracleText: 'At the beginning of your upkeep, each player mills three cards. Whenever a player casts a spell from a graveyard, they gain 5 life.'
+  };
+  const audit1 = auditCardClauses(unknownCard);
+  assert.strictEqual(audit1.clauses.length, 2, 'Card splits into exactly 2 clauses');
+
+  // 2. Custom card bindings registration binds clauses dynamically
+  registerCustomCardBindings({
+    'mystic archive engine': {
+      'At the beginning of your upkeep, each player mills three cards.': {
+        trigger: 'ON_UPKEEP',
+        primitive: 'MILL_CARDS',
+        status: 'BOUND'
+      },
+      'Whenever a player casts a spell from a graveyard, they gain 5 life.': {
+        trigger: 'ON_CAST_FROM_GRAVE',
+        primitive: 'GAIN_LIFE',
+        status: 'BOUND'
+      }
+    }
+  });
+  const audit2 = auditCardClauses(unknownCard);
+  assert.strictEqual(audit2.unboundClauses.length, 0, 'Custom bindings heal unbound clauses');
+  assert.strictEqual(audit2.isFullyAutomated, true, 'Card becomes 100% automated with zero unbound clauses');
+  clearCustomCardBindings();
+
+  // 3. Mono-White Precon Deck validation has 0 unbound clauses across all cards
+  const { getPreconstructedDeckCards } = await import('../src/deckbuilder/PreconstructedDecks.js');
+  const monoWhiteCards = getPreconstructedDeckCards('STARTER_WHITE_WEENIE');
+  assert.ok(monoWhiteCards && monoWhiteCards.length > 0, 'Mono-White Tokens precon deck cards exist');
+  for (const entry of monoWhiteCards) {
+    const cardAudit = auditCardClauses({ name: entry.name, oracleText: entry.oracleText });
+    assert.strictEqual(cardAudit.unboundClauses.length, 0, `${entry.name} has 0 residual unbound clauses`);
+    assert.strictEqual(cardAudit.isFullyAutomated, true, `${entry.name} is 100% certified automated`);
+  }
+
+  recordTest('Clause-Level Residual Auditor', 'ADV-41: Clause-Level Residual Auditor & 2nd-Pass Auto-Healer (Elimination of False 100%)', 'PASS');
+} catch (err) {
+  recordTest('Clause-Level Residual Auditor', 'ADV-41: Clause-Level Residual Auditor & 2nd-Pass Auto-Healer (Elimination of False 100%)', 'FAIL', err.message);
+}
+
+// ==================================================================
+// ADV-42: Combat Lifelink, Event Bus & Functional Token Attack Eligibility
+// ==================================================================
+try {
+  const state = createMatchState();
+  const p1 = state.players.p1;
+  const p2 = state.players.p2;
+
+  // 1. Token Creation, Dual Zone Synchronization, and Summoning Sickness on Turn 1
+  const tokens = state.createCreatureTokens('p1', 2, {
+    name: 'Soldier Token',
+    power: 1,
+    toughness: 1,
+    subtypes: ['Soldier']
+  });
+  assert.strictEqual(tokens.length, 2, 'Created 2 Soldier tokens');
+  assert.strictEqual(p1.battlefield.creatures.length, 2, 'Tokens inserted into player.battlefield.creatures');
+  assert.strictEqual(p1.zones.battlefield.length, 2, 'Tokens synchronized into player.zones.battlefield');
+  assert.strictEqual(tokens[0].summoningSickness, true, 'Tokens enter with summoning sickness on turn 1');
+  assert.strictEqual(tokens[0].typeLine, 'Token Creature — Soldier', 'Correct typeLine assigned to tokens');
+  assert.strictEqual(p1.turnEvents.tokensCreated, 2, 'turnEvents tracks tokens created');
+
+  // Verify they cannot attack on turn 1 due to summoning sickness
+  let attackBlocked = false;
+  try {
+    state.declareAttackers('p1', [tokens[0].instanceId]);
+  } catch (e) {
+    attackBlocked = true;
+  }
+  assert.ok(attackBlocked, 'Token cannot attack on turn it was created');
+
+  // 2. Untap step on Turn 2 clears summoning sickness and untaps
+  state.handleUntapStep('p1');
+  assert.strictEqual(tokens[0].summoningSickness, false, 'Untap step clears token summoning sickness');
+  assert.strictEqual(p1.turnEvents.tokensCreated, 0, 'turnEvents reset on untap step');
+
+  // Token attacks legally on turn 2
+  state.declareAttackers('p1', [tokens[0].instanceId]);
+  assert.strictEqual(tokens[0].isAttacking, true, 'Token attacks legally on turn 2');
+  assert.strictEqual(p1.turnEvents.attackersDeclared, 1, 'turnEvents tracks attackers declared');
+
+  // 3. Combat Lifelink triggers state.gainLife and increments lifeGainedThisTurn
+  const startingLife = p1.resources.life;
+  const lifelinkAttacker = {
+    instanceId: 'lifelink_cat',
+    name: 'Ocelot Pride',
+    controllerId: 'p1',
+    power: 1,
+    toughness: 1,
+    keywords: { lifelink: true },
+    isAttacking: true
+  };
+  p1.battlefield.creatures.push(lifelinkAttacker);
+
+  let lifeGainedEventFired = false;
+  state.on('ON_LIFE_GAINED', (evt) => {
+    if (evt.playerId === 'p1') lifeGainedEventFired = true;
+  });
+
+  // Deal combat damage to defending player p2
+  const combatEngine = new CombatDamageEngine();
+  const damageResult = combatEngine.dealDamage(lifelinkAttacker, p2, 1, {
+    tabletopState: state,
+    isCombat: true,
+    hasLifelink: true
+  });
+
+  assert.strictEqual(p1.resources.life, startingLife + 1, 'P1 gained 1 life from lifelink combat damage');
+  assert.strictEqual(p1.lifeGainedThisTurn, 1, 'p1.lifeGainedThisTurn updated by lifelink');
+  assert.strictEqual(p1.turnEvents.lifeGained, 1, 'p1.turnEvents.lifeGained updated by lifelink');
+  assert.strictEqual(lifeGainedEventFired, true, 'ON_LIFE_GAINED event emitted');
+
+  recordTest('Combat Lifelink & Tokens', 'ADV-42: Combat Lifelink, Event Bus & Functional Token Attack Eligibility', 'PASS');
+} catch (err) {
+  recordTest('Combat Lifelink & Tokens', 'ADV-42: Combat Lifelink, Event Bus & Functional Token Attack Eligibility', 'FAIL', err.message);
+}
+
+// ==================================================================
+// ADV-43: Class Permanents, Protection From Color & Interactive Perks
+// ==================================================================
+try {
+  const state = createMatchState();
+  const p1 = state.players.p1;
+  const p2 = state.players.p2;
+
+  // 1. Caretaker's Talent Class Level-Up ({W} for Lvl 2, {3}{W} for Lvl 3)
+  const talent = {
+    instanceId: 'talent_1',
+    name: "Caretaker's Talent",
+    controllerId: 'p1',
+    typeLine: 'Enchantment — Class',
+    isClass: true,
+    classLevel: 1,
+    maxLevel: 3,
+    levelCosts: { 2: '{W}', 3: '{3}{W}' }
+  };
+  p1.battlefield.noncreatures.push(talent);
+  // Add a soldier token to copy
+  p1.battlefield.creatures.push({
+    instanceId: 'soldier_orig',
+    name: 'Soldier Token',
+    controllerId: 'p1',
+    isToken: true,
+    power: 1,
+    toughness: 1
+  });
+
+  p1.resources.manaPool.W = 10;
+  const lvl2Res = state.levelUpClass('p1', 'talent_1');
+  assert.strictEqual(talent.classLevel, 2, "Caretaker's Talent reaches Level 2");
+  assert.strictEqual(p1.battlefield.creatures.length, 2, 'Level 2 creates a token copy');
+
+  const lvl3Res = state.levelUpClass('p1', 'talent_1');
+  assert.strictEqual(talent.classLevel, 3, "Caretaker's Talent reaches Level 3");
+
+  // 2. Wedding Announcement Transformation to Wedding Festivity
+  const wedding = {
+    instanceId: 'wedding_1',
+    name: 'Wedding Announcement',
+    controllerId: 'p1',
+    typeLine: 'Enchantment',
+    invitationCounters: 2
+  };
+  p1.battlefield.noncreatures.push(wedding);
+  state.handleEndStep('p1');
+  assert.strictEqual(wedding.name, 'Wedding Festivity', 'Transforms to Wedding Festivity at 3 counters');
+  assert.strictEqual(wedding.isTransformed, true, 'isTransformed flag set to true');
+
+  // 3. Brave the Elements: Protection From Color prevents damage & blocking (CR 702.16)
+  const whiteCreature = {
+    instanceId: 'white_cr',
+    name: 'Knight of Grace',
+    controllerId: 'p1',
+    typeLine: 'Creature — Human Knight',
+    colors: ['W'],
+    isWhite: true,
+    power: 2,
+    toughness: 2
+  };
+  p1.battlefield.creatures.push(whiteCreature);
+  state.resolveSpellEffect('p1', { name: 'Brave the Elements', typeLine: 'Instant' }, { chosenColor: 'Red' });
+  assert.strictEqual(whiteCreature.protectionFromColor.toLowerCase(), 'red', 'White creature gains protection from Red');
+  assert.strictEqual(whiteCreature.keywords.protectionFrom_Red, true, 'Protection keyword flag set');
+
+  // Red source damage is prevented
+  const redAttacker = {
+    instanceId: 'red_cr',
+    name: 'Goblin Guide',
+    controllerId: 'p2',
+    colors: ['R'],
+    isRed: true,
+    power: 2,
+    toughness: 2
+  };
+  p2.battlefield.creatures.push(redAttacker);
+  const combatEngine = new CombatDamageEngine();
+  const dmgRes = combatEngine.dealDamage(redAttacker, whiteCreature, 2, { tabletopState: state });
+  assert.strictEqual(dmgRes.damageDealt, 0, 'Protection from Red prevents damage from Red source');
+
+  // Red creature cannot block creature with protection from Red
+  const canBlock = combatEngine.canCreatureBlock(redAttacker, whiteCreature, state);
+  assert.strictEqual(canBlock.canBlock, false, 'Red creature cannot block creature with protection from Red');
+  assert.strictEqual(canBlock.reason, 'PROTECTION_CANT_BE_BLOCKED', 'Reason is PROTECTION_CANT_BE_BLOCKED');
+
+  // 4. RandomPerkEngine Interactive Perks (#13, #55, #66) Target Selection & 2-Step Hexproof Stripping
+  const perkEngine = new RandomPerkEngine({ tabletopState: state, humanPlayerId: 'p1' });
+  let choiceRequiredEmitted = false;
+  let receivedCandidates = null;
+  perkEngine.on('PERK_TARGET_CHOICE_REQUIRED', (data) => {
+    choiceRequiredEmitted = true;
+    receivedCandidates = data.candidates;
+  });
+
+  // Defending player has a creature with hexproof
+  const hexproofOppCr = {
+    instanceId: 'opp_hexproof',
+    name: 'Slippery Bogle',
+    controllerId: 'p2',
+    keywords: { hexproof: true, indestructible: true },
+    power: 1,
+    toughness: 1
+  };
+  p2.battlefield.creatures.push(hexproofOppCr);
+
+  // Trigger Perk #55 (Cataclysm)
+  const item = { perkKey: '55', sourcePlayerId: 'p1', controllerId: 'p1' };
+  perkEngine.handleStep2Resolution(item, { activePlayerId: 'p1' });
+
+  assert.strictEqual(choiceRequiredEmitted, true, 'PERK_TARGET_CHOICE_REQUIRED emitted for human player');
+  assert.strictEqual(hexproofOppCr.keywords.hexproof, false, 'Perk #55 Stage 1 stripped hexproof');
+  assert.strictEqual(hexproofOppCr.keywords.indestructible, false, 'Perk #55 Stage 1 stripped indestructible');
+  assert.ok(receivedCandidates.some(c => c.instanceId === 'opp_hexproof'), 'Stripped permanent is now a legal choice target');
+
+  recordTest('Class Permanents & Protection', 'ADV-43: Class Permanents, Protection From Color & Interactive Perks Resolution', 'PASS');
+} catch (err) {
+  recordTest('Class Permanents & Protection', 'ADV-43: Class Permanents, Protection From Color & Interactive Perks Resolution', 'FAIL', err.message);
 }
 
 // ── Summary Report ──

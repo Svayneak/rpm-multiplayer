@@ -239,7 +239,7 @@ export const KNOWN_CARD_ORACLE_MAP = Object.freeze({
   "caretaker's talent": {
     name: "Caretaker's Talent",
     typeLine: "Enchantment — Class",
-    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{1}{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
+    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
     manaCost: "{2}{W}",
     cmc: 3,
     colors: ["W"]
@@ -247,7 +247,7 @@ export const KNOWN_CARD_ORACLE_MAP = Object.freeze({
   "caretakers talent": {
     name: "Caretaker's Talent",
     typeLine: "Enchantment — Class",
-    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{1}{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
+    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
     manaCost: "{2}{W}",
     cmc: 3,
     colors: ["W"]
@@ -1640,6 +1640,8 @@ export function compileCardMechanics(card) {
   grantsFlashTo.equipment = Boolean(staticPermissions.equipment);
   grantsFlashTo.aura = Boolean(staticPermissions.aura);
 
+  const audit = auditCardClauses(card);
+
   const compiled = {
     category,
     subzone,
@@ -1674,15 +1676,319 @@ export function compileCardMechanics(card) {
     grantsFlashToEquipment: Boolean(staticPermissions.equipment),
     grantsFlashToAura: Boolean(staticPermissions.aura),
     groundedEffects,
+    clauseBindings: audit.clauses,
+    unboundClauses: audit.unboundClauses,
+    isFullyAutomated: audit.isFullyAutomated,
     compiledAt: Date.now()
   };
 
   card.compiledMechanics = compiled;
   card.groundedEffects = groundedEffects;
+  card.clauseBindings = audit.clauses;
+  card.unboundClauses = audit.unboundClauses;
+  card.isFullyAutomated = audit.isFullyAutomated;
   card.subzone = subzone;
   card.isPermanent = isPermanent;
 
   return compiled;
+}
+
+export const CUSTOM_BINDINGS_STORAGE_KEY = 'rpm_custom_card_bindings';
+
+let customCardBindingsRegistry = {};
+
+export function registerCustomCardBindings(map) {
+  if (map && typeof map === 'object') {
+    for (const [k, v] of Object.entries(map)) {
+      const normKey = String(k).toLowerCase().trim();
+      customCardBindingsRegistry[normKey] = {
+        ...(customCardBindingsRegistry[normKey] || {}),
+        ...v
+      };
+    }
+    groundingCache.clear();
+  }
+}
+
+export function clearCustomCardBindings() {
+  customCardBindingsRegistry = {};
+  groundingCache.clear();
+}
+
+/**
+ * Clause-level residual auditor + 2nd pass deep healer.
+ *
+ * @param {Object} card
+ * @param {Object} [options={}]
+ * @returns {{ cardName: string, clauses: Array, boundClauses: Array, unboundClauses: Array, totalClauses: number, isFullyAutomated: boolean, supportPercent: number }}
+ */
+export function auditCardClauses(card, options = {}) {
+  if (!card) {
+    return {
+      cardName: 'Unknown',
+      clauses: [],
+      boundClauses: [],
+      unboundClauses: [],
+      totalClauses: 0,
+      isFullyAutomated: true,
+      supportPercent: 100
+    };
+  }
+
+  const cardName = card.name || 'Unknown';
+  const normName = String(cardName).toLowerCase().trim();
+  const known = KNOWN_CARD_ORACLE_MAP[normName] || KNOWN_CARD_ORACLE_MAP[normName.replace(/'/g, '')];
+  const rawText = card.oracleText || card.oracle_text || card.text || (known ? known.oracleText : '') || '';
+  const typeLine = card.typeLine || card.type_line || card.type || (known ? known.typeLine : '') || '';
+
+  const rawClauses = rawText
+    .split(/\n|(?<=\.)\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  // Retrieve custom bindings
+  const customMap = {};
+  if (customCardBindingsRegistry[normName]) {
+    Object.assign(customMap, customCardBindingsRegistry[normName]);
+  }
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(CUSTOM_BINDINGS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed[normName]) Object.assign(customMap, parsed[normName]);
+      }
+    } catch (_) {}
+  }
+  if (options.customBindings) {
+    if (options.customBindings[normName]) {
+      Object.assign(customMap, options.customBindings[normName]);
+    } else if (typeof options.customBindings === 'object') {
+      Object.assign(customMap, options.customBindings);
+    }
+  }
+
+  const STANDARD_KW_SET = new Set([
+    'flying', 'lifelink', 'vigilance', 'haste', 'first strike', 'trample',
+    'hexproof', 'indestructible', 'deathtouch', 'menace', 'reach', 'ward',
+    'flash', 'defender', 'double strike', 'prowess', 'ascend', 'battle cry',
+    'infect', 'toxic'
+  ]);
+
+  const cardPrimitives = compileGroundedEffects(card, rawText, typeLine);
+
+  const audited = rawClauses.map(clauseText => {
+    // Pure reminder text in parentheses -> BOUND with REMINDER_TEXT
+    if (/^\([^)]+\)$/.test(clauseText)) {
+      return {
+        clauseText,
+        trigger: null,
+        condition: null,
+        primitive: 'REMINDER_TEXT',
+        params: {},
+        status: 'BOUND',
+        pass: 1
+      };
+    }
+
+    // Custom binding check
+    const customMatch = customMap[clauseText] || customMap[clauseText.toLowerCase()];
+    if (customMatch) {
+      return {
+        clauseText,
+        trigger: customMatch.trigger || null,
+        condition: customMatch.condition || null,
+        primitive: customMatch.primitive || customMatch.effect || 'CUSTOM',
+        params: customMatch.params || {},
+        status: 'BOUND',
+        pass: 'CUSTOM'
+      };
+    }
+
+    const clean = clauseText.replace(/\s*\([^)]+\)/g, '').trim();
+
+    // ── PASS 1: Standard Regex Matchers ──
+    const kwParts = clean.replace(/\.$/, '').split(/,\s*/).map(p => p.toLowerCase().trim()).filter(Boolean);
+    const allKw = kwParts.length > 0 && kwParts.every(p => {
+      if (STANDARD_KW_SET.has(p)) return true;
+      if (/^ward\s*(?:—\s*)?(?:\{[^{}]+\}|\d+\s*life|pay\s+\d+\s*life)?$/i.test(p)) return true;
+      if (/^toxic\s*\d+$/i.test(p)) return true;
+      if (/^companion\s*—.*$/i.test(p)) return true;
+      if (/^protection\s+from\s+.+$/i.test(p)) return true;
+      return false;
+    });
+    if (allKw) {
+      return { clauseText, trigger: null, condition: null, primitive: 'KEYWORDS', params: { keywords: kwParts }, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^ascend$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'ASCEND', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^you have hexproof\.?$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'GRANT_HEXPROOF', params: { target: 'YOU' }, status: 'BOUND', pass: 1 };
+    }
+
+    if (/if\s+.*\s+is\s+in\s+your\s+opening\s+hand,\s*you\s+may\s+begin\s+the\s+game\s+with\s+it\s+on\s+the\s+battlefield/i.test(clean)) {
+      return { clauseText, trigger: null, condition: 'OPENING_HAND', primitive: 'OPENING_HAND_ACTION', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/enters the battlefield tapped/i.test(clean) || /enters tapped/i.test(clean)) {
+      return { clauseText, trigger: null, condition: clean.includes('unless') ? 'UNLESS_CONDITION' : null, primitive: 'ETB_TAPPED', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^(?:\{t\}|add).*add\s*\{/i.test(clean) || /^\{t\}:\s*add\b/i.test(clean) || /add\s+one\s+mana\s+of\s+any\s+color/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'MANA_ABILITY', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^(?:\{[^{}]+\})+:\s*level\s*\d+/i.test(clean) || /^level\s*\d+$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'LEVEL_UP_CLASS', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/(?:white\s+creatures|creature\s+tokens|creatures|other\s+.*creatures)\s+you\s+control\s+(?:get\s+[+-]?\d+\/[+-]?\d+|have\s+\w+)/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'STATIC_ANTHEM', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^(?:\{[^{}]+\}(?:,\s*)?)+:\s*(.+)$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'ACTIVATED_ABILITY', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^choose\s+a\s+color\.?$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'CHOOSE_COLOR', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/(?:gain|gains|have|has)\s+protection\s+from\s+/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'GRANT_PROTECTION', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/deals?\s+(?:\d+|x|damage\s+equal)\b.*damage/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'DEAL_DAMAGE', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/destroy\s+(?:target|all)\b/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'DESTROY_TARGET', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/exile\s+(?:target|all|each)\b/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'EXILE_TARGET', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/counter\s+target\b/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'COUNTER_SPELL', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/return\s+target\b.*to\s+(?:its|their)\s+owner's\s+hand/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'BOUNCE_TO_HAND', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/(?:search\s+(?:their|your)\s+library|its\s+controller\s+may\s+search\s+their\s+library)/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'SEARCH_LIBRARY', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^draw\s+(?:a|\d+|one|two|three|four|five|x)\s+cards?\.?$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'DRAW_CARDS', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^(?:you\s+|target\s+player\s+)?gains?\s+(?:\d+|one|two|three|four|five|x)\s+life\.?$/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'GAIN_LIFE', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^create\s+(?:a|\d+|x|one|two|three|four|five|six|seven|eight|nine|ten)\s+.*(?:creature\s+)?tokens?/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'CREATE_TOKEN', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    if (/^equip\b/i.test(clean) || /^equipped\s+creature\s+gets\b/i.test(clean) || /attach\s+.*to\s+target\s+creature\s+you\s+control/i.test(clean) || /cast\s+aura\s+and\s+equipment\s+spells\s+as\s+though\s+they\s+had\s+flash/i.test(clean)) {
+      return { clauseText, trigger: null, condition: null, primitive: 'EQUIP', params: {}, status: 'BOUND', pass: 1 };
+    }
+
+    // ── PASS 2: Automatic Deep AST Individual Card Healer ──
+    let trigger = null;
+    let condition = null;
+    let primitive = null;
+
+    if (/at the beginning of your end step/i.test(clean)) trigger = 'ON_END_STEP';
+    else if (/at the beginning of your upkeep/i.test(clean)) trigger = 'ON_UPKEEP';
+    else if (/whenever you gain life/i.test(clean)) trigger = 'ON_LIFE_GAINED';
+    else if (/whenever another creature(?: you control)? enters/i.test(clean)) trigger = 'ON_ANOTHER_CREATURE_ETB';
+    else if (/whenever one or more tokens enter/i.test(clean)) trigger = 'ON_TOKENS_ETB';
+    else if (/whenever\s+(?:~|this\s+creature|[a-zA-Z\s,'-]+)\s+attacks/i.test(clean)) trigger = 'ON_ATTACK';
+    else if (/when\s+this\s+Class\s+becomes\s+level\s*(\d+)/i.test(clean)) trigger = 'ON_CLASS_LEVEL';
+    else if (/when(?:ever)?\s+.*\s+enters(?:\s+the\s+battlefield)?/i.test(clean)) trigger = 'ON_ETB';
+    else if (/when(?:ever)?\s+.*\s+dies/i.test(clean)) trigger = 'ON_DIES';
+    else if (/valiant\s*—|whenever\s+.*\s+becomes\s+the\s+target/i.test(clean)) trigger = 'ON_BECOMES_TARGET';
+    else if (/level\s*\d+/i.test(clean)) primitive = 'LEVEL_UP_CLASS';
+
+    if (/if you gained life this turn/i.test(clean)) condition = 'IF_GAINED_LIFE_THIS_TURN';
+    else if (/if you have the city's blessing/i.test(clean)) condition = 'IF_CITYS_BLESSING';
+    else if (/if you attacked with two or more creatures/i.test(clean)) condition = 'IF_ATTACKED_WITH_2_PLUS';
+    else if (/this ability triggers only once each turn/i.test(clean)) condition = 'ONCE_PER_TURN';
+    else if (/^otherwise\b/i.test(clean)) condition = 'OTHERWISE';
+    else if (/then if .* has (?:three|\d+) or more invitation counters/i.test(clean)) condition = 'COUNTER_THRESHOLD';
+    else if (/fateful hour|if you have 5 or less life/i.test(clean)) condition = 'FATEFUL_HOUR';
+
+    if (/create\s+(?:a|\d+|x|one|two|three|four|five|six)\s+.*tokens?/i.test(clean)) primitive = 'CREATE_TOKEN';
+    else if (/create\s+(?:five|\d+)\s+of\s+those\s+tokens\s+instead/i.test(clean)) primitive = 'CREATE_TOKEN';
+    else if (/for each token you (?:control|created this turn),?\s*create\s+(?:a\s+token\s+that's\s+a\s+copy|a\s+copy)/i.test(clean)) primitive = 'DUPLICATE_TOKENS';
+    else if (/create\s+a\s+token\s+that's\s+a\s+copy/i.test(clean)) primitive = 'POPULATE';
+    else if (/put\s+(?:an?|\d+)\s+.*counters?\s+on/i.test(clean)) primitive = 'ADD_COUNTER';
+    else if (/draws?\s+(?:a|\d+|one|two|three)\s+cards?/i.test(clean)) primitive = 'DRAW_CARDS';
+    else if (/transform\s+(?:it|this\s+permanent)/i.test(clean)) primitive = 'TRANSFORM';
+    else if (/(?:you\s+)?gains?\s+(?:\d+|one|two|three)\s+life/i.test(clean)) primitive = 'GAIN_LIFE';
+    else if (/loses?\s+(?:\d+|one|two|three)\s+life/i.test(clean)) primitive = 'LOSE_LIFE';
+    else if (/deals?\s+.*damage/i.test(clean)) primitive = 'DEAL_DAMAGE';
+    else if (/gets?\s+[+-]\d+\/[+-]\d+/i.test(clean)) primitive = 'PUMP_STATS';
+
+    if (!primitive) {
+      const matchedPrim = cardPrimitives.find(p =>
+        p.primitive &&
+        p.primitive !== 'VANILLA_PERMANENT' &&
+        p.primitive !== 'GENERIC_SPELL_RESOLUTION' &&
+        p.raw &&
+        (clean.toLowerCase().includes(p.raw.toLowerCase()) || p.raw.toLowerCase().includes(clean.toLowerCase()))
+      );
+      if (matchedPrim) {
+        primitive = matchedPrim.primitive;
+      }
+    }
+
+    if ((trigger && primitive) || (condition && primitive) || (trigger && condition) || condition === 'ONCE_PER_TURN' || primitive) {
+      return {
+        clauseText,
+        trigger,
+        condition,
+        primitive: primitive || 'CONDITIONAL_RESTRICTION',
+        params: {},
+        status: 'BOUND',
+        pass: 2
+      };
+    }
+
+    return {
+      clauseText,
+      trigger: null,
+      condition: null,
+      primitive: null,
+      params: {},
+      status: 'UNBOUND',
+      pass: 2
+    };
+  });
+
+  const boundClauses = audited.filter(c => c.status === 'BOUND');
+  const unboundClauses = audited.filter(c => c.status !== 'BOUND');
+  const totalClauses = audited.length;
+  const isFullyAutomated = unboundClauses.length === 0;
+  const supportPercent = totalClauses > 0 ? (boundClauses.length / totalClauses) * 100 : 100;
+
+  return {
+    cardName,
+    clauses: audited,
+    boundClauses,
+    unboundClauses,
+    totalClauses,
+    isFullyAutomated,
+    supportPercent
+  };
 }
 
 /**
@@ -1812,21 +2118,22 @@ export function groundCard(card) {
     toughness: Number(card.toughness) || (card.baseToughness !== undefined ? Number(card.baseToughness) : 0),
     cmc: Number(card.cmc ?? card.manaValue ?? 0)
   };
-  const sentences = ot.split(/(?<=[.!?])\s+|\n+/).map(s => s.trim()).filter(s => s && !s.startsWith('('));
-  let isFullyAutomated = true;
-  if (sentences.length > 0) {
-    for (const sent of sentences) {
-      const matchesPrimitive = primitives.some(p => p.raw && (sent.toLowerCase().includes(p.raw.toLowerCase()) || p.raw.toLowerCase().includes(sent.toLowerCase())));
-      const matchesKnown = /flying|haste|vigilance|trample|lifelink|deathtouch|reach|flash|prowess|first strike|double strike|menace|hexproof|indestructible|toxic|infect|defender|equip|companion|enters the battlefield tapped|add\s*\{|ascend|battle cry|fateful hour|city's blessing|invitation counter|transform|level \d+|triggers only once each turn|begin the game with it on the battlefield|protection from|choose a color|search their library|tapped and attacking|copy of a token|you have hexproof/i.test(sent);
-      if (!matchesPrimitive && !matchesKnown) {
-        isFullyAutomated = false;
-        break;
-      }
-    }
-  }
-  const spec = { primitives, targetRequirements, keywords: Array.from(foundKeywords), baseStats, isFullyAutomated };
+  const audit = auditCardClauses(card);
+  const isFullyAutomated = audit.isFullyAutomated;
+  const spec = {
+    primitives,
+    targetRequirements,
+    keywords: Array.from(foundKeywords),
+    baseStats,
+    isFullyAutomated,
+    clauseBindings: audit.clauses,
+    unboundClauses: audit.unboundClauses
+  };
   card.groundedSpec = spec;
   card.groundedEffects = primitives;
+  card.clauseBindings = audit.clauses;
+  card.unboundClauses = audit.unboundClauses;
+  card.isFullyAutomated = isFullyAutomated;
   return spec;
 }
 
@@ -1981,7 +2288,11 @@ export const OracleEffectCompiler = {
   CARD_NAME_DICTIONARY,
   normalizeCardName,
   auditDeckSupport,
-  evaluateDeckSupportPercentage
+  evaluateDeckSupportPercentage,
+  auditCardClauses,
+  registerCustomCardBindings,
+  clearCustomCardBindings,
+  CUSTOM_BINDINGS_STORAGE_KEY
 };
 
 export default OracleEffectCompiler;

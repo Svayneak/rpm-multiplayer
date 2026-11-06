@@ -14,6 +14,7 @@
 
 import { ScryfallService } from '../ScryfallService.js';
 import { getHydratedCardMetadata } from '../DeckbuilderAI.js';
+import { auditCardClauses, registerCustomCardBindings, CUSTOM_BINDINGS_STORAGE_KEY } from '../OracleEffectCompiler.js';
 
 /**
  * Formats a Scryfall/MTG mana cost string into andrewgioia/mana vector glyph HTML tags.
@@ -102,6 +103,7 @@ export class CardOverlayModal {
               <span class="modal-badge badge-modern-legal">Modern Legal</span>
               <span class="modal-set-info"></span>
             </div>
+            <div class="hook-binder-panel" id="modal-hook-binder" style="display: none;"></div>
           </div>
         </div>
       </div>
@@ -244,6 +246,102 @@ export class CardOverlayModal {
         if (data.collectorNumber) parts.push(`#${data.collectorNumber}`);
         if (data.rarity) parts.push(data.rarity.charAt(0).toUpperCase() + data.rarity.slice(1));
         setInfoEl.textContent = parts.join(' · ');
+      }
+
+      // Populate Hook Binder Panel (INV-CLAUSE-AUDIT)
+      const hookBinderEl = this.element.querySelector('#modal-hook-binder');
+      if (hookBinderEl) {
+        try {
+          const audit = auditCardClauses(data);
+          if (audit && audit.clauses && audit.clauses.length > 0) {
+            hookBinderEl.style.display = 'block';
+            let clausesHtml = '';
+            for (const cl of audit.clauses) {
+              const isBound = cl.status === 'BOUND';
+              clausesHtml += `
+                <div class="hook-binder-clause" data-index="${cl.index}">
+                  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                    <span class="${isBound ? 'hook-badge-bound' : 'hook-badge-unbound'}">${isBound ? '🟢 Bound' : '🔴 Unbound'}</span>
+                    <span style="font-size:0.7rem; color:#94a3b8;">${cl.source || 'Engine'}</span>
+                  </div>
+                  <div style="font-style:italic; margin-bottom:6px; color:#cbd5e1; font-size:0.8rem;">"${cl.clauseText}"</div>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                    <label style="font-size:0.7rem; color:#94a3b8;">Trigger:
+                      <select class="hook-trigger-select" data-clause-idx="${cl.index}" style="background:#0f172a; color:#f8fafc; border:1px solid #475569; border-radius:3px; font-size:0.75rem; padding:2px;">
+                        <option value="NONE" ${cl.trigger === 'NONE' ? 'selected' : ''}>NONE / STATIC</option>
+                        <option value="ON_ENTER_BATTLEFIELD" ${cl.trigger === 'ON_ENTER_BATTLEFIELD' ? 'selected' : ''}>ON_ENTER_BATTLEFIELD</option>
+                        <option value="ON_END_STEP" ${cl.trigger === 'ON_END_STEP' ? 'selected' : ''}>ON_END_STEP</option>
+                        <option value="ON_LIFE_GAINED" ${cl.trigger === 'ON_LIFE_GAINED' ? 'selected' : ''}>ON_LIFE_GAINED</option>
+                        <option value="ON_ATTACK" ${cl.trigger === 'ON_ATTACK' ? 'selected' : ''}>ON_ATTACK</option>
+                        <option value="ON_ANOTHER_CREATURE_ETB" ${cl.trigger === 'ON_ANOTHER_CREATURE_ETB' ? 'selected' : ''}>ON_ANOTHER_CREATURE_ETB</option>
+                        <option value="ON_UPKEEP" ${cl.trigger === 'ON_UPKEEP' ? 'selected' : ''}>ON_UPKEEP</option>
+                      </select>
+                    </label>
+                    <label style="font-size:0.7rem; color:#94a3b8;">Effect:
+                      <select class="hook-primitive-select" data-clause-idx="${cl.index}" style="background:#0f172a; color:#f8fafc; border:1px solid #475569; border-radius:3px; font-size:0.75rem; padding:2px;">
+                        <option value="NOOP" ${cl.primitive === 'NOOP' ? 'selected' : ''}>STATIC / NOOP</option>
+                        <option value="CREATE_CREATURE_TOKENS" ${cl.primitive === 'CREATE_CREATURE_TOKENS' ? 'selected' : ''}>CREATE_CREATURE_TOKENS</option>
+                        <option value="GAIN_LIFE" ${cl.primitive === 'GAIN_LIFE' ? 'selected' : ''}>GAIN_LIFE</option>
+                        <option value="DRAW_CARDS" ${cl.primitive === 'DRAW_CARDS' ? 'selected' : ''}>DRAW_CARDS</option>
+                        <option value="LEVEL_UP_CLASS" ${cl.primitive === 'LEVEL_UP_CLASS' ? 'selected' : ''}>LEVEL_UP_CLASS</option>
+                        <option value="PROTECTION_CHOICE" ${cl.primitive === 'PROTECTION_CHOICE' ? 'selected' : ''}>PROTECTION_CHOICE</option>
+                      </select>
+                    </label>
+                    <button type="button" class="btn btn-xs btn-save-hook" data-clause-idx="${cl.index}" style="background:#2563eb; color:#fff; border:none; border-radius:3px; padding:2px 8px; cursor:pointer; font-size:0.75rem;">💾 Guardar Regla en Motor</button>
+                  </div>
+                </div>
+              `;
+            }
+            hookBinderEl.innerHTML = `
+              <div class="hook-binder-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; border-bottom:1px solid #334155; padding-bottom:6px;">
+                <strong style="color:#e2e8f0; font-size:0.85rem;">⚙️ Hooks & Clauses (${audit.boundClauses.length}/${audit.totalClauses})</strong>
+                <span style="font-size:0.75rem; color:${audit.isFullyAutomated ? '#4ade80' : '#f87171'}; font-weight:bold;">${audit.supportPercent}% Certified</span>
+              </div>
+              <div class="hook-binder-clauses-list">${clausesHtml}</div>
+            `;
+
+            // Attach listener for save buttons
+            const saveButtons = hookBinderEl.querySelectorAll('.btn-save-hook');
+            saveButtons.forEach(btn => {
+              btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const idx = parseInt(btn.getAttribute('data-clause-idx'), 10);
+                const targetClause = audit.clauses.find(c => c.index === idx);
+                if (!targetClause) return;
+                const trigSel = hookBinderEl.querySelector(`.hook-trigger-select[data-clause-idx="${idx}"]`);
+                const primSel = hookBinderEl.querySelector(`.hook-primitive-select[data-clause-idx="${idx}"]`);
+                const chosenTrigger = trigSel?.value || targetClause.trigger || 'NONE';
+                const chosenPrimitive = primSel?.value || targetClause.primitive || 'NOOP';
+                const cName = (data.name || '').toLowerCase().trim();
+                let storedBindings = {};
+                try {
+                  if (typeof localStorage !== 'undefined') {
+                    const raw = localStorage.getItem(CUSTOM_BINDINGS_STORAGE_KEY);
+                    if (raw) storedBindings = JSON.parse(raw) || {};
+                  }
+                } catch (_) {}
+                if (!storedBindings[cName]) storedBindings[cName] = {};
+                storedBindings[cName][targetClause.clauseText] = {
+                  trigger: chosenTrigger,
+                  primitive: chosenPrimitive,
+                  condition: targetClause.condition || null,
+                  status: 'BOUND'
+                };
+                try {
+                  if (typeof localStorage !== 'undefined') {
+                    localStorage.setItem(CUSTOM_BINDINGS_STORAGE_KEY, JSON.stringify(storedBindings));
+                  }
+                } catch (_) {}
+                registerCustomCardBindings(storedBindings);
+                renderData(data);
+              });
+            });
+          } else {
+            hookBinderEl.style.display = 'none';
+          }
+        } catch (_) {
+          hookBinderEl.style.display = 'none';
+        }
       }
     };
 

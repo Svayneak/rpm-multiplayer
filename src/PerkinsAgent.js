@@ -1233,7 +1233,7 @@ export class PerkinsAgent {
         const stateRef = this.tabletopState || this.app?.tabletopState;
         if (talent) {
           const currentLvl = talent.classLevel || talent.level || 1;
-          const levelCost = currentLvl === 1 ? '{1}{W}' : (currentLvl === 2 ? '{3}{W}' : null);
+          const levelCost = currentLvl === 1 ? '{W}' : (currentLvl === 2 ? '{3}{W}' : null);
           if (levelCost) {
             const levelPlan = this.getPaymentPlan({ manaCost: levelCost }, myState);
             if (levelPlan.affordable) {

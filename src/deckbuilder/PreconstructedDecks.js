@@ -249,7 +249,7 @@ export const PRECON_CARD_METADATA = {
     manaCost: '{2}{W}',
     cmc: 3,
     typeLine: 'Enchantment — Class',
-    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{1}{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
+    oracleText: "Whenever one or more tokens enter the battlefield under your control, draw a card. This ability triggers only once each turn.\n{W}: Level 2\nWhen this Class becomes level 2, create a token that's a copy of a token you control.\n{3}{W}: Level 3\nCreature tokens you control get +2/+2.",
     power: null,
     toughness: null,
     colors: ['W']

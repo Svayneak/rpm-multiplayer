@@ -371,7 +371,9 @@ export class PermanentActionDrawer {
       if (isStartingTown || isSpireOfIndustry) {
         list = list.filter(a => a && !a.isManaAbility && a.action !== 'TAP_MANA');
       }
-      const isClass = /class/i.test(card?.typeLine || card?.type || '') || Boolean(card?.classLevel || card?.level);
+      const isClass = /class/i.test(card?.typeLine || card?.type || '') ||
+        Boolean(card?.classLevel || card?.level || card?.isClass) ||
+        /talent/i.test(card?.name || '');
       if (isClass) {
         const currentLevel = Number(card?.classLevel ?? card?.level ?? 1);
         if (currentLevel >= 3) {
@@ -393,11 +395,11 @@ export class PermanentActionDrawer {
               id: 'LEVEL_UP_2',
               action: 'LEVEL_UP_CLASS',
               targetLevel: 2,
-              cost: { mana: '{1}{W}' },
+              cost: { mana: '{W}' },
               timing: 'SORCERY',
               requiresTap: false,
               isClassLevelUp: true,
-              text: '{1}{W}: Level 2 — When this Class becomes level 2, create a token that\'s a copy of target token you control.'
+              text: '{W}: Level 2 — When this Class becomes level 2, create a token that\'s a copy of target token you control.'
             });
           } else if (nextLevel === 3) {
             list.push({

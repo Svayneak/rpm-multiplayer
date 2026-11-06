@@ -1745,6 +1745,42 @@ export class RPMAppController {
       }
     }
 
+    const isBraveTheElements = /brave the elements|resistir los elementos/i.test(effectiveName || '') ||
+      Boolean(card?.compiledMechanics?.protectionFromColorChoice || card?.chooseColor);
+    const chosenColor = chosenTarget?.chosenColor || card?.chosenColor || null;
+    if (isBraveTheElements && !chosenColor && this.targetModal) {
+      if (!this.targetModal.element && this.container) {
+        const modalHost = this.container.querySelector('#modal-root') || this.container;
+        if (typeof this.targetModal.mount === 'function') {
+          this.targetModal.mount(modalHost);
+        } else {
+          this.targetModal.container = modalHost;
+          this.targetModal.init();
+        }
+      }
+      if (Boolean(this.container) && typeof this.targetModal.openColorChoice === 'function') {
+        this._pendingSpellToCast = card;
+        this._stagedCast = card;
+        this.targetModal.openColorChoice({
+          title: 'Brave the Elements: Choose a Color',
+          instructions: 'White creatures you control gain protection from the chosen color until end of turn.',
+          onSelectColor: ({ color }) => {
+            this._pendingSpellToCast = null;
+            this._stagedCast = null;
+            card.chosenColor = color;
+            this.castSpellToStack(card, { chosenColor: color }, chosenMode);
+          },
+          onCancel: () => {
+            this._pendingSpellToCast = null;
+            this._stagedCast = null;
+            this.render?.();
+            this.reconcileDOM?.();
+          }
+        });
+        return;
+      }
+    }
+
     const dualTargets = this.tabletopState?.getValidTargetCandidatesForCard?.(this.myPlayerId, checkCard);
     if (dualTargets?.requiresDualTarget && !chosenTarget && (!card?.targets || card.targets.length < 2)) {
       if (this.targetModal) {
@@ -1885,6 +1921,8 @@ export class RPMAppController {
     }
 
     const effectiveCastMode = modeObj?.mode || effectiveMode || null;
+    const finalChosenColor = chosenTarget?.chosenColor || card?.chosenColor || null;
+    if (finalChosenColor) card.chosenColor = finalChosenColor;
 
     this.dispatchAction({
       type: 'CAST_SPELL',
@@ -1897,6 +1935,7 @@ export class RPMAppController {
       creatureId,
       targetName,
       targets,
+      chosenColor: finalChosenColor,
       selectedCombination: chosenTarget?.label || chosenTarget?.creatureId || chosenTarget?.equipmentId ? chosenTarget : null,
       payload: {
         playerId: this.myPlayerId,
@@ -1913,6 +1952,7 @@ export class RPMAppController {
         equipmentId,
         targetName,
         targets,
+        chosenColor: finalChosenColor,
         selectedCombination: chosenTarget?.label || chosenTarget?.creatureId || chosenTarget?.equipmentId ? chosenTarget : null,
         combination: chosenTarget?.label ? chosenTarget : null
       }
@@ -3115,6 +3155,39 @@ export class RPMAppController {
         this.reconcileDOM();
       };
 
+      const onPerkTargetRequired = (data) => {
+        if (this.isDestroyed || !data) return;
+        const targetPid = data.playerId || this.myPlayerId;
+        if (targetPid !== this.myPlayerId) return;
+
+        const candidates = data.candidates || [];
+        if (!candidates || candidates.length === 0) {
+          if (typeof data.resolve === 'function') data.resolve(null);
+          return;
+        }
+
+        if (this.targetModal && typeof this.targetModal.openPermanentChoice === 'function') {
+          this.targetModal.openPermanentChoice({
+            title: `Random Perk #${data.perkKey || ''} Target Choice`,
+            instructions: 'Select a legal permanent for perk resolution:',
+            candidates,
+            onSelectChoice: ({ candidate }) => {
+              const chosenId = candidate?.instanceId || candidate?.id;
+              if (this.randomPerk && typeof this.randomPerk.resolvePerkTargetChoice === 'function') {
+                this.randomPerk.resolvePerkTargetChoice(data.perkKey, targetPid, chosenId, data.item);
+              }
+              if (typeof data.resolve === 'function') {
+                data.resolve(chosenId);
+              }
+              this.reconcileDOM();
+            },
+            onCancel: () => {
+              if (typeof data.resolve === 'function') data.resolve(null);
+            }
+          });
+        }
+      };
+
       this.randomPerk.on('PERK_STEP1_TRIGGERED', onStep1);
       this.randomPerk.on('PERK_DICE_ROLLED', onRolled);
       this.randomPerk.on('PERK_ROLL_MISS', onMiss);
@@ -3122,6 +3195,7 @@ export class RPMAppController {
       this.randomPerk.on('PERK_RESOLVED', onResolved);
       this.randomPerk.on('RPM_AWAIT_PLAYER_ROLL', onAwaitRoll);
       this.randomPerk.on('PERK_ROLL_DECLINED', onDeclined);
+      this.randomPerk.on('PERK_TARGET_CHOICE_REQUIRED', onPerkTargetRequired);
 
       this._unsubscribers.push(() => {
         this.randomPerk.off('PERK_STEP1_TRIGGERED', onStep1);
@@ -3131,6 +3205,7 @@ export class RPMAppController {
         this.randomPerk.off('PERK_RESOLVED', onResolved);
         this.randomPerk.off('RPM_AWAIT_PLAYER_ROLL', onAwaitRoll);
         this.randomPerk.off('PERK_ROLL_DECLINED', onDeclined);
+        this.randomPerk.off('PERK_TARGET_CHOICE_REQUIRED', onPerkTargetRequired);
       });
     }
 
@@ -6450,7 +6525,28 @@ export class RPMAppController {
               attachedLabel = ` <span class="attached-badge">🔗 Equipped: ${this._escapeHtml(targetCr?.name || 'Creature')}</span>`;
             }
 
-            return `<span class="battlefield-card-chip noncreature-chip ${isTapped ? 'tapped is-tapped card-tapped' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${isTapped ? 'true' : 'false'}" style="${isTapped ? 'opacity: 0.62;' : ''}" title="${c.name} ${typeBadge}${c.attachedTo ? ' (Attached)' : ''} - Click to inspect or attach"><span class="badge-type-label" style="opacity: 0.75; font-size: 0.7rem; margin-right: 4px;">${typeBadge}</span>${c.name}${attachedLabel}${isTapped ? ' ↺' : ''}</span>`;
+            const isClass = Boolean(c.isClass || tl.includes('class') || c.name?.toLowerCase()?.includes('talent'));
+            let classBubbleHtml = '';
+            if (isClass) {
+              const lvl = Number(c.classLevel || c.level || 1);
+              if (lvl === 1) {
+                classBubbleHtml = ` <button type="button" class="btn btn-xs class-level-bubble btn-class-level-bubble" data-instance-id="${c.instanceId || ''}" title="Subir a Nivel 2 ({W})">⭐ Lvl 1 ➔ Subir a Lvl 2 ({W})</button>`;
+              } else if (lvl === 2) {
+                classBubbleHtml = ` <button type="button" class="btn btn-xs class-level-bubble btn-class-level-bubble" data-instance-id="${c.instanceId || ''}" title="Subir a Nivel 3 ({3}{W})">⭐ Lvl 2 ➔ Subir a Lvl 3 ({3}{W})</button>`;
+              } else {
+                classBubbleHtml = ` <button type="button" class="btn btn-xs class-level-bubble max-level" disabled>👑 Lvl 3 (MAX — Tokens +2/+2)</button>`;
+              }
+            }
+
+            let counterBadgeHtml = '';
+            if (c.invitationCounters !== undefined && c.invitationCounters !== null) {
+              counterBadgeHtml += ` <span class="counter-badge counter-badge-invitation" style="background:#f59e0b; color:#0f172a; font-weight:bold; font-size:0.7rem; padding:1px 4px; border-radius:3px;">💍 Counters: ${c.invitationCounters}/3</span>`;
+            }
+            if (c.loreCounters !== undefined && c.loreCounters !== null) {
+              counterBadgeHtml += ` <span class="counter-badge counter-badge-lore" style="background:#8b5cf6; color:#ffffff; font-weight:bold; font-size:0.7rem; padding:1px 4px; border-radius:3px;">📜 Lore: ${c.loreCounters}/3</span>`;
+            }
+
+            return `<span class="battlefield-card-chip noncreature-chip ${isTapped ? 'tapped is-tapped card-tapped' : ''}" data-instance-id="${c.instanceId || ''}" data-tapped="${isTapped ? 'true' : 'false'}" style="${isTapped ? 'opacity: 0.62;' : ''}" title="${c.name} ${typeBadge}${c.attachedTo ? ' (Attached)' : ''} - Click to inspect or attach"><span class="badge-type-label" style="opacity: 0.75; font-size: 0.7rem; margin-right: 4px;">${typeBadge}</span>${c.name}${attachedLabel}${counterBadgeHtml}${classBubbleHtml}${isTapped ? ' ↺' : ''}</span>`;
           }).join('')}</div>
         </div>
         <div id="battlefield-creatures" class="battlefield-strip battlefield-creatures">
@@ -6474,6 +6570,10 @@ export class RPMAppController {
                 counterBadges += `<span class="counter-badge" style="background: #ef4444; color: #ffffff; font-weight: bold; font-size: 0.7rem; padding: 1px 4px; border-radius: 3px; margin-left: 4px;">-1/-1 ×${c.counters['-1/-1']}</span>`;
                 counterTitle += ` [-1/-1 ×${c.counters['-1/-1']}]`;
               }
+            }
+            if (c.protectionFromColor) {
+              counterBadges += `<span class="prot-badge" style="background: #3b82f6; color: #ffffff; font-weight: bold; font-size: 0.7rem; padding: 1px 5px; border-radius: 3px; margin-left: 4px;">🛡️ Prot: ${c.protectionFromColor}</span>`;
+              counterTitle += ` [Prot: ${c.protectionFromColor}]`;
             }
             const pt = ` (${stats.power}/${stats.toughness})`;
             const effectiveKeywords = stats.keywords || {};
@@ -7078,6 +7178,26 @@ export class RPMAppController {
             this.actionDrawer.open(item, this.myPlayerId, chip, drawerContext);
           } else if (typeof this.openModal === 'function') {
             this.openModal('CARD_OVERLAY', item);
+          }
+        });
+      });
+
+      // Bind direct in-board Class level-up bubbles
+      const classLevelBtns = dashboard.querySelectorAll('#battlefield-noncreatures .btn-class-level-bubble');
+      classLevelBtns.forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const instId = btn.getAttribute('data-instance-id');
+          if (!instId) return;
+          try {
+            if (this.tabletopState && typeof this.tabletopState.levelUpClass === 'function') {
+              const res = this.tabletopState.levelUpClass(this.myPlayerId, instId);
+              this.showToast(`🌟 [Class Level Up]: Card is now Level ${res?.newLevel || 2}!`);
+              this.render?.();
+              this.reconcileDOM?.();
+            }
+          } catch (err) {
+            this.showToast(`⚠️ ${err.message || 'Cannot level up Class'}`);
           }
         });
       });

@@ -420,10 +420,6 @@ const CANONICAL_PERKS = Object.freeze({
               card.keywords.Hexproof = false;
               card.keywords.indestructible = false;
               card.keywords.Indestructible = false;
-              delete card.keywords.hexproof;
-              delete card.keywords.Hexproof;
-              delete card.keywords.indestructible;
-              delete card.keywords.Indestructible;
             }
           }
         }
