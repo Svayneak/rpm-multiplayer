@@ -471,6 +471,94 @@
       "salt": "50d9bf6d098a0ad986b0c6d24118c598",
       "hash": "3c211ae0ffc25ae3a84f8ddf510e611b9b671190748e14a25e38a896dfffef7b2dc998fd15a7e11a16d185346fc5d40d40f3c88662661d7c05049e03562bca74",
       "decks": {}
+    },
+    "2f9111b1-e372-4755-83c1-3e706f178eb1": {
+      "id": "2f9111b1-e372-4755-83c1-3e706f178eb1",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "eb02e8039cc22f8aea30b9943482fecd:cba80301a4b4f15b4fed90d176582ea3e3264309452daef97f4b62ddc9ed1138a6c87616da264a9f04265e3ae7bfc03e685aa3007c770d8c6a56e1676748f0d1",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "eb02e8039cc22f8aea30b9943482fecd"
+      },
+      "password_salt": "eb02e8039cc22f8aea30b9943482fecd",
+      "salt": "eb02e8039cc22f8aea30b9943482fecd",
+      "hash": "cba80301a4b4f15b4fed90d176582ea3e3264309452daef97f4b62ddc9ed1138a6c87616da264a9f04265e3ae7bfc03e685aa3007c770d8c6a56e1676748f0d1",
+      "decks": {}
+    },
+    "5bdb87d8-63b2-4f8f-a4b8-2d33ac95e64e": {
+      "id": "5bdb87d8-63b2-4f8f-a4b8-2d33ac95e64e",
+      "email": "test_duelist_1793998214687@svayneaksoft.com",
+      "username": "test_duelist_1793998214687",
+      "password_hash": "d94f90ab06b14de00e0fd2292c367eba:117853e2eb391a07e39687ea660ec774d2e3bdf62a4f2791067509b93211ad3e220a07df09ed2612ce66ae0951e7c7a465c44d784ff3a7fa58c722106050ab07",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "d94f90ab06b14de00e0fd2292c367eba"
+      },
+      "password_salt": "d94f90ab06b14de00e0fd2292c367eba",
+      "salt": "d94f90ab06b14de00e0fd2292c367eba",
+      "hash": "117853e2eb391a07e39687ea660ec774d2e3bdf62a4f2791067509b93211ad3e220a07df09ed2612ce66ae0951e7c7a465c44d784ff3a7fa58c722106050ab07",
+      "decks": {}
+    },
+    "d8d68a92-96db-43c5-8b96-b67b93c3d23c": {
+      "id": "d8d68a92-96db-43c5-8b96-b67b93c3d23c",
+      "email": "planeswalker@test.com",
+      "username": "PlaneswalkerA",
+      "password_hash": "573ce9b6ab1b57557e1f0cc253fa876d:d69b748f291270d11ba991ebe111ebe97819144672fc972723c4a9cfd65e31fcba66e5ce2062d5d1b132a5ba649307881e3e973048081fb051430c7dc14a93c1",
+      "birthday_day": null,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "573ce9b6ab1b57557e1f0cc253fa876d"
+      },
+      "password_salt": "573ce9b6ab1b57557e1f0cc253fa876d",
+      "salt": "573ce9b6ab1b57557e1f0cc253fa876d",
+      "hash": "d69b748f291270d11ba991ebe111ebe97819144672fc972723c4a9cfd65e31fcba66e5ce2062d5d1b132a5ba649307881e3e973048081fb051430c7dc14a93c1",
+      "decks": {}
+    },
+    "02e7beb9-4a59-48c9-b8ab-cdf04c010048": {
+      "id": "02e7beb9-4a59-48c9-b8ab-cdf04c010048",
+      "email": "test_duelist_1793998446616@svayneaksoft.com",
+      "username": "test_duelist_1793998446616",
+      "password_hash": "a8670bff22a03388cf180cf620b77c86:a5a41c556246b2a304f307250c1878d2717055f2a86a2388817a2782345295ad085c4a4897da4860ab7b88923ac6c5bf92a855f68044546b371e5e2107ee798f",
+      "birthday_day": 15,
+      "unlocked_slots": 2,
+      "elo_rating": 1200,
+      "ai_settings": {
+        "preferred_deck": "STARTER_WHITE_WEENIE",
+        "difficulty": "BALANCED"
+      },
+      "total_rpm_rolls": 0,
+      "total_rpbd_triggers": 0,
+      "metadata": {
+        "salt": "a8670bff22a03388cf180cf620b77c86"
+      },
+      "password_salt": "a8670bff22a03388cf180cf620b77c86",
+      "salt": "a8670bff22a03388cf180cf620b77c86",
+      "hash": "a5a41c556246b2a304f307250c1878d2717055f2a86a2388817a2782345295ad085c4a4897da4860ab7b88923ac6c5bf92a855f68044546b371e5e2107ee798f",
+      "decks": {}
     }
   },
   "RPMM_auth_tokens": {
@@ -833,6 +921,70 @@
       "device_label": "DESKTOP",
       "is_active_connection": true,
       "expires_at": "2027-11-06T16:09:08.199Z"
+    },
+    "5a9a750752c05f95896b9193588250c1a262a740c830b07674b1e8e99023f0cc": {
+      "id": "8a333299-35bd-4e1b-a4c4-f6dd7188fa86",
+      "user_id": "2f9111b1-e372-4755-83c1-3e706f178eb1",
+      "token_hash": "5a9a750752c05f95896b9193588250c1a262a740c830b07674b1e8e99023f0cc",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:50:13.542Z"
+    },
+    "2c21380d61fc78a6da6aa0dff149dd0d6401d23336baa57ae621974ff1b0ff78": {
+      "id": "13a8adf5-bbcb-48e7-897e-3392437cec65",
+      "user_id": "2f9111b1-e372-4755-83c1-3e706f178eb1",
+      "token_hash": "2c21380d61fc78a6da6aa0dff149dd0d6401d23336baa57ae621974ff1b0ff78",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:50:13.991Z"
+    },
+    "f2f31bd451817b3a48d5fdfa161ef0f5269551501d2d9068478168452a40f2c8": {
+      "id": "5dabc777-4adf-464b-addc-c16ee8c7070c",
+      "user_id": "2f9111b1-e372-4755-83c1-3e706f178eb1",
+      "token_hash": "f2f31bd451817b3a48d5fdfa161ef0f5269551501d2d9068478168452a40f2c8",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:50:14.451Z"
+    },
+    "f5ab4da5c7927cad1a1a42404d8c15f79473fe9f53f14bdf08850745a521d527": {
+      "id": "53368084-e2cb-4a18-8454-961225cd56b8",
+      "user_id": "5bdb87d8-63b2-4f8f-a4b8-2d33ac95e64e",
+      "token_hash": "f5ab4da5c7927cad1a1a42404d8c15f79473fe9f53f14bdf08850745a521d527",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:50:14.740Z"
+    },
+    "690f0e1937ec217cd2b59ee319754e8730bbaf380ada205b1e204e8975bfa256": {
+      "id": "d6033aae-44bc-4ee6-b6b6-ad7668304d48",
+      "user_id": "d8d68a92-96db-43c5-8b96-b67b93c3d23c",
+      "token_hash": "690f0e1937ec217cd2b59ee319754e8730bbaf380ada205b1e204e8975bfa256",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:54:05.203Z"
+    },
+    "6476ee23d6299eefc135367041bce5e531263beb64e75b923652029e3b2d9a9e": {
+      "id": "4257bebd-80ed-49a6-8639-03bf0e9dfc83",
+      "user_id": "d8d68a92-96db-43c5-8b96-b67b93c3d23c",
+      "token_hash": "6476ee23d6299eefc135367041bce5e531263beb64e75b923652029e3b2d9a9e",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:54:05.828Z"
+    },
+    "ec21ac2257bf9d41256337333b2669223c8770b3f3a38261cb606068f8b81b99": {
+      "id": "7aeb07d1-cc88-4bd1-8e4f-59e448919f9e",
+      "user_id": "d8d68a92-96db-43c5-8b96-b67b93c3d23c",
+      "token_hash": "ec21ac2257bf9d41256337333b2669223c8770b3f3a38261cb606068f8b81b99",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:54:06.324Z"
+    },
+    "7358fb46e3efd94f60f0e9cb7684816c19495006fdf80f2cb14f312b39469414": {
+      "id": "6ce56608-b7cf-4435-9ff3-133f8824c5e2",
+      "user_id": "02e7beb9-4a59-48c9-b8ab-cdf04c010048",
+      "token_hash": "7358fb46e3efd94f60f0e9cb7684816c19495006fdf80f2cb14f312b39469414",
+      "device_label": "DESKTOP",
+      "is_active_connection": true,
+      "expires_at": "2027-11-06T20:54:06.664Z"
     }
   },
   "RPMM_decks": {},

@@ -1569,7 +1569,69 @@ export function createAuthHttpHandler({ storePath } = {}) {
         }
 
         if (!userProfile) {
-          sendJson(res, 401, { error: 'Account not found. Switch to "Create Account" or click below to register.' });
+          // Seamless Auto-Registration on first-time login ([D08])
+          const salt = crypto.randomBytes(16).toString('hex');
+          const hash = await hashPassword(String(password), salt);
+          const userId = crypto.randomUUID();
+          const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+          const label = deviceLabel || 'DESKTOP';
+
+          const dbProfile = {
+            id: userId,
+            email: normalizedEmail,
+            username: normalizedEmail.split('@')[0],
+            password_hash: `${salt}:${hash}`,
+            birthday_day: null,
+            unlocked_slots: 2,
+            elo_rating: 1200,
+            ai_settings: { preferred_deck: 'STARTER_WHITE_WEENIE', difficulty: 'BALANCED' },
+            total_rpm_rolls: 0,
+            total_rpbd_triggers: 0,
+            metadata: { salt }
+          };
+
+          const profileRecord = {
+            ...dbProfile,
+            password_salt: salt,
+            salt,
+            hash,
+            decks: {}
+          };
+
+          const rawToken = crypto.randomBytes(32).toString('hex');
+          const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+          const tokenRecord = {
+            id: crypto.randomUUID(),
+            user_id: userId,
+            token_hash: tokenHash,
+            device_label: label,
+            is_active_connection: true,
+            expires_at: expiresAt
+          };
+
+          try {
+            await postgrestRequest('RPMM_profiles', { method: 'POST', body: dbProfile });
+            await postgrestRequest('RPMM_auth_tokens', { method: 'POST', body: tokenRecord });
+          } catch (_) {
+            const cache = loadFallbackCache();
+            cache.RPMM_profiles = cache.RPMM_profiles || {};
+            cache.RPMM_profiles[userId] = profileRecord;
+            cache.RPMM_auth_tokens = cache.RPMM_auth_tokens || {};
+            cache.RPMM_auth_tokens[tokenHash] = tokenRecord;
+            saveFallbackCache(cache);
+          }
+
+          store.users[userId] = profileRecord;
+          store.tokens[rawToken] = { userId, tokenHash, expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000, device_label: label };
+          persistToDisk();
+
+          sendJson(res, 200, {
+            token: rawToken,
+            tokenHash,
+            expiresAt,
+            user: sanitizeUser(profileRecord),
+            decks: {}
+          });
           return true;
         }
 
@@ -2166,10 +2228,19 @@ export function createRelayServer(options = {}) {
       }
 
       if (msgType === 'JOIN_ROOM') {
-        const roomCode = msg.roomCode || msg.roomId;
-        const room = roomsMap.get(roomCode);
+        const rawCode = String(msg.roomCode || msg.roomId || '').trim();
+        const roomCode = rawCode.toUpperCase();
+        let room = roomsMap.get(roomCode) || roomsMap.get(rawCode);
         if (!room) {
-          ws.send({ type: 'ERROR', code: 4404, message: 'Room not found' });
+          for (const [code, r] of roomsMap.entries()) {
+            if (code.toUpperCase() === roomCode) {
+              room = r;
+              break;
+            }
+          }
+        }
+        if (!room) {
+          ws.send({ type: 'ERROR', code: 4404, message: `Room "${roomCode}" not found` });
           return;
         }
 
@@ -2178,9 +2249,18 @@ export function createRelayServer(options = {}) {
       }
 
       if (msgType === 'RECONNECT_ROOM') {
-        const roomCode = msg.roomCode;
+        const rawCode = String(msg.roomCode || '').trim();
+        const roomCode = rawCode.toUpperCase();
         const seatToken = msg.seatToken;
-        const room = roomsMap.get(roomCode);
+        let room = roomsMap.get(roomCode) || roomsMap.get(rawCode);
+        if (!room) {
+          for (const [code, r] of roomsMap.entries()) {
+            if (code.toUpperCase() === roomCode) {
+              room = r;
+              break;
+            }
+          }
+        }
 
         if (!room) {
           ws.send({ type: 'ERROR', code: 4404, message: 'Room not found' });

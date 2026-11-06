@@ -120,6 +120,8 @@ export class RPMAppController {
     }
 
     const urlParams = new URLSearchParams(searchStr);
+    const roomParam = options.room || options.roomCode || urlParams.get('room') || urlParams.get('roomCode');
+    this.initialRoomCode = roomParam ? String(roomParam).trim().toUpperCase() : null;
     const autoRoom = options.autoRoom || urlParams.get('autoRoom');
     const autoRole = (options.role || urlParams.get('role') || 'host').toLowerCase();
     const deckParam = options.deck || urlParams.get('deck');
@@ -2561,6 +2563,12 @@ export class RPMAppController {
       this._startAutoRoomFlow().catch(err => {
         console.warn('[app] Auto-room flow error:', err);
       });
+    } else if (this.initialRoomCode) {
+      const inp = this.container?.querySelector('#room-code-input');
+      if (inp) inp.value = this.initialRoomCode;
+      this.joinRoom(this.initialRoomCode).catch(err => {
+        console.warn('[app] Initial room join error:', err);
+      });
     }
   }
 
@@ -4597,6 +4605,8 @@ export class RPMAppController {
       }
     }
 
+    this._checkLiveDuelStart();
+
     if (this.autoRoomCode) {
       this._checkAutoPregameStart();
     }
@@ -4622,6 +4632,8 @@ export class RPMAppController {
     if (!this.playerIds.includes(msg.playerId)) {
       this.playerIds.push(msg.playerId);
     }
+
+    this._checkLiveDuelStart();
 
     if (this.autoRoomCode) {
       this._checkAutoPregameStart();
@@ -4744,29 +4756,133 @@ export class RPMAppController {
         await this.relayClient.connect();
       }
       const res = await this.relayClient.createRoom({
-        playerName: this.username,
+        playerName: this.username || 'Host',
         ...seatOptions
       });
       if (res && res.roomCode) {
+        this.activeRoomCode = res.roomCode;
         const inp = this.container?.querySelector('#room-code-input');
         if (inp) inp.value = res.roomCode;
+
+        if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.set('room', res.roomCode);
+            window.history.replaceState(null, '', url.toString());
+          } catch (_) {}
+        }
+
+        // Clean up legacy single-player stubs (p1, p2)
+        if (this.tabletopState) {
+          this.tabletopState.players = {};
+          this.tabletopState.registerPlayer('player_1', this.username || 'Host');
+        }
+        this.myPlayerId = 'player_1';
+        this.playerIds = ['player_1'];
+        this.isMatchActiveFlag = true;
+
+        if (this.authManager && this.authManager.user && !this.authManager.isOnboarded()) {
+          this.authManager.user.activeDeckId = 'STARTER_WHITE_WEENIE';
+          this.authManager.user.onboarded = true;
+          this.authManager._persistSession?.();
+        }
+
+        this.switchView('ARENA');
+        this.appendExecutionLog?.('Lobby', `🗝️ Room created: ${res.roomCode}. Share the room code or link with your opponent!`);
+        this.showToast?.(`Room ${res.roomCode} created! Share this code with your opponent.`);
       }
       return res?.roomCode;
     } catch (e) {
+      console.warn('[RPM] createRoom error:', e);
+      this.showToast?.(`Failed to create room: ${e.message || e}`);
       return null;
     }
   }
 
   async joinRoom(roomCode, seatOptions = {}) {
-    if (!this.relayClient || !roomCode) return;
+    if (!this.relayClient) return;
+    const cleanCode = String(roomCode || '').trim().toUpperCase();
+    if (!cleanCode) {
+      this.showToast?.('Please enter a valid 6-character room code.');
+      return;
+    }
     try {
       if (!this.relayClient.socket || this.relayClient.socket.readyState !== 1) {
         await this.relayClient.connect();
       }
-      await this.relayClient.joinRoom(roomCode, this.username, seatOptions.seatPreference);
+      const snapshot = await this.relayClient.joinRoom(cleanCode, this.username || 'Player', seatOptions.seatPreference);
+      this.activeRoomCode = cleanCode;
       const inp = this.container?.querySelector('#room-code-input');
-      if (inp) inp.value = roomCode;
-    } catch (e) {}
+      if (inp) inp.value = cleanCode;
+
+      if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.set('room', cleanCode);
+          window.history.replaceState(null, '', url.toString());
+        } catch (_) {}
+      }
+
+      if (this.authManager && this.authManager.user && !this.authManager.isOnboarded()) {
+        this.authManager.user.activeDeckId = 'STARTER_WHITE_WEENIE';
+        this.authManager.user.onboarded = true;
+        this.authManager._persistSession?.();
+      }
+
+      this.isMatchActiveFlag = true;
+      this.switchView('ARENA');
+      this.appendExecutionLog?.('Lobby', `🗝️ Connected to room ${cleanCode}. Waiting for duel start...`);
+      this.showToast?.(`Connected to room ${cleanCode}!`);
+
+      if (snapshot) {
+        this.handleStateSync(snapshot);
+      }
+    } catch (e) {
+      console.warn('[RPM] joinRoom error:', e);
+      this.showToast?.(`Could not join room "${cleanCode}": ${e.message || 'Room not found'}`);
+    }
+  }
+
+  _checkLiveDuelStart() {
+    if (this.isSpectator() || this._hasMatchStarted) return;
+
+    const activeSlots = this.relayClient?.activeSlots || [];
+    const playerKeys = Object.keys(this.tabletopState?.players || {}).filter(id => !['p1', 'p2'].includes(id));
+    const count = Math.max(activeSlots.length, playerKeys.length);
+
+    if (count >= 2) {
+      // Purge stub players
+      if (this.tabletopState?.players) {
+        delete this.tabletopState.players.p1;
+        delete this.tabletopState.players.p2;
+      }
+
+      const p1Id = activeSlots[0]?.playerId || playerKeys[0] || 'player_1';
+      const p2Id = activeSlots[1]?.playerId || playerKeys[1] || 'player_2';
+      const p1Name = activeSlots[0]?.playerName || this.tabletopState.players[p1Id]?.name || 'Player 1';
+      const p2Name = activeSlots[1]?.playerName || this.tabletopState.players[p2Id]?.name || 'Player 2';
+
+      this.playerIds = [p1Id, p2Id];
+
+      if (!this.tabletopState.players[p1Id]) this.tabletopState.registerPlayer(p1Id, p1Name);
+      if (!this.tabletopState.players[p2Id]) this.tabletopState.registerPlayer(p2Id, p2Name);
+
+      if (this.authManager && this.authManager.user && !this.authManager.isOnboarded()) {
+        this.authManager.user.activeDeckId = 'STARTER_WHITE_WEENIE';
+        this.authManager.user.onboarded = true;
+        this.authManager._persistSession?.();
+      }
+
+      this.isMatchActiveFlag = true;
+      this.switchView('ARENA');
+
+      this.appendExecutionLog?.('Tabletop', `⚔️ Both players seated: ${p1Name} vs ${p2Name}. Starting tabletop match!`);
+      this.showToast?.(`Opponent connected! Duel starting between ${p1Name} and ${p2Name}.`);
+
+      if (!this._hasMatchStarted && typeof this.startMatch === 'function') {
+        this.startMatch({ playerIds: [p1Id, p2Id] });
+      }
+    }
   }
 
   disconnect() {
