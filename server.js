@@ -40,23 +40,23 @@ const MIME_TYPES = {
 
 // Root HTTP server for static files
 const server = http.createServer(async (req, res) => {
-  // Delegate /api/auth/* endpoints to Auth HTTP handler
-  if (req.url && req.url.startsWith('/api/auth/')) {
-    try {
-      const handled = await authHandler(req, res);
-      if (handled) return;
-    } catch (err) {
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message || 'Internal Auth Error' }));
-      return;
-    }
-  }
-
   // Health check endpoint for cloud platforms
   if (req.url === '/health' || req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ status: 'healthy', uptime: process.uptime() }));
     return;
+  }
+
+  // Delegate /api/* endpoints to API/Auth HTTP handler
+  if (req.url && req.url.startsWith('/api/')) {
+    try {
+      const handled = await authHandler(req, res);
+      if (handled) return;
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message || 'Internal API Error' }));
+      return;
+    }
   }
 
   // Parse path safely
